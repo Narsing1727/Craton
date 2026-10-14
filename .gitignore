@@ -1,0 +1,17 @@
+# dependencies and build output
+node_modules/
+.next/
+.next-*/
+out/
+build/
+*.tsbuildinfo
+
+# data and secrets: never committed
+data/
+.env
+.env.*
+*.log
+
+# local scratch
+.DS_Store
+Thumbs.db

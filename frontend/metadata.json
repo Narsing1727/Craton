@@ -1,0 +1,8 @@
+{
+  "name": "Craton — Version control for hydro & GIS engineers",
+  "description": "Craton versions and syncs large geospatial files — DEMs, shapefiles, LiDAR, NetCDF model outputs, and HEC-RAS/SWMM projects — like git, with visual map diffs and shared public datasets.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

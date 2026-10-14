@@ -1,0 +1,517 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-space-mono), ui-monospace, monospace;
+  --font-serif: var(--font-playfair), ui-serif, Georgia, serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+  --animate-caret-blink: 1s ease-out infinite caret-blink;
+  @keyframes caret-blink {
+  0%, 70%, to {
+    opacity: 1;
+    }
+  20%, 50% {
+    opacity: 0;
+    }
+  }
+  --animate-spin-around: spin-around 0.8s linear infinite
+;
+  --color-invert-foreground: var(--invert-foreground);
+  --color-invert: var(--invert);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  @keyframes spin-around {
+  0% {
+    transform: rotate(-90deg);}
+  100% {
+    transform: rotate(270deg);}}
+  --color-brand: var(--brand, var(--chart-2)); /* registry "brand": Craton blue, not pink */
+  --color-brand-light: var(--brand-light, var(--chart-1));
+  --color-brand-lighter: var(--brand-lighter, var(--chart-1));
+  --color-brand-secondary: var(--brand-secondary, var(--chart-3));
+  --color-amber: var(--amber);
+  --color-amber-fg: var(--amber-fg);
+  --color-amber-hover: var(--amber-hover);
+  --color-blue: var(--blue);
+  --color-blue-fg: var(--blue-fg);
+  --color-blue-hover: var(--blue-hover);
+  --color-green: var(--green);
+  --color-green-fg: var(--green-fg);
+  --color-green-hover: var(--green-hover);
+  --color-smooth-50: var(--smooth-50);
+  --color-smooth-100: var(--smooth-100);
+  --color-smooth-200: var(--smooth-200);
+  --color-smooth-300: var(--smooth-300);
+  --color-smooth-400: var(--smooth-400);
+  --color-smooth-500: var(--smooth-500);
+  --color-smooth-600: var(--smooth-600);
+  --color-smooth-700: var(--smooth-700);
+  --color-smooth-800: var(--smooth-800);
+  --color-smooth-900: var(--smooth-900);
+  --color-smooth-950: var(--smooth-950);
+  --color-smooth-1000: var(--smooth-1000)}
+
+:root {
+  --background: oklch(1.0000 0 0);
+  --foreground: oklch(0.2138 0.0019 286.2347);
+  --card: oklch(1.0000 0 0);
+  --card-foreground: oklch(0.2138 0.0019 286.2347);
+  --popover: oklch(1.0000 0 0);
+  --popover-foreground: oklch(0.2138 0.0019 286.2347);
+  --primary: oklch(0.2138 0.0019 286.2347);
+  --primary-foreground: oklch(0.9851 0 0);
+  --secondary: oklch(0.9702 0 0);
+  --secondary-foreground: oklch(0.2138 0.0019 286.2347);
+  --muted: oklch(0.9702 0 0);
+  --muted-foreground: oklch(0.5555 0 0);
+  --accent: oklch(0.9702 0 0);
+  --accent-foreground: oklch(0.2138 0.0019 286.2347);
+  --destructive: oklch(0.4977 0.1848 21.2519);
+  --destructive-foreground: oklch(1.0000 0 0);
+  --border: oklch(0.9219 0 0);
+  --input: oklch(0.9219 0 0);
+  --ring: oklch(0.7090 0 0);
+  --chart-1: oklch(0.8180 0.0604 250.8699);
+  --chart-2: oklch(0.6328 0.1163 259.7679);
+  --chart-3: oklch(0.5685 0.1369 264.1818);
+  --chart-4: oklch(0.5088 0.1381 265.9791);
+  --chart-5: oklch(0.4434 0.1122 269.4931);
+  --radius: 0px;
+  /* Square by default; only controls and floating layers round (see @layer base). */
+  --radius-control: 4px;
+  --radius-float: 6px;
+  --radius-inset: 2px; /* items inside a float: 6px float − 4px padding (concentric) */
+  --sidebar: oklch(0.9851 0 0);
+  --sidebar-foreground: oklch(0.2138 0.0019 286.2347);
+  --sidebar-primary: oklch(0.2138 0.0019 286.2347);
+  --sidebar-primary-foreground: oklch(0.9851 0 0);
+  --sidebar-accent: oklch(0.9702 0 0);
+  --sidebar-accent-foreground: oklch(0.2138 0.0019 286.2347);
+  --sidebar-border: oklch(0.9219 0 0);
+  --sidebar-ring: oklch(0.7090 0 0);
+  --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+  --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+  --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+  --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+  --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 2px 4px -1px hsl(0 0% 0% / 0.10);
+  --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 4px 6px -1px hsl(0 0% 0% / 0.10);
+  --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 8px 10px -1px hsl(0 0% 0% / 0.10);
+  --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
+  /* Semantic states for registry components, mapped onto Craton's palette (no new hues):
+     success = chart-1 (how "passed" already looks), info = chart-2, warning = chart-3. */
+  --success: var(--chart-1);
+  --success-foreground: var(--foreground);
+  --info: var(--chart-2);
+  --info-foreground: var(--foreground);
+  --warning: var(--chart-3);
+  --warning-foreground: var(--foreground);
+  --invert: var(--foreground);
+  --invert-foreground: var(--background);
+  /* Registry state colours on Craton's palette: green = chart-1 ("passed"), blue = chart-2, amber = chart-3 ("warning"). */
+  --amber: var(--chart-3);
+  --amber-fg: var(--foreground);
+  --amber-hover: var(--chart-4);
+  --blue: var(--chart-2);
+  --blue-fg: var(--foreground);
+  --blue-hover: var(--chart-3);
+  --green: var(--chart-1);
+  --green-fg: var(--foreground);
+  --green-hover: var(--chart-2);
+  --smooth-50: oklch(0.99 0 0);
+  --smooth-100: oklch(0.972 0 0);
+  --smooth-200: oklch(0.945 0 0);
+  --smooth-300: oklch(0.91 0 0);
+  --smooth-400: oklch(0.865 0 0);
+  --smooth-500: oklch(0.81 0 0);
+  --smooth-600: oklch(0.74 0 0);
+  --smooth-700: oklch(0.66 0 0);
+  --smooth-800: oklch(0.56 0 0);
+  --smooth-900: oklch(0.47 0 0);
+  --smooth-950: oklch(0.36 0 0);
+  --smooth-1000: oklch(0.22 0 0);
+}
+
+.dark {
+  --background: oklch(0.2138 0.0019 286.2347);
+  --foreground: oklch(0.9851 0 0);
+  --card: oklch(0.2138 0.0019 286.2347);
+  --card-foreground: oklch(0.9851 0 0);
+  --popover: oklch(0.2686 0 0);
+  --popover-foreground: oklch(0.9851 0 0);
+  --primary: oklch(1.0000 0 0);
+  --primary-foreground: oklch(0 0 0);
+  --secondary: oklch(0.6314 0.1327 259.4145);
+  --secondary-foreground: oklch(0.9851 0 0);
+  --muted: oklch(0.2686 0 0);
+  --muted-foreground: oklch(0.7090 0 0);
+  --accent: oklch(0.6230 0.2140 259.8150);
+  --accent-foreground: oklch(0.9851 0 0);
+  --destructive: oklch(0.7114 0.1159 19.0301);
+  --destructive-foreground: oklch(0.9851 0 0);
+  --border: oklch(0.2768 0 0);
+  --input: oklch(0.3250 0 0);
+  --ring: oklch(0.5555 0 0);
+  --chart-1: oklch(0.8180 0.0604 250.8699);
+  --chart-2: oklch(0.6328 0.1163 259.7679);
+  --chart-3: oklch(0.5685 0.1369 264.1818);
+  --chart-4: oklch(0.5088 0.1381 265.9791);
+  --chart-5: oklch(0.4434 0.1122 269.4931);
+  --radius: 0px;
+  --sidebar: oklch(0.2138 0.0019 286.2347);
+  --sidebar-foreground: oklch(0.9851 0 0);
+  --sidebar-primary: oklch(0.5071 0.1537 267.1647);
+  --sidebar-primary-foreground: oklch(0.9851 0 0);
+  --sidebar-accent: oklch(0.2686 0 0);
+  --sidebar-accent-foreground: oklch(0.9851 0 0);
+  --sidebar-border: oklch(0.2768 0 0);
+  --sidebar-ring: oklch(0.4386 0 0);
+  --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+  --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+  --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+  --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+  --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 2px 4px -1px hsl(0 0% 0% / 0.10);
+  --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 4px 6px -1px hsl(0 0% 0% / 0.10);
+  --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 8px 10px -1px hsl(0 0% 0% / 0.10);
+  --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
+  --success: var(--chart-1);
+  --success-foreground: var(--background);
+  --info: var(--chart-2);
+  --info-foreground: var(--background);
+  --warning: var(--chart-3);
+  --warning-foreground: var(--background);
+  --invert: var(--foreground);
+  --invert-foreground: var(--background);
+  /* Registry state colours on Craton's palette: green = chart-1 ("passed"), blue = chart-2, amber = chart-3 ("warning"). */
+  --amber: var(--chart-3);
+  --amber-fg: var(--background);
+  --amber-hover: var(--chart-4);
+  --blue: var(--chart-2);
+  --blue-fg: var(--background);
+  --blue-hover: var(--chart-3);
+  --green: var(--chart-1);
+  --green-fg: var(--background);
+  --green-hover: var(--chart-2);
+  --smooth-50: oklch(0.2 0 0);
+  --smooth-100: oklch(0.235 0 0);
+  --smooth-200: oklch(0.275 0 0);
+  --smooth-300: oklch(0.315 0 0);
+  --smooth-400: oklch(0.36 0 0);
+  --smooth-500: oklch(0.41 0 0);
+  --smooth-600: oklch(0.47 0 0);
+  --smooth-700: oklch(0.55 0 0);
+  --smooth-800: oklch(0.66 0 0);
+  --smooth-900: oklch(0.74 0 0);
+  --smooth-950: oklch(0.85 0 0);
+  --smooth-1000: oklch(0.96 0 0);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-radius: 0px !important;
+  }
+
+  /* 90/10: structure (layout, panels, cards, tables, previews, avatars, tabs) stays square.
+     Things you press or that float above the page get a small radius, never above 8px.
+     Attribute selectors outrank the * reset above, so these opt in without touching it. */
+  :is(
+      [data-slot="button"],
+      [data-slot="input"],
+      [data-slot="textarea"],
+      [data-slot="select-trigger"],
+      [data-slot="input-group"],
+      [data-slot="badge"],
+      [data-slot="kbd"],
+      [data-slot="toggle"],
+      [data-slot="toggle-group-item"],
+      [data-slot="tooltip-content"],
+      [data-slot="tabs-list"]:not([data-variant="line"]),
+      [data-radius="control"]
+    ) {
+    border-radius: var(--radius-control) !important;
+  }
+  [data-slot="checkbox"] {
+    border-radius: var(--radius-inset) !important;
+  }
+
+  /* Joined segments round only their outer corners. */
+  [data-slot="toggle-group-item"][data-spacing="0"] {
+    border-radius: 0 !important;
+  }
+  [data-slot="toggle-group-item"][data-spacing="0"]:first-child {
+    border-top-left-radius: var(--radius-control) !important;
+    border-bottom-left-radius: var(--radius-control) !important;
+  }
+  [data-slot="toggle-group-item"][data-spacing="0"]:last-child {
+    border-top-right-radius: var(--radius-control) !important;
+    border-bottom-right-radius: var(--radius-control) !important;
+  }
+
+  :is(
+      [data-slot="dropdown-menu-content"],
+      [data-slot="dropdown-menu-sub-content"],
+      [data-slot="context-menu-content"],
+      [data-slot="context-menu-sub-content"],
+      [data-slot="menubar-content"],
+      [data-slot="menubar-sub-content"],
+      [data-slot="select-content"],
+      [data-slot="popover-content"],
+      [data-slot="hover-card-content"],
+      [data-slot="dialog-content"],
+      [data-slot="alert-dialog-content"],
+      [data-slot="command"],
+      [data-sonner-toast]
+    ) {
+    border-radius: var(--radius-float) !important;
+  }
+
+  /* Concentric: an item inside a float sits 4px in, so it gets 6 − 4 = 2px. Same for a
+     button inside an input group, and a tab inside its 3px-padded list (≈1px). */
+  :is(
+      [data-slot="dropdown-menu-item"],
+      [data-slot="dropdown-menu-checkbox-item"],
+      [data-slot="dropdown-menu-radio-item"],
+      [data-slot="dropdown-menu-sub-trigger"],
+      [data-slot="context-menu-item"],
+      [data-slot="context-menu-checkbox-item"],
+      [data-slot="context-menu-radio-item"],
+      [data-slot="context-menu-sub-trigger"],
+      [data-slot="menubar-item"],
+      [data-slot="menubar-checkbox-item"],
+      [data-slot="menubar-radio-item"],
+      [data-slot="menubar-sub-trigger"],
+      [data-slot="select-item"],
+      [data-slot="command-item"],
+      [data-slot="input-group"] [data-slot="button"]
+    ) {
+    border-radius: var(--radius-inset) !important;
+  }
+  [data-slot="tabs-list"]:not([data-variant="line"]) [data-slot="tabs-trigger"] {
+    border-radius: 1px !important;
+  }
+  [data-slot="input-group-control"] {
+    border-radius: 0 !important;
+  }
+
+  /* The row selected with j / k: ring the whole row (its link's ::after covers it), not just the title. */
+  [data-list-item]:focus-visible {
+    outline: none;
+  }
+  [data-list-item]:focus-visible::after {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+  }
+
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+}
+
+@utility link-underline {
+    @apply underline decoration-current/30 decoration-1 underline-offset-3 transition-colors hover:decoration-current;
+}
+
+/* ─── Craton add-ons (see DESIGN.md). Everything above this line is the frozen theme. ─── */
+
+@layer base {
+  html {
+    /* dark scrollbars and native inputs; keep focused elements clear of the sticky header */
+    color-scheme: dark;
+    scroll-padding-top: 4.5rem;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button,
+  a,
+  [role="button"],
+  summary {
+    touch-action: manipulation;
+  }
+}
+
+/* Overlays open and close instantly (DESIGN.md §3 Motion). */
+[data-slot="dialog-content"],
+[data-slot="dialog-overlay"],
+[data-slot="alert-dialog-content"],
+[data-slot="alert-dialog-overlay"],
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="popover-content"],
+[data-slot="select-content"],
+[data-slot="tooltip-content"],
+[data-slot="hover-card-content"],
+[data-slot="sheet-content"],
+[data-slot="sheet-overlay"],
+[data-slot="accordion-content"] {
+  animation: none !important;
+}
+
+/* Base UI marks orientation as data-orientation="…"; the shadcn classes expect data-horizontal / data-vertical.
+   Without these, every Tabs strip rendered beside its content instead of above it. */
+@custom-variant data-horizontal (&[data-orientation="horizontal"]);
+@custom-variant data-vertical (&[data-orientation="vertical"]);
+
+/* Scrollable lists that hide their scrollbar (used by the command menu). */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Three dots that blink in turn while a result is on its way (components/inline-status.tsx). */
+.status-dots > i {
+  display: block;
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  opacity: 0.25;
+  animation: status-dot 0.9s steps(1, end) infinite;
+}
+.status-dots > i:nth-child(2) { animation-delay: 0.3s; }
+.status-dots > i:nth-child(3) { animation-delay: 0.6s; }
+@keyframes status-dot {
+  0% { opacity: 1; }
+  33.3% { opacity: 0.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-dots > i { animation: none; opacity: 0.6; }
+}
+/* Anyone who asked their system for less motion gets none: no transitions, no looping animation, no smooth scrolling. */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* "Darker" theme (Settings → Appearance): the whole app on one near-black surface, as GitHub Primer
+   and Vercel's Geist do. Only surfaces and lines change; the blue accent, square corners and fonts stay. */
+.dark.darker {
+  --background: oklch(0.145 0 0);
+  --card: oklch(0.145 0 0);
+  --popover: oklch(0.205 0 0);
+  --muted: oklch(0.205 0 0);
+  --border: oklch(0.245 0 0);
+  --input: oklch(0.29 0 0);
+  --sidebar: oklch(0.145 0 0);
+  --sidebar-accent: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.245 0 0);
+}
+
+/*
+ * Long lists: rows far from the viewport are not laid out or painted until they get near it (Google's guidance for a
+ * large DOM, web.dev/articles/optimize-inp). `auto` in contain-intrinsic-size remembers a row's real height once it has
+ * been rendered, so the scrollbar and the scroll position stay put (no layout shift). Searching the page and keyboard
+ * focus still work: the browser renders a row when it is found or focused.
+ */
+.cv-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
+}
+.cv-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+/*
+ * Small links and buttons get a larger hit area without changing how they look or where they sit: an invisible
+ * extension of the element (WCAG 2.5.8 asks for 24 CSS px, Google's Material guidance for 48 dp where there is room).
+ * Not for elements that clip their overflow (a truncating link): the extension would be cut off.
+ */
+.hit-area {
+  position: relative;
+}
+.hit-area::after {
+  content: "";
+  position: absolute;
+  inset: -4px -6px;
+}
+
+/*
+ * A row that scrolls sideways (the repository tabs on a phone) fades out at the edge that has more behind it, so it
+ * does not look like cut-off text. It is driven by the scroll position itself (scroll-driven animation), so a row that
+ * fits has no fade, and browsers without support simply show the row as before.
+ */
+@supports (animation-timeline: scroll()) {
+  @property --fade-left {
+    syntax: "<length>";
+    initial-value: 0px;
+    inherits: false;
+  }
+  @property --fade-right {
+    syntax: "<length>";
+    initial-value: 0px;
+    inherits: false;
+  }
+  @keyframes scroll-fade-x {
+    0% {
+      --fade-left: 0px;
+      --fade-right: 32px;
+    }
+    4%,
+    96% {
+      --fade-left: 32px;
+      --fade-right: 32px;
+    }
+    100% {
+      --fade-left: 32px;
+      --fade-right: 0px;
+    }
+  }
+  .scroll-fade-x {
+    mask-image: linear-gradient(to right, transparent, #000 var(--fade-left), #000 calc(100% - var(--fade-right)), transparent);
+    animation: scroll-fade-x linear both;
+    animation-timeline: scroll(self inline);
+  }
+}

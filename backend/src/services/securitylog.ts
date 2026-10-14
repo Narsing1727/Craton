@@ -1,0 +1,39 @@
+// A person's own security activity: sign-ins (and failed ones), password changes and resets, tokens
+// created or revoked, two-step verification turned on or off. Shown only to that person, newest first,
+// so an unfamiliar entry is something they can act on. Never holds secrets, only what happened.
+
+import type { Ctx } from "./context.ts";
+
+export const SECURITY_EVENT_TYPES = [
+  "signed_in",
+  "sign_in_failed",
+  "password_changed",
+  "password_reset_requested",
+  "password_reset",
+  "token_created",
+  "token_revoked",
+  "session_revoked",
+  "two_factor_enabled",
+  "two_factor_disabled",
+  "recovery_codes_regenerated",
+] as const;
+export type SecurityEventType = (typeof SECURITY_EVENT_TYPES)[number];
+
+/** Most entries kept per person; older ones are dropped as new ones arrive. */
+const KEEP = 200;
+
+export function record(ctx: Ctx, userId: number, type: SecurityEventType, opts: { detail?: string; ip?: string | null; userAgent?: string | null } = {}) {
+  ctx.db
+    .prepare("INSERT INTO security_events (user_id, type, detail, ip, user_agent) VALUES (?, ?, ?, ?, ?)")
+    .run(userId, type, (opts.detail ?? "").slice(0, 200), opts.ip?.slice(0, 64) ?? null, opts.userAgent?.slice(0, 300) ?? null);
+  ctx.db
+    .prepare("DELETE FROM security_events WHERE user_id = ? AND id NOT IN (SELECT id FROM security_events WHERE user_id = ? ORDER BY id DESC LIMIT ?)")
+    .run(userId, userId, KEEP);
+}
+
+export function list(ctx: Ctx, userId: number, limit = 50) {
+  const rows = ctx.db
+    .prepare("SELECT id, type, detail, ip, user_agent, created_at FROM security_events WHERE user_id = ? ORDER BY id DESC LIMIT ?")
+    .all(userId, Math.min(KEEP, Math.max(1, limit))) as { id: number; type: string; detail: string; ip: string | null; user_agent: string | null; created_at: string }[];
+  return rows.map((r) => ({ id: r.id, type: r.type, detail: r.detail, ip: r.ip, userAgent: r.user_agent, at: r.created_at }));
+}
