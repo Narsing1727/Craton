@@ -98,6 +98,9 @@ at levels 1 to 9 (`hdf_probe.mjs`). For noisy floats the pixels alone are no sma
 gain is all in versions: a +0.25 datum shift costs 0.40 MB as an XOR of the shuffled planes and 0.02 MB with the shuffle undone first, of
 14.5 MB. Built the same way: three runs of 40 to 60 MB (original, datum shift, unrelated tip) 134.5 MB stored today, 98.8 MB with the cold tier.
 
+LAS point clouds are covered by the same difference store (version 2 of encoding 10): coordinates subtracted, other bytes XORed, then
+shuffled by record. A synthetic 2 MB cloud: reclassifying every 20th point 790 KB to 62 KB, a 1.2 m shift with a longer header 788 KB to 63 KB.
+
 ## 4. Recommendations, in order
 
 1. **Parent-chunk delta for numeric data** (new stored form: "difference from base chunk *H*"). Works today for uncompressed

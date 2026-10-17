@@ -142,7 +142,8 @@ export async function getStoredChunk(ctx: Ctx, repo: RepoRow, hash: string): Pro
   // client does not have: send it in an encoding that stands alone.
   if (isRefDelta(stored)) {
     const data = await decodeStored(ctx, hash, stored);
-    return compressChunk(data, hash, { kind: "numeric", width: refDeltaInfo(stored).width }).stored;
+    const info = refDeltaInfo(stored);
+    return compressChunk(data, hash, info.records ? { kind: "records", width: info.width } : { kind: "numeric", width: info.width as 2 | 4 | 8 }).stored;
   }
   if (isPieces(stored)) return compressChunk(await decodeAny(ctx, hash, stored), hash, { kind: "incompressible" }).stored;
   return stored;

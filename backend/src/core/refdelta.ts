@@ -11,6 +11,7 @@
 // difference, so a read costs at most a few extra chunk reads and a chain can never form.
 //
 //   10, version(1), mode(1), width(1), phase(1), length u32, refCount(1), refs[ hash(32) from u32 to u32 ] , zstd(diff)
+//   version 2 (point clouds): 10, 2, mode(2), 0, phase u16, recordLength u16, length u32, refCount(1), refs..., zstd(diff)
 //
 //   mode  0: each element is XORed with the reference's;   1: each element minus the reference's, wrapping
 //   width the element size in bytes (2, 4 or 8, little endian); `phase` is how many bytes at the start of the chunk come
@@ -19,14 +20,17 @@
 //   file offsets; where that file was shorter the rest of the reference is zeros.
 
 import zlib from "node:zlib";
+import { shuffle, unshuffle } from "./shuffle.ts";
 
 export const REF_DELTA = 10;
 const VERSION = 1;
 const MAX_REFS = 4;
 const HEADER = 10;
+const HEADER2 = 13;
 
 export type RefSlice = { hash: string; from: number; to: number };
-export type RefDeltaInfo = { mode: 0 | 1; width: 2 | 4 | 8; phase: number; length: number; refs: RefSlice[] };
+/** `mode` 2 is a LAS point cloud: `width` is then the length of one point record, not of a number. */
+export type RefDeltaInfo = { mode: 0 | 1 | 2; width: number; phase: number; length: number; refs: RefSlice[]; records: boolean };
 
 const zstd = (data: Uint8Array, level: number) => zlib.zstdCompressSync(data, { params: { [zlib.constants.ZSTD_c_compressionLevel]: level } });
 
@@ -37,7 +41,9 @@ function elementsOf(buf: Uint8Array, width: 2 | 4 | 8) {
 }
 
 /** The bytes of the difference: head (XOR), whole elements (XOR or difference, then byte-shuffled), tail (XOR). */
-function difference(data: Uint8Array, ref: Uint8Array, info: Pick<RefDeltaInfo, "mode" | "width" | "phase">): Buffer {
+type WordLayout = { mode: 0 | 1; width: 2 | 4 | 8; phase: number };
+
+function difference(data: Uint8Array, ref: Uint8Array, info: WordLayout): Buffer {
   const { mode, width, phase } = info;
   const count = Math.floor((data.length - phase) / width);
   const bodyEnd = phase + count * width;
@@ -62,7 +68,7 @@ function difference(data: Uint8Array, ref: Uint8Array, info: Pick<RefDeltaInfo, 
   return out;
 }
 
-function reconstruct(diff: Uint8Array, ref: Uint8Array, info: Pick<RefDeltaInfo, "mode" | "width" | "phase">): Buffer {
+function reconstruct(diff: Uint8Array, ref: Uint8Array, info: WordLayout): Buffer {
   const { mode, width, phase } = info;
   const length = diff.length;
   const count = Math.floor((length - phase) / width);
@@ -86,6 +92,75 @@ function reconstruct(diff: Uint8Array, ref: Uint8Array, info: Pick<RefDeltaInfo,
     out.set(Buffer.from(r.buffer, 0, count * width), phase);
   }
   return out;
+}
+
+/**
+ * Point records (LAS): each record's three coordinates (the first twelve bytes: X, Y, Z as 32-bit integers) are subtracted from the
+ * reference's, every other byte is XORed, and the result is byte-shuffled by record so each field of every point lies together. A
+ * vertical shift is then a column of one repeated number; a reclassification is a column that is zero but for a few bytes.
+ */
+function recordDifference(data: Uint8Array, ref: Uint8Array, phase: number, width: number): Buffer {
+  const count = Math.floor((data.length - phase) / width);
+  const out = Buffer.alloc(data.length);
+  for (let i = 0; i < phase; i++) out[i] = data[i] ^ ref[i];
+  const body = phase + count * width;
+  for (let i = body; i < data.length; i++) out[i] = data[i] ^ ref[i];
+  const a = Buffer.from(data.buffer, data.byteOffset, data.length);
+  const b = Buffer.from(ref.buffer, ref.byteOffset, ref.length);
+  for (let k = 0; k < count; k++) {
+    const at = phase + k * width;
+    let j = 0;
+    if (width >= 12) {
+      for (; j < 12; j += 4) out.writeInt32LE((a.readInt32LE(at + j) - b.readInt32LE(at + j)) | 0, at + j);
+    }
+    for (; j < width; j++) out[at + j] = data[at + j] ^ ref[at + j];
+  }
+  if (count > 0) shuffle(out.subarray(phase, body), width).copy(out, phase);
+  return out;
+}
+
+function recordReconstruct(diff: Uint8Array, ref: Uint8Array, phase: number, width: number): Buffer {
+  const count = Math.floor((diff.length - phase) / width);
+  const body = phase + count * width;
+  const work = Buffer.from(diff);
+  if (count > 0) unshuffle(work.subarray(phase, body), width).copy(work, phase);
+  const out = Buffer.alloc(diff.length);
+  const b = Buffer.from(ref.buffer, ref.byteOffset, ref.length);
+  for (let i = 0; i < phase; i++) out[i] = work[i] ^ ref[i];
+  for (let i = body; i < diff.length; i++) out[i] = work[i] ^ ref[i];
+  for (let k = 0; k < count; k++) {
+    const at = phase + k * width;
+    let j = 0;
+    if (width >= 12) {
+      for (; j < 12; j += 4) out.writeInt32LE((work.readInt32LE(at + j) + b.readInt32LE(at + j)) | 0, at + j);
+    }
+    for (; j < width; j++) out[at + j] = work[at + j] ^ ref[at + j];
+  }
+  return out;
+}
+
+/**
+ * A chunk of a point cloud as its difference from the previous version's records at the same positions. `phase` is how many bytes
+ * of the chunk come before its first whole record.
+ */
+export function encodeRecordDelta(data: Buffer, ref: Uint8Array, refs: RefSlice[], recordWidth: number, phase: number, mustBeBelow: number): Buffer | null {
+  if (refs.length === 0 || refs.length > MAX_REFS || data.length < 256 || recordWidth < 2 || recordWidth > 4096 || phase < 0 || phase >= recordWidth) return null;
+  const body = zstd(recordDifference(data, fitted(ref, data.length), phase, recordWidth), 3);
+  const header = Buffer.alloc(HEADER2 + refs.length * 40);
+  header[0] = REF_DELTA;
+  header[1] = 2;
+  header[2] = 2;
+  header.writeUInt16LE(phase, 4);
+  header.writeUInt16LE(recordWidth, 6);
+  header.writeUInt32LE(data.length, 8);
+  header[12] = refs.length;
+  refs.forEach((r, i) => {
+    Buffer.from(r.hash, "hex").copy(header, HEADER2 + i * 40);
+    header.writeUInt32LE(r.from, HEADER2 + i * 40 + 32);
+    header.writeUInt32LE(r.to, HEADER2 + i * 40 + 36);
+  });
+  const stored = Buffer.concat([header, body]);
+  return stored.length < mustBeBelow ? stored : null;
 }
 
 /** `ref` padded with zeros (or cut) to exactly `length` bytes. */
@@ -132,6 +207,19 @@ export const isRefDelta = (stored: Buffer) => stored[0] === REF_DELTA;
 /** What a stored difference is made of, without decoding it. */
 export function refDeltaInfo(stored: Buffer): RefDeltaInfo {
   if (stored[0] !== REF_DELTA || stored.length < HEADER) throw new Error("Not a stored difference");
+  if (stored[1] === 2) {
+    if (stored.length < HEADER2) throw new Error("Damaged stored difference");
+    const count = stored[12];
+    const width = stored.readUInt16LE(6);
+    const phase = stored.readUInt16LE(4);
+    if (stored[2] !== 2 || width < 2 || width > 4096 || phase >= width || count < 1 || count > MAX_REFS || stored.length < HEADER2 + count * 40) throw new Error("Damaged stored difference");
+    const refs: RefSlice[] = [];
+    for (let i = 0; i < count; i++) {
+      const at = HEADER2 + i * 40;
+      refs.push({ hash: stored.subarray(at, at + 32).toString("hex"), from: stored.readUInt32LE(at + 32), to: stored.readUInt32LE(at + 36) });
+    }
+    return { mode: 2, width, phase, length: stored.readUInt32LE(8), refs, records: true };
+  }
   if (stored[1] !== VERSION) throw new Error(`Unknown stored-difference version ${stored[1]}`);
   const mode = stored[2];
   const width = stored[3];
@@ -142,16 +230,17 @@ export function refDeltaInfo(stored: Buffer): RefDeltaInfo {
     const at = HEADER + i * 40;
     refs.push({ hash: stored.subarray(at, at + 32).toString("hex"), from: stored.readUInt32LE(at + 32), to: stored.readUInt32LE(at + 36) });
   }
-  return { mode, width, phase: stored[4], length: stored.readUInt32LE(5), refs };
+  return { mode, width, phase: stored[4], length: stored.readUInt32LE(5), refs, records: false };
 }
 
 /** Rebuild the chunk. `refBytes` is the concatenation of the named slices (see `refDeltaInfo`), in order. */
 export function decodeRefDelta(stored: Buffer, refBytes: Uint8Array, maxLength?: number): Buffer {
   const info = refDeltaInfo(stored);
   if (maxLength !== undefined && info.length > maxLength) throw new Error("Chunk is larger than allowed.");
-  const diff = zlib.zstdDecompressSync(stored.subarray(HEADER + info.refs.length * 40), { maxOutputLength: info.length });
+  const diff = zlib.zstdDecompressSync(stored.subarray((info.records ? HEADER2 : HEADER) + info.refs.length * 40), { maxOutputLength: info.length });
   if (diff.length !== info.length) throw new Error("Damaged stored difference");
-  return reconstruct(diff, fitted(refBytes, info.length), info);
+  if (info.records) return recordReconstruct(diff, fitted(refBytes, info.length), info.phase, info.width);
+  return reconstruct(diff, fitted(refBytes, info.length), info as WordLayout);
 }
 
 /** The same difference and its inverse, for other formats that store one block as its difference from another (tile payloads). */

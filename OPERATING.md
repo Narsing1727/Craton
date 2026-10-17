@@ -108,7 +108,8 @@ be undone. Practise it once on a copy before you need it.
 ## Storing changes as differences
 
 When a new version of an uncompressed numeric raster (a `.flt`, `.hgt` or similar, or a GeoTIFF without compression, little
-endian) is committed, each new chunk is compared with the bytes at the same place in the previous version. If the
+endian) or of an uncompressed LAS point cloud (compared record by record, even when the header grew; a reclassification or a vertical
+shift stores about 13 times smaller) is committed, each new chunk is compared with the bytes at the same place in the previous version. If the
 difference is under 70% of what the chunk would take on its own, the chunk is stored as that difference. A datum shift or a
 smooth recalibration then costs a few percent of a new copy. Nothing about what people download changes: the stored form is
 decoded and must hash to the chunk's own SHA-256 before it replaces anything, a chunk is always sent to a client in a form it

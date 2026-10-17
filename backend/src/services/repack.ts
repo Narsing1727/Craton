@@ -14,7 +14,7 @@ import type { RepoRow } from "./repos.ts";
 import { branchMovedListeners, getObject } from "./history.ts";
 import { BlobReader, decodeStored, readChunk } from "./chunks.ts";
 import { hintForPath, tiffHint } from "../core/profile.ts";
-import { decodeRefDelta, encodeRefDelta, isRefDelta, type RefSlice } from "../core/refdelta.ts";
+import { decodeRefDelta, encodeRecordDelta, encodeRefDelta, isRefDelta, type RefSlice } from "../core/refdelta.ts";
 import { sha256Hex } from "../core/fastcdc.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { config } from "../config.ts";
@@ -37,6 +37,22 @@ async function elementWidth(path: string, blob: BlobObject, ctx: Ctx): Promise<2
   const hint = tiffHint((offset, length) => (offset + length <= head.length ? head.subarray(offset, offset + length) : null));
   if (hint?.kind !== "numeric" || hint.bigEndian || head.subarray(0, 2).toString("latin1") !== "II") return null;
   return hint.width;
+}
+
+/** How the bytes of a file are laid out, as far as differencing needs: plain numbers, or the fixed-length records of an uncompressed LAS point cloud. */
+type Layout = { kind: "words"; width: 2 | 4 | 8 } | { kind: "las"; recordLength: number; dataStart: number };
+
+async function layoutOf(path: string, blob: BlobObject, ctx: Ctx): Promise<Layout | null> {
+  const width = await elementWidth(path, blob, ctx);
+  if (width) return { kind: "words", width };
+  if (!/\.las$/i.test(path) || blob.size < 400) return null;
+  const head = await new BlobReader(ctx, blob).read(0, 375);
+  if (head.length < 107 || head.toString("latin1", 0, 4) !== "LASF") return null;
+  if ((head[104] & 0xc0) !== 0) return null; // LAZ is compressed already
+  const recordLength = head.readUInt16LE(105);
+  const dataStart = head.readUInt32LE(96);
+  if (recordLength < 20 || recordLength > 4096 || dataStart < 227 || dataStart >= blob.size) return null;
+  return { kind: "las", recordLength, dataStart };
 }
 
 /** Repack the chunks that `commitId` adds to the files it changes. With `apply: false` it only measures. */
@@ -63,7 +79,9 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
     const blob = getObject<BlobObject>(ctx, repo, entry.blob, "blob");
     const olderIds = [...new Set(ancestors.map((id) => entriesAt(id).get(entry.path)).filter((id): id is string => Boolean(id) && id !== entry.blob))];
     if (!olderIds.length || !blob.size) continue;
-    const olders: { blob: BlobObject; starts: number[] }[] = [];
+    const layout = await layoutOf(entry.path, blob, ctx);
+    if (!layout) continue;
+    const olders: { blob: BlobObject; starts: number[]; shift: number }[] = [];
     for (const id of olderIds) {
       try {
         const old = getObject<BlobObject>(ctx, repo, id, "blob");
@@ -71,14 +89,19 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
         const starts: number[] = [];
         let at = 0;
         for (const c of old.chunks) (starts.push(at), (at += c.size));
-        olders.push({ blob: old, starts });
+        // The same records may start at a different place in an earlier version (a longer header): compare record with record.
+        let shift = 0;
+        if (layout.kind === "las") {
+          const before = await layoutOf(entry.path, old, ctx);
+          if (before?.kind !== "las" || before.recordLength !== layout.recordLength) continue;
+          shift = before.dataStart - layout.dataStart;
+        }
+        olders.push({ blob: old, starts, shift });
       } catch {
         // An earlier version that is no longer in this repository cannot be a base.
       }
     }
     if (!olders.length) continue;
-    const width = await elementWidth(entry.path, blob, ctx);
-    if (!width) continue;
 
     const known = new Set(olders.flatMap((o) => o.blob.chunks.map((c) => c.hash)));
     let touched = false;
@@ -91,15 +114,17 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
       // Only whole chunks become differences, and a chunk another difference is built on stays whole.
       if (!stored || stored.codec === "ref-delta" || stored.codec === "tiles" || stored.codec === "none" || stored.stored_size < SMALLEST || isBase.get(c.hash)) continue;
 
+      if (layout.kind === "las" && start < layout.dataStart) continue; // the header's own chunk is not point records
       let data: Buffer | null = null;
-      for (const { blob: old, starts } of olders) {
-        if (start >= old.size) continue;
+      for (const { blob: old, starts, shift } of olders) {
+        const there = start + shift;
+        if (there < 0 || there >= old.size) continue;
         // That version's bytes at the same place, as slices of its chunks (all whole chunks).
-        const end = Math.min(start + c.size, old.size);
+        const end = Math.min(there + c.size, old.size);
         const refs: RefSlice[] = [];
         let usable = true;
         for (let i = 0; i < old.chunks.length && usable; i++) {
-          const from = Math.max(start, starts[i]);
+          const from = Math.max(there, starts[i]);
           const to = Math.min(end, starts[i] + old.chunks[i].size);
           if (to <= from) continue;
           const kind = (row.get(old.chunks[i].hash) as { codec: string } | undefined)?.codec;
@@ -112,7 +137,11 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
         const parts: Buffer[] = [];
         for (const r of refs) parts.push((await readChunk(ctx, r.hash)).subarray(r.from, r.to));
         const refBytes = Buffer.concat(parts);
-        const next = encodeRefDelta(data, refBytes, refs, width, start, Math.floor(stored.stored_size * WORTH_IT));
+        const below = Math.floor(stored.stored_size * WORTH_IT);
+        const next =
+          layout.kind === "las"
+            ? encodeRecordDelta(data, refBytes, refs, layout.recordLength, (layout.recordLength - ((start - layout.dataStart) % layout.recordLength)) % layout.recordLength, below)
+            : encodeRefDelta(data, refBytes, refs, layout.width, start, below);
         if (!next) continue;
         // The new form must give back exactly this chunk, or nothing changes.
         if (sha256Hex(decodeRefDelta(next, refBytes)) !== c.hash) continue;
