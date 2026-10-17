@@ -18,12 +18,18 @@ const exe = candidates.find((p) => p && fs.existsSync(p));
 if (!exe) throw new Error("No Chrome or Edge found. Set CRATON_BROWSER.");
 
 const browser = await chromium.launch({ executablePath: exe, headless: true });
-const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
-await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
-await page.fill('input[name="login"]', "priyam");
-await page.fill('input[name="password"]', "craton-demo-2026");
-await page.click('button[type="submit"]');
-await page.waitForURL(/dashboard/, { timeout: 20000 });
+const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+const page = await ctx.newPage();
+if (process.env.CRATON_SESSION_TOKEN) {
+  // A throwaway account's session (see scripts/ui-audit.mjs): signing in as the demo user writes to its security log.
+  await ctx.addCookies([{ name: "craton_session", value: process.env.CRATON_SESSION_TOKEN, url: WEB }]);
+} else {
+  await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
+  await page.fill('input[name="login"]', "priyam");
+  await page.fill('input[name="password"]', "craton-demo-2026");
+  await page.click('button[type="submit"]');
+  await page.waitForURL(/dashboard/, { timeout: 20000 });
+}
 
 let problems = 0;
 for (const route of routes) {

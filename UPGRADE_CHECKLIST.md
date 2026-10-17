@@ -378,6 +378,8 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 | 208 | Clients are always sent a chunk in an encoding that stands alone (the server decodes the difference first), so the CLI, clone and pull are unchanged; a client cannot upload a difference; a damaged one is never read as the chunk; `npm run gc` keeps the chunks a difference is built on (new table `chunk_refs`, migration 36); a chunk that is itself a difference is never a base, so there are no chains | `backend/test/repack.test.ts` (10 tests), `backend/test/refdelta.test.ts` (4) |
 | 209 | On for new commits unless `CRATON_REPACK=0` (done after the push or upload is answered, one commit at a time; a failure leaves the chunk as it was); documented in OPERATING.md | OPERATING.md → Storing changes as differences |
 
+| 210 | **Light theme contrast**: blue links and the Open badge were 3.3 to 3.7:1 on the light page (AA needs 4.5:1); they are darker in Light only. The contrast scan and keyboard walk now run on a throwaway account (`CRATON_SESSION_TOKEN`), so they no longer write to the demo user's security log; `npm run audit` builds a repository with an issue, a comment and a release and scans 14 pages in both themes | `CRATON_E2E_DB=<throwaway craton.db> npm run audit` |
+
 Not done: DEFLATE GeoTIFFs (needs the bit-exact re-deflate, research/storage/README.md recommendation 2), LAS, NetCDF, and big-endian rasters.
 
 ### Turning Google on (what you need from Google)

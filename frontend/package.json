@@ -18,7 +18,8 @@
     "e2e:profile": "node scripts/profile-e2e.mjs",
     "e2e:org": "node scripts/org-e2e.mjs",
     "e2e:comments": "node scripts/comments-e2e.mjs",
-    "e2e:release-run": "node scripts/release-run-e2e.mjs"
+    "e2e:release-run": "node scripts/release-run-e2e.mjs",
+    "audit": "node scripts/ui-audit.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

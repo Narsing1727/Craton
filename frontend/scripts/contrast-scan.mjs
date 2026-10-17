@@ -3,7 +3,7 @@
 // images or gradients can't be measured this way and is skipped. Same setup as route-sweep.mjs.
 //
 //   npm run contrast
-//   CRATON_ROUTES=/dashboard CRATON_THEME=standard npm run contrast
+//   CRATON_ROUTES=/dashboard CRATON_THEME=light npm run contrast
 
 import fs from "node:fs";
 import { chromium } from "playwright-core";
@@ -11,7 +11,7 @@ import { chromium } from "playwright-core";
 const WEB = process.env.CRATON_WEB ?? "http://localhost:3100";
 const R = "/hydrolab/chalakudy-basin";
 const routes = (process.env.CRATON_ROUTES ?? `/,/dashboard,/explore,${R},${R}/blob/gauges.csv,${R}/blob/terrain/basin_dem.tif,${R}/pulls,${R}/pull/142,${R}/issues,${R}/commits,${R}/releases,${R}/settings,/settings,/settings/tokens,/new,/pricing,/docs,/cli,/api-reference,/help,/changelog,/about,/security,/terms,/privacy,/contact`).split(",");
-const themes = process.env.CRATON_THEME ? [process.env.CRATON_THEME] : ["darker", "standard"];
+const themes = process.env.CRATON_THEME ? [process.env.CRATON_THEME] : ["darker", "light"];
 
 const candidates = [process.env.CRATON_BROWSER, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"];
 const exe = candidates.find((p) => p && fs.existsSync(p));
@@ -24,11 +24,16 @@ for (const theme of themes) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await ctx.addInitScript((t) => { try { localStorage.setItem("craton:theme", t); } catch {} }, theme);
   const page = await ctx.newPage();
-  await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
-  await page.fill('input[name="login"]', "priyam");
-  await page.fill('input[name="password"]', "craton-demo-2026");
-  await page.click('button[type="submit"]');
-  await page.waitForURL(/dashboard/, { timeout: 20000 });
+  if (process.env.CRATON_SESSION_TOKEN) {
+    // A throwaway account's session (see scripts/ui-audit.mjs): signing in as the demo user writes to its security log.
+    await ctx.addCookies([{ name: "craton_session", value: process.env.CRATON_SESSION_TOKEN, url: WEB }]);
+  } else {
+    await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
+    await page.fill('input[name="login"]', "priyam");
+    await page.fill('input[name="password"]', "craton-demo-2026");
+    await page.click('button[type="submit"]');
+    await page.waitForURL(/dashboard/, { timeout: 20000 });
+  }
 
   for (const route of routes) {
     await page.goto(`${WEB}${route}`, { waitUntil: "networkidle", timeout: 30000 });

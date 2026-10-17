@@ -503,6 +503,10 @@
 .light ::selection {
   background: oklch(0.55 0.2 262 / 0.22);
 }
+/* Blue text drawn with the bright blue of the dark theme is 3.7:1 on a light page; AA needs 4.5:1. Only the light theme changes. */
+.light .text-blue-500 { color: oklch(0.5 0.2 262); }
+.light .hover\:text-blue-400:hover { color: oklch(0.43 0.2 262); }
+.light .text-chart-2 { color: oklch(0.5 0.17 255); }
 
 /*
  * Long lists: rows far from the viewport are not laid out or painted until they get near it (Google's guidance for a
