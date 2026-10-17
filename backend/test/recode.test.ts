@@ -13,7 +13,7 @@ import type { Ctx } from "../src/services/context.ts";
 import { findRepo } from "../src/services/repos.ts";
 import { recodeBlob, recodeRepository } from "../src/services/recode.ts";
 import { repackIdle } from "../src/services/repack.ts";
-import { verifyTiles, forgetRebuiltTiles } from "../src/services/tiles.ts";
+import { verifyTiles, forgetRebuiltTiles, tileStats, resetTileStats, tileStream } from "../src/services/tiles.ts";
 import { collectGarbage } from "../src/services/gc.ts";
 import { getStoredChunk, putStored, readChunk } from "../src/services/chunks.ts";
 import { decompressChunk } from "../src/core/compress.ts";
@@ -100,6 +100,20 @@ test("every version still downloads exactly as it was uploaded", async () => {
     const direct = await app.request(`/v1/repos/alice/dem/chunks/${c.hash}`, { headers: { authorization: `Bearer ${token}` } });
     assert.equal(sha256Hex(Buffer.from(await direct.arrayBuffer())), c.hash);
   }
+});
+
+test("reading a cold file from the start makes each tile once, and starts the next ones before they are asked for", async () => {
+  forgetRebuiltTiles();
+  resetTileStats();
+  assert.ok((await raw(commits[0], "dem.tif")).equals(V1));
+  const { rebuilt, readAhead } = tileStats();
+  assert.equal(rebuilt, 12, "one rebuild per tile, however many chunks it spans");
+  assert.ok(readAhead >= 6, `${readAhead} tiles were started ahead`);
+  forgetRebuiltTiles();
+  resetTileStats();
+  const fifth = (ctx.db.prepare("SELECT tile_key FROM blob_tiles WHERE blob_id = ? AND image = 0 AND idx = 5").get(blobOf(commits[0]).id) as { tile_key: string }).tile_key;
+  await tileStream(ctx, fifth);
+  assert.equal(tileStats().readAhead, 0, "a tile asked for out of order starts nothing ahead");
 });
 
 test("a client is sent chunks it can decode on its own, and cannot upload the cold form", async () => {

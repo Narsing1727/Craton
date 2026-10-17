@@ -88,8 +88,8 @@ global change their boundaries move; the difference is therefore taken against t
 `backend/src/services/recode.ts` (+ `core/tiff.ts`, `core/rezip.ts`, `core/tilepayload.ts`, `core/pieces.ts`, `services/tiles.ts`,
 `services/deflatepool.ts`). Four real versions of the Copernicus DEM (original, levee, datum shift, recalibration; tip left as
 uploaded): **122.2 MB stored today, 69.6 MB with the cold tier (1.76x)**, disk bytes equal the database's accounting, every version
-byte-identical, 33 stored tiles rebuilt exactly (`end_to_end_tiles.mjs`). Reading a cold 40 MB version takes about 4.7 s (tiles are
-compressed again in worker threads), the tip 0.3 s, which is why it is limited to versions that are no longer the tip of a branch or
+byte-identical, 33 stored tiles rebuilt exactly (`end_to_end_tiles.mjs`). Reading a cold 40 MB version takes about 1.8 s (tiles are
+compressed again in worker threads, the next few started ahead of the reader), the tip 0.2 s, which is why it is limited to versions that are no longer the tip of a branch or
 a tag, and off unless `CRATON_RECODE=1`. Chunks are cut over compressed bytes, so a chunk is a few tiles' worth of ends and middles:
 it is stored as pieces (literal bytes plus slices of tiles, encoding 11) and a tile as its pixels; chunks shared with the tip stay whole.
 

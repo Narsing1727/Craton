@@ -136,8 +136,9 @@ tile that does not hash to its own name is refused at read time. Files written b
 zlib, pinned at 2.1.0) does not match, such as libdeflate, are not recoded; nothing is lost, they are stored as uploaded.
 
 What stays exactly as it was uploaded: the newest version of every file (every branch tip), anything a tag points at, and every
-chunk those versions are made of, even when an old version shares it. Reading an old version costs about 5 seconds of CPU per
-40 MB file (measured), so this is a choice, not a default.
+chunk those versions are made of, even when an old version shares it. Reading an old version costs about 2 seconds per
+40 MB file (measured; the tip takes 0.2 s): tiles of a file read from the start are made again several at a time, in worker threads.
+So this is a choice, not a default.
 
 ```sh
 npm run recode                        # how much stored history would shrink (a dry run)

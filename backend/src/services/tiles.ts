@@ -42,6 +42,42 @@ class StreamCache {
 }
 const cache = new StreamCache();
 const inFlight = new Map<string, Promise<Buffer>>();
+const stats = { rebuilt: 0, readAhead: 0 };
+
+/** How many tiles were made again, and how many of those were started before anyone asked for them (diagnostics, tests). */
+export const tileStats = () => ({ ...stats });
+export const resetTileStats = () => ((stats.rebuilt = 0), (stats.readAhead = 0));
+
+/**
+ * Reading a file from the start asks for its tiles one after another, and each takes a good part of a second to make again.
+ * When a tile is asked for right after the one before it in the same file, the next few are started at once, so the worker
+ * threads work in parallel and the reader finds them ready. A tile asked for out of order (a range from the middle) starts nothing.
+ */
+const lastAsked = new Map<string, number>();
+const READ_AHEAD = 3;
+const placeOf = new Map<string, { blob_id: string; image: number; idx: number } | null>();
+function readAhead(ctx: Ctx, key: string) {
+  let here = placeOf.get(key);
+  if (here === undefined) {
+    here = (ctx.db.prepare("SELECT blob_id, image, idx FROM blob_tiles WHERE tile_key = ? AND image >= 0 LIMIT 1").get(key) as { blob_id: string; image: number; idx: number } | undefined) ?? null;
+    placeOf.set(key, here);
+    if (placeOf.size > 4096) placeOf.delete(placeOf.keys().next().value!);
+  }
+  if (!here) return;
+  const id = `${here.blob_id}:${here.image}`;
+  const previous = lastAsked.get(id);
+  if (previous === here.idx) return; // another chunk of the tile already being read
+  lastAsked.delete(id);
+  lastAsked.set(id, here.idx);
+  if (lastAsked.size > 256) lastAsked.delete(lastAsked.keys().next().value!);
+  if (!(previous === here.idx - 1 || (previous === undefined && here.idx === 0))) return;
+  const next = ctx.db.prepare("SELECT tile_key FROM blob_tiles WHERE blob_id = ? AND image = ? AND idx > ? ORDER BY idx LIMIT ?").all(here.blob_id, here.image, here.idx, READ_AHEAD) as { tile_key: string }[];
+  for (const n of next) {
+    if (cache.get(n.tile_key) || inFlight.has(n.tile_key)) continue;
+    stats.readAhead++;
+    void tileStream(ctx, n.tile_key, true).catch(() => undefined);
+  }
+}
 
 export const forgetRebuiltTiles = () => cache.clear();
 
@@ -58,12 +94,14 @@ export async function tilePixels(ctx: Ctx, key: string): Promise<{ raw: Buffer; 
 }
 
 /** The original compressed stream of a tile, made again from its pixels and checked against its own name. */
-export function tileStream(ctx: Ctx, key: string): Promise<Buffer> {
+export function tileStream(ctx: Ctx, key: string, ahead = false): Promise<Buffer> {
+  if (!ahead) readAhead(ctx, key);
   const hit = cache.get(key);
   if (hit) return Promise.resolve(hit);
   const running = inFlight.get(key);
   if (running) return running;
   const job = (async () => {
+    stats.rebuilt++;
     const { raw, info } = await tilePixels(ctx, key);
     const stream = await deflateAsync(raw, info.params);
     if (stream.length !== info.streamLength || tileKeyOf(stream) !== key) throw new Error(`Stored tile ${key} is corrupt: it does not make its original stream again`);
