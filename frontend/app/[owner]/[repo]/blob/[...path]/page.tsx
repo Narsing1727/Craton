@@ -68,6 +68,47 @@ function metadataFor(f: ApiFile) {
     const kind = r.sampleFormat === "float" ? "Float" : r.sampleFormat === "int" ? "Int" : "UInt";
     rows.push({ label: "Sample type", value: `${kind}${r.bitsPerSample}` });
     rows.push({ label: "Nodata", value: r.nodata === null ? "Not set" : String(r.nodata) });
+    // Whether it reads well from the web: tiled, with overviews, directories first.
+    if (f.cog) rows.push({ label: "Cloud optimized", value: f.cog.length === 0 ? "Yes" : `No: ${f.cog.join("; ")}` });
+  } else if (f.netcdf) {
+    const c = f.netcdf;
+    rows.push({ label: "Format", value: `NetCDF classic (${c.format})` });
+    rows.push({ label: "Conventions", value: c.conventions ?? "Not declared" });
+    rows.push({ label: "Dimensions", value: c.dimensions.map((d) => `${d.name} ${d.length === null ? `(unlimited, ${n(c.records)})` : n(d.length)}`).join(" · ") || "None" });
+    rows.push({ label: "Variables", value: c.variables.map((v) => `${v.name}${v.units ? ` [${v.units}]` : ""}`).slice(0, 12).join(", ") + (c.variables.length > 12 ? `, and ${c.variables.length - 12} more` : "") });
+    if (c.problems.length) rows.push({ label: "Header", value: c.problems.join("; ") });
+  } else if (f.hdf5) {
+    const h = f.hdf5;
+    rows.push({ label: "Format", value: `HDF5${h.results && h.top.includes("Plan Data") ? " (HEC-RAS results)" : ""}, superblock ${h.version}` });
+    rows.push({ label: "Contents", value: `${n(h.groups)} ${h.groups === 1 ? "group" : "groups"}, ${n(h.datasets)} ${h.datasets === 1 ? "dataset" : "datasets"}${h.limited ? " (listing stopped at the limit)" : ""}` });
+    if (h.top.length) rows.push({ label: "Top level", value: h.top.slice(0, 12).join(", ") + (h.top.length > 12 ? `, and ${h.top.length - 12} more` : "") });
+    if (h.biggest.length) {
+      rows.push({ label: "Largest datasets", value: h.biggest.map((d) => `${d.path.split("/").pop()} ${d.shape === null ? "(empty)" : d.shape.length === 0 ? "scalar" : `[${d.shape.map((x) => n(x)).join(" × ")}]`}${d.type ? ` ${d.type}` : ""}`).join(" · ") });
+    }
+    // The run's own account of itself (HEC-RAS results): status first, because "went unstable" changes how to read the rest.
+    if (h.run) {
+      rows.push({ label: "Run status", value: h.run.solution ?? "Not recorded" });
+      if (h.run.maxWselError !== null) rows.push({ label: "Max WSEL error", value: String(h.run.maxWselError) });
+      if (h.run.computeTotal) rows.push({ label: "Computation time", value: h.run.computeTotal });
+      if (h.run.runWindow) rows.push({ label: "Run window", value: h.run.runWindow });
+      if (h.run.cores !== null) rows.push({ label: "Cores used", value: String(h.run.cores) });
+      if (h.run.unstableAt) rows.push({ label: "Went unstable", value: h.run.unstableAt });
+      for (const v of h.run.volume.slice(0, 6)) rows.push({ label: v.name, value: Array.isArray(v.value) ? v.value.join(", ") : String(v.value) });
+    }
+    // The file's own attributes (HEC-RAS: file version, units, plan title, time window), at most eight rows.
+    for (const a of h.properties.slice(0, 8)) rows.push({ label: a.name, value: a.value });
+    if (h.properties.length > 8) rows.push({ label: "More attributes", value: `${h.properties.length - 8}+ in the file; see the line diff for all` });
+    if (h.problems.length) rows.push({ label: "Structure", value: h.problems.join("; ") });
+    if (h.notes.length) rows.push({ label: "Not read", value: h.notes.join("; ") });
+  } else if (f.pointCloud) {
+    const p = f.pointCloud;
+    rows.push({ label: "Format", value: `${p.compressed ? "LAZ" : "LAS"} ${p.version}, point format ${p.pointFormat}` });
+    rows.push({ label: "Points", value: n(p.pointCount) });
+    rows.push({ label: "CRS", value: p.epsg ? `EPSG:${p.epsg}` : "Not declared" });
+    rows.push({ label: "Elevation range", value: `${n(p.min[2])} – ${n(p.max[2])}` });
+    rows.push({ label: "Extent", value: `${n(p.min[0])} – ${n(p.max[0])} E · ${n(p.min[1])} – ${n(p.max[1])} N` });
+    if (p.generatingSoftware) rows.push({ label: "Made with", value: p.generatingSoftware });
+    if (p.problems.length) rows.push({ label: "Header", value: p.problems.join("; ") });
   } else if (f.vector) {
     const v = f.vector;
     rows.push({ label: "Format", value: "ESRI Shapefile" });

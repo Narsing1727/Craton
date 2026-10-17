@@ -6,7 +6,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { chunkStream, sha256Hex } from "../core/fastcdc.ts";
 import type { Hint } from "../core/compress.ts";
-import { hintForPath, tiffHint } from "../core/profile.ts";
+import { hintForPath, lasHint, tiffHint } from "../core/profile.ts";
+import { netcdfHint } from "../checks/netcdf.ts";
 import type { BlobObject } from "../core/objects.ts";
 import { config } from "../config.ts";
 import { CliError } from "./local.ts";
@@ -136,18 +137,20 @@ export function formatBytes(n: number) {
  */
 export function hintForFile(abs: string): Hint {
   const byName = hintForPath(abs.split("\\").join("/"));
-  if (!/\.tiff?$/i.test(abs)) return byName;
+  const isTiff = /\.tiff?$/i.test(abs);
+  const isNc = /\.(nc|cdf)$/i.test(abs);
+  if (!isTiff && !isNc && !/\.las$/i.test(abs)) return byName;
   let fd: number | null = null;
   try {
     fd = fs.openSync(abs, "r");
     const open = fd;
-    return (
-      tiffHint((offset, length) => {
-        const buf = Buffer.alloc(length);
-        const n = fs.readSync(open, buf, 0, length, offset);
-        return n > 0 ? buf.subarray(0, n) : null;
-      }) ?? byName
-    );
+    const readAt = (offset: number, length: number) => {
+      const buf = Buffer.alloc(length);
+      const n = fs.readSync(open, buf, 0, length, offset);
+      return n > 0 ? buf.subarray(0, n) : null;
+    };
+    if (isNc) return netcdfHint(readAt(0, 256 * 1024) ?? Buffer.alloc(0)) ?? byName;
+    return (isTiff ? tiffHint(readAt) : lasHint(readAt)) ?? byName;
   } catch {
     return byName;
   } finally {

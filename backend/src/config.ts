@@ -2,11 +2,25 @@
 // The three product decisions from ../DECISIONS.md live here as single settings.
 
 import path from "node:path";
+import fs from "node:fs";
 
-const env = process.env;
 const root = path.resolve(import.meta.dirname, "..");
 
-import fs from "node:fs";
+// A settings file, so an operator does not have to set environment variables by hand: backend/.env (or the file
+// CRATON_ENV_FILE names). Real environment variables win over it. Tests never read the default file, so a developer's
+// own credentials cannot change their results.
+{
+  const named = process.env.CRATON_ENV_FILE;
+  const file = named ?? (process.env.NODE_TEST_CONTEXT ? "" : path.join(root, ".env"));
+  if (file && fs.existsSync(file)) {
+    try {
+      process.loadEnvFile(file);
+    } catch (err) {
+      console.error(`Could not read ${file}: ${(err as Error).message}`);
+    }
+  }
+}
+const env = process.env;
 
 /** This package's own version, so the server and the CLI can say which build they are. */
 function readVersion(): string {
@@ -49,6 +63,52 @@ export const config = {
 
   /** Files added from the browser (bigger ones go through the CLI, which resumes and verifies every chunk). */
   upload: { maxBytes: Number(env.CRATON_UPLOAD_MAX_MB ?? 100) * 1024 * 1024, maxFiles: 200 },
+
+  /** Refuse a push or upload that contains a credential (CRATON_SECRET_SCAN=off turns it off for the whole server). */
+  secretScan: { enabled: (env.CRATON_SECRET_SCAN ?? "on").toLowerCase() !== "off" } as { enabled: boolean },
+
+  /**
+   * Chunks stored at once during a push or an upload. Unset (0) means automatic: 8 on the local disk, where file
+   * creation is the limit, and 24 against an object store, where each put is a round trip and waiting is the cost.
+   */
+  storeConcurrency: { override: Math.min(64, Math.max(0, Math.floor(Number(env.CRATON_STORE_CONCURRENCY ?? 0)) || 0)) } as { override: number },
+
+  /**
+   * Passkeys (WebAuthn) belong to a site name, the relying party id, and are only accepted from the pages of that site.
+   * By default both come from CRATON_WEB_URL (host name and origin), which is right for one site. Set the id to a parent
+   * domain (nerolith.in) to share passkeys across its subdomains, and list every web origin that may use them.
+   */
+  passkey: {
+    rpId: env.CRATON_PASSKEY_RP_ID ?? "",
+    origins: (env.CRATON_PASSKEY_ORIGINS ?? "").split(",").map((v) => v.trim()).filter(Boolean),
+  } as { rpId: string; origins: string[] },
+
+  /**
+   * "Continue with Google" (OpenID Connect, authorization code with PKCE). The button appears only when both the
+   * client id and the secret are set. The URLs and issuers are Google's; they are settings only so a test can run a
+   * local stand-in for Google.
+   */
+  google: {
+    clientId: env.CRATON_GOOGLE_CLIENT_ID ?? "",
+    clientSecret: env.CRATON_GOOGLE_CLIENT_SECRET ?? "",
+    authUrl: env.CRATON_GOOGLE_AUTH_URL ?? "https://accounts.google.com/o/oauth2/v2/auth",
+    tokenUrl: env.CRATON_GOOGLE_TOKEN_URL ?? "https://oauth2.googleapis.com/token",
+    jwksUrl: env.CRATON_GOOGLE_JWKS_URL ?? "https://www.googleapis.com/oauth2/v3/certs",
+    issuers: (env.CRATON_GOOGLE_ISSUER ?? "https://accounts.google.com,accounts.google.com").split(",").map((v) => v.trim()),
+  } as { clientId: string; clientSecret: string; authUrl: string; tokenUrl: string; jwksUrl: string; issuers: string[] },
+
+  /**
+   * "Continue with GitHub" (OAuth 2.0 with PKCE; the account and its verified email are read from GitHub's API). The
+   * button appears only when both the client id and the secret are set. The URLs are GitHub's; settings only so a test
+   * can run a local stand-in.
+   */
+  github: {
+    clientId: env.CRATON_GITHUB_CLIENT_ID ?? "",
+    clientSecret: env.CRATON_GITHUB_CLIENT_SECRET ?? "",
+    authUrl: env.CRATON_GITHUB_AUTH_URL ?? "https://github.com/login/oauth/authorize",
+    tokenUrl: env.CRATON_GITHUB_TOKEN_URL ?? "https://github.com/login/oauth/access_token",
+    apiUrl: (env.CRATON_GITHUB_API_URL ?? "https://api.github.com").replace(/\/+$/, ""),
+  } as { clientId: string; clientSecret: string; authUrl: string; tokenUrl: string; apiUrl: string },
 
   /** Content-defined chunking sizes (bytes). Average 128 KB, like the UI promises. */
   chunking: { min: 32 * 1024, avg: 128 * 1024, max: 512 * 1024 },

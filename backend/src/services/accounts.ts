@@ -3,6 +3,7 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { Ctx } from "./context.ts";
 import { ApiError, badRequest, conflict, forbidden, notFound } from "./context.ts";
+import { makeToken } from "../core/tokens.ts";
 
 export type Owner = { id: number; handle: string; kind: "user" | "org"; name: string; bio: string; created_at: string };
 export type User = Owner & { email: string; plan: string; role: string | null; onboarded_at: string | null; email_verified_at: string | null; totp_enabled_at: string | null };
@@ -64,6 +65,32 @@ export function createUser(ctx: Ctx, input: { handle: string; email: string; pas
   return getUserById(ctx, Number(lastInsertRowid));
 }
 
+/** Stored in place of a password hash for an account that has only ever signed in with Google. Never verifies. */
+const NO_PASSWORD = "oauth$";
+
+/** Whether this account has a password it can sign in with (a Google-only account does not until it sets one). */
+export function hasPassword(ctx: Ctx, userId: number): boolean {
+  const row = ctx.db.prepare("SELECT password_hash FROM users WHERE owner_id = ?").get(userId) as { password_hash: string } | undefined;
+  return Boolean(row && row.password_hash.startsWith("scrypt$"));
+}
+
+/**
+ * An account made from a Google sign-in. The address was confirmed by Google, so it counts as verified, and there is no
+ * password until the person asks for one ("Forgot password" sets it by email).
+ */
+export function createOAuthUser(ctx: Ctx, input: { handle: string; email: string; name?: string }): User {
+  const handle = input.handle.trim().toLowerCase();
+  if (!HANDLE.test(handle)) throw badRequest("Usernames use lowercase letters, numbers and single dashes.");
+  if (RESERVED_HANDLES.has(handle)) throw conflict("handle_taken", `@${handle} is reserved.`);
+  if (ctx.db.prepare("SELECT 1 FROM owners WHERE handle = ?").get(handle)) throw conflict("handle_taken", `@${handle} is taken.`);
+  if (ctx.db.prepare("SELECT 1 FROM users WHERE lower(email) = lower(?)").get(input.email)) throw conflict("email_taken", "An account with this email already exists.");
+  const { lastInsertRowid } = ctx.db.prepare("INSERT INTO owners (handle, kind, name, bio) VALUES (?, 'user', ?, '')").run(handle, (input.name ?? "").trim().slice(0, 80) || handle);
+  ctx.db
+    .prepare("INSERT INTO users (owner_id, email, password_hash, email_verified_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))")
+    .run(lastInsertRowid, input.email, NO_PASSWORD);
+  return getUserById(ctx, Number(lastInsertRowid));
+}
+
 export function createOrg(ctx: Ctx, input: { handle: string; name?: string; bio?: string }, creatorId: number): Owner {
   const handle = input.handle.trim().toLowerCase();
   if (!HANDLE.test(handle)) throw badRequest("Organization names use lowercase letters, numbers and single dashes.");
@@ -113,7 +140,7 @@ export function issueToken(
   userId: number,
   opts: { kind: "session" | "pat"; note: string; scopes?: string[]; expiresInDays?: number | null; repos?: string[] | null; client?: { userAgent?: string | null; ip?: string | null } },
 ) {
-  const token = `bcn_${opts.kind === "pat" ? "pat" : "s"}_${randomBytes(24).toString("base64url")}`;
+  const token = makeToken(opts.kind === "pat" ? "pat" : "ses");
   const expires = opts.expiresInDays ? new Date(Date.now() + opts.expiresInDays * 86_400_000).toISOString() : null;
   const { lastInsertRowid } = ctx.db
     .prepare("INSERT INTO tokens (user_id, token_hash, kind, note, scopes, expires_at, user_agent, ip, repos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -132,6 +159,18 @@ export function authenticate(ctx: Ctx, token: string | undefined | null): Authed
   if (row.expires_at && row.expires_at < new Date().toISOString()) return null;
   ctx.db.prepare("UPDATE tokens SET last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(row.id);
   return { ...getUserById(ctx, row.user_id), scopes: row.scopes.split(","), tokenKind: row.kind, tokenId: row.id, repos: row.repos ? (JSON.parse(row.repos) as string[]) : null };
+}
+
+/** Whether `token` is a working credential right now, without counting as a use of it. Used by the secret scan. */
+export function liveToken(ctx: Ctx, token: string): { id: number; kind: "session" | "pat" } | null {
+  const row = ctx.db.prepare("SELECT id, kind, expires_at FROM tokens WHERE token_hash = ?").get(tokenHash(token)) as { id: number; kind: "session" | "pat"; expires_at: string | null } | undefined;
+  if (!row || (row.expires_at && row.expires_at < new Date().toISOString())) return null;
+  return { id: row.id, kind: row.kind };
+}
+
+/** Remove one credential by id, whoever it belongs to (for a token found exposed in a public repository). */
+export function revokeExposedToken(ctx: Ctx, id: number): number {
+  return Number(ctx.db.prepare("DELETE FROM tokens WHERE id = ?").run(id).changes);
 }
 
 /** A user's personal access tokens; `current` marks the one making this request. */
@@ -372,6 +411,9 @@ export function revokeSessionById(ctx: Ctx, userId: number, id: number) {
 /** Change password (needs the current one); signs out every other session. */
 export function changePassword(ctx: Ctx, userId: number, currentTokenId: number, current: string, next: string) {
   const row = ctx.db.prepare("SELECT password_hash FROM users WHERE owner_id = ?").get(userId) as { password_hash: string };
+  if (row.password_hash === NO_PASSWORD) {
+    throw new ApiError(409, "no_password", "This account signs in with Google and has no password yet. Use “Forgot password” on the sign-in page to add one by email.");
+  }
   if (!verifyPassword(current ?? "", row.password_hash)) throw new ApiError(403, "wrong_password", "Your current password isn’t right.");
   if ((next ?? "").length < 12) throw badRequest("Passwords need at least 12 characters.");
   ctx.db.prepare("UPDATE users SET password_hash = ? WHERE owner_id = ?").run(hashPassword(next), userId);
@@ -408,7 +450,8 @@ export function deleteAccount(ctx: Ctx, userId: number, confirm: { handle: strin
   const u = getUserById(ctx, userId);
   if (confirm.handle !== u.handle) throw badRequest(`Type your username (${u.handle}) to confirm.`);
   const row = ctx.db.prepare("SELECT password_hash FROM users WHERE owner_id = ?").get(userId) as { password_hash: string };
-  if (!verifyPassword(confirm.password ?? "", row.password_hash)) throw new ApiError(403, "wrong_password", "Your password isn’t right.");
+  // An account with no password (Google only) is confirmed by typing its username, which was checked above.
+  if (row.password_hash !== NO_PASSWORD && !verifyPassword(confirm.password ?? "", row.password_hash)) throw new ApiError(403, "wrong_password", "Your password isn’t right.");
   const soleOwner = ctx.db
     .prepare(
       "SELECT o.handle FROM memberships m JOIN owners o ON o.id = m.org_id WHERE m.user_id = ? AND m.role = 'Owner' AND (SELECT COUNT(*) FROM memberships x WHERE x.org_id = m.org_id AND x.role = 'Owner') = 1",

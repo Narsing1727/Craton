@@ -529,3 +529,25 @@ test("a private repository you cannot see is reported as not found, with where t
   const real = run({ CRATON_TOKEN: token });
   assert.equal(real.status, 0, real.stderr);
 });
+
+test("a push containing a credential is refused with where it is, and an administrator can push past it with a reason", async () => {
+  const key = ["AKIA", "ABCDEFGHIJKLMNOP"].join("");
+  fs.writeFileSync(path.join(A, "deploy.env"), `# deploy\nAWS_ACCESS_KEY_ID=${key}\n`);
+  craton(A, "add", ".");
+  craton(A, "commit", "-m", "Add deploy settings");
+  let message = "";
+  try {
+    craton(A, "push");
+  } catch (err) {
+    message = String((err as { stderr?: Buffer | string }).stderr ?? err);
+  }
+  assert.match(message, /Nothing was pushed: an AWS access key id in deploy\.env line 2/);
+  assert.match(message, /craton push --allow-secrets/);
+  assert.ok(!message.includes(key), "the key is not printed");
+  const refs = await api("GET", "/repos/alice/basin/refs", undefined, token);
+  const before = refs.branches.find((b: any) => b.name === "main").commit_id;
+  const pushed = craton(A, "push", "--allow-secrets", "a sandbox key, rotated every day");
+  assert.match(pushed, /Pushed main:/);
+  const after = (await api("GET", "/repos/alice/basin/refs", undefined, token)).branches.find((b: any) => b.name === "main").commit_id;
+  assert.notEqual(after, before);
+});

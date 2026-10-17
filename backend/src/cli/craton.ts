@@ -332,7 +332,7 @@ async function cmdAdd() {
   }
   pending.flush(); // chunks must be on disk before the index says they are staged
   repo.writeIndex(index);
-  out(changed ? `Staged ${changed} changed files (${formatBytes(bytes)}, ${chunkCount} chunks).` : "Nothing new to stage.");
+  out(changed ? `Staged ${changed} changed ${changed === 1 ? "file" : "files"} (${formatBytes(bytes)}, ${chunkCount} ${chunkCount === 1 ? "chunk" : "chunks"}).` : "Nothing new to stage.");
 }
 
 async function cmdStatus() {
@@ -424,7 +424,7 @@ async function cmdCommit() {
   repo.setRef(branch, id);
   const changes = diffTrees(parent ? repo.tree(repo.commit(parent).tree) : null, tree);
   out(`[${branch} ${shortId(id)}] ${message.trim()}`);
-  out(`${changes.length} files changed · Merkle root ${commit.merkleRoot.slice(0, 16)}…`);
+  out(`${changes.length} ${changes.length === 1 ? "file" : "files"} changed · Merkle root ${commit.merkleRoot.slice(0, 16)}…`);
 }
 
 async function cmdLog() {
@@ -459,6 +459,7 @@ async function cmdPush() {
   const repo = LocalRepo.find();
   const remote = remoteFor(repo);
   const branch = opt("branch") ?? repo.head();
+  const allowSecrets = opt("allow-secrets");
   const tip = repo.ref(branch);
   if (!tip) throw new CliError(`${branch} has no commits to push.`);
 
@@ -595,7 +596,7 @@ async function cmdPush() {
   const refs = await remote.request<{ branches: { name: string; commit_id: string }[] }>("GET", "/refs");
   const expected = refs.branches.find((b) => b.name === branch)?.commit_id ?? null;
   try {
-    const res = await remote.request<{ updated: boolean; checks: { status: string; steps: { name: string; status: string; detail: string }[] } | null }>("POST", `/refs/heads/${branch}`, { commit: tip, expected });
+    const res = await remote.request<{ updated: boolean; checks: { status: string; steps: { name: string; status: string; detail: string }[] } | null }>("POST", `/refs/heads/${branch}`, { commit: tip, expected, ...(allowSecrets ? { allowSecrets } : {}) });
     pending.clear();
     if (json) {
       return ev({ event: "done", updated: res.updated, branch, from: expected, to: tip, checks: res.checks ? { status: res.checks.status, steps: res.checks.steps.map((x) => ({ name: x.name, status: x.status, detail: x.detail })) } : null });
@@ -608,6 +609,7 @@ async function cmdPush() {
   } catch (err) {
     const e = err as CliError & { code?: string };
     if (e.code === "non_fast_forward" || e.code === "stale_ref") throw new CliError(`${e.message}\nRun \`craton pull\`, then push again.`);
+    if (e.code === "secret_detected") throw new CliError(`${e.message}\nIf you are a repository administrator and are sure: craton push --allow-secrets "why this is fine"`);
     throw err;
   }
 }

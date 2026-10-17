@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { SECURITY_EMAIL } from "@/lib/site";
 
 export const metadata: Metadata = {
+  alternates: { types: { "text/markdown": "/security.md" } },
   title: "Security",
   description: "How Craton protects accounts and data, what it doesn't do yet, and how to report a vulnerability.",
 };

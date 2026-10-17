@@ -36,6 +36,7 @@ export type RepoSettings = {
   requireChecks: boolean;
   requireReview: boolean;
   requireOwnerReview: boolean;
+  requireCog: boolean;
   crs: string;
   verticalDatum: number | null;
   nodata: number | null;
@@ -71,7 +72,7 @@ export function RepoSettingsView({
   const [defaultBranch, setDefaultBranch] = useState(repoData.defaultBranch || "main");
   const [visibility, setVisibility] = useState<"public" | "private">(repoData.visibility);
   const [transferTo, setTransferTo] = useState("deltares");
-  const [protection, setProtection] = useState({ checks: settings.requireChecks, review: settings.requireReview, owners: settings.requireOwnerReview, stale: live });
+  const [protection, setProtection] = useState({ checks: settings.requireChecks, review: settings.requireReview, owners: settings.requireOwnerReview, cog: settings.requireCog, stale: live });
   const [crs, setCrs] = useState(settings.crs);
   const [datum, setDatum] = useState(settings.verticalDatum === null ? "" : String(settings.verticalDatum));
   const [nodata, setNodata] = useState(settings.nodata === null ? "" : String(settings.nodata));
@@ -251,6 +252,7 @@ export function RepoSettingsView({
                   { key: "checks" as const, label: "Require checks to pass", note: "CRS, vertical datum and integrity checks must be green." },
                   { key: "review" as const, label: "Require an approving review", note: "At least one collaborator who didn’t write the change." },
                   { key: "owners" as const, label: "Require approval from code owners", note: "Every owner named in CODEOWNERS for a changed file must approve the latest version." },
+                  { key: "cog" as const, label: "Require Cloud Optimized GeoTIFFs", note: "Rasters must be tiled, have overviews and carry their directories first, so they read well from the web. Off: the checks only advise." },
                   { key: "stale" as const, label: "Dismiss approvals on new commits", note: "A new push needs a fresh review." },
                 ].map((rule) => rule.key === "stale" && live ? (
                   <Field key={rule.key} orientation="horizontal">
@@ -273,7 +275,7 @@ export function RepoSettingsView({
                       onCheckedChange={async (v) => {
                         const on = Boolean(v);
                         setProtection((p) => ({ ...p, [rule.key]: on }));
-                        const patch = rule.key === "checks" ? { requireChecks: on } : rule.key === "review" ? { requireReview: on } : rule.key === "owners" ? { requireOwnerReview: on } : {};
+                        const patch = rule.key === "checks" ? { requireChecks: on } : rule.key === "review" ? { requireReview: on } : rule.key === "owners" ? { requireOwnerReview: on } : rule.key === "cog" ? { requireCog: on } : {};
                         if (!(await save(patch, `${rule.label}: ${on ? "on" : "off"}`))) setProtection((p) => ({ ...p, [rule.key]: !on }));
                       }}
                     />

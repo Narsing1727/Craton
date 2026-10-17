@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Security · Settings" };
 
 export default async function SecuritySettingsPage() {
   const user = await requireUser("/settings/security");
-  const [sessions, twoFactor, events] = user ? await Promise.all([api.sessions(), api.twoFactor(), api.securityLog()]) : [null, null, null];
+  const [sessions, twoFactor, events, identities, passkeys] = user ? await Promise.all([api.sessions(), api.twoFactor(), api.securityLog(), api.identities(), api.passkeys()]) : [null, null, null, null, null];
   return (
     <SettingsView
       tab="security"
@@ -15,6 +15,8 @@ export default async function SecuritySettingsPage() {
       sessions={sessions ?? []}
       twoFactor={twoFactor}
       events={events ?? []}
+      identities={identities}
+      passkeys={passkeys}
     />
   );
 }

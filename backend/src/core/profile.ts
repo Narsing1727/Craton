@@ -37,6 +37,19 @@ export function hintForPath(file: string): Hint {
 }
 
 /**
+ * Hint from a LAS header: the point records are fixed-length, so the bytes are shuffled by record. LAZ (point format
+ * with the compression bit set) is already compressed and is left alone. Null when this is not a LAS file.
+ */
+export function lasHint(readAt: (offset: number, length: number) => Buffer | null): Hint | null {
+  const h = readAt(0, 111);
+  if (!h || h.length < 107 || h.toString("latin1", 0, 4) !== "LASF") return null;
+  const format = h[104];
+  if ((format & 0x80) !== 0 || (format & 0x40) !== 0) return { kind: "incompressible" };
+  const recordLength = h.readUInt16LE(105);
+  return recordLength >= 2 && recordLength <= 4096 ? { kind: "records", width: recordLength } : { kind: "auto" };
+}
+
+/**
  * Hint from a TIFF/BigTIFF header. `readAt` returns up to `length` bytes at `offset` (or null when the file is shorter
  * or cannot be read). Returns null when this is not a TIFF or its first image directory cannot be read.
  */

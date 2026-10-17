@@ -6,15 +6,17 @@
 import type { Ctx } from "./context.ts";
 import { ApiError, badRequest, conflict } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
-import { putChunk, visibleToRepo } from "./chunks.ts";
+import { mapLimit, putChunk, storeConcurrency, visibleToRepo } from "./chunks.ts";
 import { getObject, registerObjects, resolveRef, updateBranch } from "./history.ts";
 import { assertStorageAvailable } from "./plans.ts";
 import { assertLockedWhenRequired, assertNotLockedByOthers } from "./locks.ts";
+import * as secretscan from "./secretscan.ts";
 import type { BlobObject, CommitObject, TreeEntry, TreeObject } from "../core/objects.ts";
 import { makeCommit, makeTree, objectId } from "../core/objects.ts";
 import { chunkBuffer, sha256Hex } from "../core/fastcdc.ts";
 import type { Hint } from "../core/compress.ts";
-import { hintForPath, tiffHint } from "../core/profile.ts";
+import { hintForPath, lasHint, tiffHint } from "../core/profile.ts";
+import { netcdfHint } from "../checks/netcdf.ts";
 import { config } from "../config.ts";
 
 export type UploadFile = { path: string; data: Buffer };
@@ -35,8 +37,11 @@ export type UploadResult = {
 /** How a file's chunks should be encoded: its name, and for a TIFF its header (uncompressed rasters get the byte shuffle). */
 function uploadHint(f: UploadFile): Hint {
   const byName = hintForPath(f.path);
-  if (!/\.tiff?$/i.test(f.path)) return byName;
-  return tiffHint((offset, length) => (offset >= f.data.length ? null : f.data.subarray(offset, offset + length))) ?? byName;
+  const readAt = (offset: number, length: number) => (offset >= f.data.length ? null : f.data.subarray(offset, offset + length));
+  if (/\.tiff?$/i.test(f.path)) return tiffHint(readAt) ?? byName;
+  if (/\.las$/i.test(f.path)) return lasHint(readAt) ?? byName;
+  if (/\.(nc|cdf)$/i.test(f.path)) return netcdfHint(f.data.subarray(0, 256 * 1024)) ?? byName;
+  return byName;
 }
 
 const MAX_PATH = 1024;
@@ -62,7 +67,7 @@ export async function commitUpload(
   ctx: Ctx,
   repo: RepoRow,
   actor: string,
-  input: { branch: string; from?: string | null; expected?: string | null; message?: string; files: UploadFile[] },
+  input: { branch: string; from?: string | null; expected?: string | null; message?: string; files: UploadFile[]; secrets: { who: secretscan.Who; bypass: string | null } },
 ): Promise<UploadResult> {
   const { files } = input;
   if (!files.length) throw badRequest("Choose at least one file.");
@@ -112,6 +117,9 @@ export async function commitUpload(
 
   assertNotLockedByOthers(ctx, repo, actor, changedPlan.map((p) => p.f.path));
   assertLockedWhenRequired(ctx, repo, actor, changedPlan.map((p) => p.f.path));
+  // A credential in what is about to be committed stops the upload before anything is stored.
+  const scan = await secretscan.scanFiles(ctx, changedPlan.map((p) => ({ path: p.f.path, size: p.f.data.length, load: async () => p.f.data })));
+  secretscan.enforce(ctx, repo, input.secrets.who, scan.findings, input.secrets.bypass, "/repos/:owner/:repo/upload");
   let wanted = 0;
   const counted = new Set<string>();
   for (const p of changedPlan) {
@@ -127,15 +135,22 @@ export async function commitUpload(
   const changed: UploadResult["files"] = [];
   let newBytes = 0;
   let storedBytes = 0;
-  for (const p of changedPlan) {
+  // Every chunk of every changed file, stored a few at a time (an object store answers each put in a round trip).
+  const toStore = changedPlan.flatMap((p) => {
     const hint = uploadHint(p.f);
-    for (const c of p.pieces) {
-      const r = await putChunk(ctx, repo, c.hash, Buffer.from(c.piece), hint);
-      if (r.storedSize !== null) {
-        newBytes += r.size;
-        storedBytes += r.storedSize;
-      }
+    return p.pieces.map((c) => ({ c, hint }));
+  });
+  const accounted = new Set<string>();
+  await mapLimit(toStore, storeConcurrency(ctx), async ({ c, hint }) => {
+    const r = await putChunk(ctx, repo, c.hash, Buffer.from(c.piece), hint);
+    // Two identical new chunks can both be stored when they are in flight together; count the bytes once.
+    if (r.storedSize !== null && !accounted.has(c.hash)) {
+      accounted.add(c.hash);
+      newBytes += r.size;
+      storedBytes += r.storedSize;
     }
+  });
+  for (const p of changedPlan) {
     objects.push(p.blob);
     changed.push({ path: p.f.path, change: entries.has(p.f.path) ? "modified" : "added", size: p.f.data.length });
     entries.set(p.f.path, { path: p.f.path, blob: p.id, size: p.f.data.length });

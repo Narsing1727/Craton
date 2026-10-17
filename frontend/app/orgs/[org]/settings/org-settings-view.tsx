@@ -11,8 +11,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TypeToConfirm } from "@/components/craton-actions";
 import { deleteOrgAction, updateOrgAction } from "@/app/actions";
+import { AuditLog } from "@/components/audit-log";
+import type { ApiAuditPage } from "@/lib/api";
 
-export function OrgSettingsView({ org, name, bio, role, repositories }: { org: string; name: string; bio: string; role: string | null; repositories: number }) {
+export function OrgSettingsView({ org, name, bio, role, repositories, audit }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null }) {
   const owner = role === "Owner";
   const [displayName, setDisplayName] = useState(name);
   const [description, setDescription] = useState(bio);
@@ -79,6 +81,18 @@ export function OrgSettingsView({ org, name, bio, role, repositories }: { org: s
               </CardContent>
             </Card>
           </form>
+
+          {owner && audit && (
+            <Card>
+              <CardHeader className="p-5 pb-2">
+                <CardTitle className="text-base font-semibold">Audit log</CardTitle>
+                <CardDescription>Changes made under {org}, and attempts that were refused. Only owners can read this. Request contents are never kept.</CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                <AuditLog scope={{ kind: "org", org }} initial={audit} csvHref={`/orgs/${org}/audit-log/export`} />
+              </CardContent>
+            </Card>
+          )}
 
           {owner && repositories > 0 && (
             <Card className="p-5">

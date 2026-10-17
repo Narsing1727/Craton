@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { parseUnits, UNITS_COOKIE } from "@/lib/units";
 import { redirect } from "next/navigation";
-import { api, send, type ApiOwnersPreview, type ApiCitation, type ApiCollaborator, type ApiMilestone, type ApiDelivery, type ApiLock, type ApiSavedFilter, type ApiInvite } from "@/lib/api";
+import { api, send, type ApiOwnersPreview, type ApiCitation, type ApiCollaborator, type ApiMilestone, type ApiDelivery, type ApiLock, type ApiSavedFilter, type ApiInvite, type ApiModelReview, type ApiReviewItem, type AuditScope } from "@/lib/api";
 
 const repoPath = (owner: string, repo: string) => `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 
@@ -69,7 +69,7 @@ export async function createRepoAction(input: { owner: string; name: string; des
 export async function updateRepoAction(
   owner: string,
   repo: string,
-  patch: Partial<{ name: string; description: string; defaultBranch: string; visibility: "public" | "private"; crs: string; nodata: number | null; verticalDatum: number | null; requireChecks: boolean; requireReview: boolean; requireOwnerReview: boolean; license: string; topics: string[]; lockPatterns: string[] }>,
+  patch: Partial<{ name: string; description: string; defaultBranch: string; visibility: "public" | "private"; crs: string; nodata: number | null; verticalDatum: number | null; requireChecks: boolean; requireReview: boolean; requireOwnerReview: boolean; requireCog: boolean; license: string; topics: string[]; lockPatterns: string[] }>,
 ) {
   return write<{ owner: string; name: string }>("PATCH", repoPath(owner, repo), patch, [`/${owner}/${repo}`, "/dashboard"]);
 }
@@ -207,6 +207,43 @@ export async function updateMilestoneAction(owner: string, repo: string, id: num
 }
 export async function deleteMilestoneAction(owner: string, repo: string, id: number) {
   return write<{ unassigned: number }>("DELETE", `${repoPath(owner, repo)}/milestones/${id}`, undefined, [`/${owner}/${repo}/milestones`, `/${owner}/${repo}/issues`]);
+}
+
+// ── Model reviews ──
+const reviewPaths = (owner: string, repo: string) => [`/${owner}/${repo}/reviews`];
+export async function createModelReviewAction(owner: string, repo: string, input: { title: string; ref?: string }) {
+  return write<ApiModelReview>("POST", `${repoPath(owner, repo)}/model-reviews`, input, reviewPaths(owner, repo));
+}
+export async function setReviewItemAction(owner: string, repo: string, n: number, key: string, input: { status?: ApiReviewItem["status"]; note?: string }) {
+  return write<ApiModelReview>("PUT", `${repoPath(owner, repo)}/model-reviews/${n}/items/${encodeURIComponent(key)}`, input, reviewPaths(owner, repo));
+}
+export async function addReviewLogAction(owner: string, repo: string, n: number, body: string) {
+  return write<ApiModelReview>("POST", `${repoPath(owner, repo)}/model-reviews/${n}/log`, { body }, reviewPaths(owner, repo));
+}
+export async function refreshReviewEvidenceAction(owner: string, repo: string, n: number, ref?: string) {
+  return write<ApiModelReview>("POST", `${repoPath(owner, repo)}/model-reviews/${n}/evidence`, ref ? { ref } : {}, reviewPaths(owner, repo));
+}
+export async function submitReviewAction(owner: string, repo: string, n: number) {
+  return write<ApiModelReview>("POST", `${repoPath(owner, repo)}/model-reviews/${n}/submit`, undefined, reviewPaths(owner, repo));
+}
+export async function decideReviewAction(owner: string, repo: string, n: number, decision: "approve" | "request_changes", comment: string) {
+  return write<ApiModelReview>("POST", `${repoPath(owner, repo)}/model-reviews/${n}/decision`, { decision, comment }, reviewPaths(owner, repo));
+}
+export async function reopenReviewAction(owner: string, repo: string, n: number, reason: string) {
+  return write<ApiModelReview>("POST", `${repoPath(owner, repo)}/model-reviews/${n}/reopen`, { reason }, reviewPaths(owner, repo));
+}
+export async function deleteModelReviewAction(owner: string, repo: string, n: number) {
+  return write<null>("DELETE", `${repoPath(owner, repo)}/model-reviews/${n}`, undefined, reviewPaths(owner, repo));
+}
+
+// ── Audit log ──
+export async function auditPageAction(scope: AuditScope, q: { actor?: string; outcome?: string; before?: number }) {
+  const page = await api.auditLog(scope, { ...q, limit: 50 });
+  return page ? ({ ok: true as const, ...page }) : ({ ok: false as const, error: "Couldn’t load the audit log." });
+}
+export async function tokenRequestsAction(id: number) {
+  const list = await api.tokenRequests(id);
+  return list ? ({ ok: true as const, requests: list }) : ({ ok: false as const, error: "Couldn’t load this token’s requests." });
 }
 
 // ── Collaborators ──

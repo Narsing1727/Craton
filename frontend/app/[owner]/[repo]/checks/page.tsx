@@ -95,6 +95,7 @@ export default async function ChecksPage({ params }: { params: Promise<Params> }
     `crs: ${summary.crs}`,
     `vertical_datum: ${summary.verticalDatum ? `EPSG:${summary.verticalDatum}` : "not enforced"}`,
     `nodata: ${summary.nodata ?? "not enforced"}`,
+    `cloud_optimized_geotiff: ${summary.requireCog ? "required" : "advisory"}`,
     "shapefile_sets: complete (.shp .shx .dbf)",
     "model_schema: HEC-RAS plan references",
     "integrity: sha256 + merkle root",

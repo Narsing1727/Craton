@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useSession } from "@/components/session";
-import { useCanWrite } from "@/components/repo-context";
+import { useCanWrite, useRepoSummary } from "@/components/repo-context";
 import { pathsAction } from "@/app/actions";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,8 @@ const MAX_BYTES = 100 * 1024 * 1024;
 const MAX_FILES = 200;
 
 type Picked = { file: File; path: string };
+/** One credential the server's scan found: where, and what kind. The secret itself never comes back. */
+type SecretFinding = { path: string; line: number; kind: string; preview: string; live?: boolean };
 
 /** Every file under a dropped folder, with its path relative to the drop. */
 async function readEntry(entry: FileSystemEntry, prefix = ""): Promise<Picked[]> {
@@ -102,6 +104,10 @@ export function UploadDialog({
   const [now, setNow] = React.useState(0);
   const request = React.useRef<XMLHttpRequest | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  /** The secret scan stopped the upload: what it found, and (for an administrator) the reason for going ahead anyway. */
+  const [secrets, setSecrets] = React.useState<SecretFinding[] | null>(null);
+  const [allowReason, setAllowReason] = React.useState("");
+  const isAdmin = useRepoSummary()?.access === "admin";
   const filesInput = React.useRef<HTMLInputElement>(null);
   const folderInput = React.useRef<HTMLInputElement>(null);
 
@@ -133,6 +139,7 @@ export function UploadDialog({
 
   function add(list: Picked[]) {
     setError(null);
+    setSecrets(null);
     setPicked((current) => {
       const byPath = new Map(current.map((p) => [p.path, p]));
       for (const p of list) byPath.set(p.path, p); // choosing the same path again replaces it
@@ -157,17 +164,21 @@ export function UploadDialog({
     setMessage("");
     setProgress(null);
     setError(null);
+    setSecrets(null);
+    setAllowReason("");
     setExisting(null);
     setTarget(folder);
     setBranchName("");
     setNewBranch(!onBranch);
   }
 
-  function submit(e: React.FormEvent) {
+  function submit(e: React.FormEvent, allowSecrets?: string) {
     e.preventDefault();
     if (!ready) return;
     setError(null);
+    setSecrets(null);
     const form = new FormData();
+    if (allowSecrets) form.append("allowSecrets", allowSecrets);
     for (const p of picked) form.append("file", p.file, p.file.name);
     form.append("paths", JSON.stringify(picked.map((p) => p.path)));
     form.append("folder", cleanFolder);
@@ -204,7 +215,7 @@ export function UploadDialog({
     };
     xhr.onload = () => {
       request.current = null;
-      let body: { error?: { message?: string }; files?: unknown[]; commit?: string; branch?: string; unchanged?: string[]; newBytes?: number; storedBytes?: number } = {};
+      let body: { error?: { message?: string; code?: string; details?: { findings?: SecretFinding[] } }; files?: unknown[]; commit?: string; branch?: string; unchanged?: string[]; newBytes?: number; storedBytes?: number } = {};
       try {
         body = JSON.parse(xhr.responseText);
       } catch {}
@@ -229,6 +240,10 @@ export function UploadDialog({
       }
       setProgress(null);
       setFlow(null);
+      if (body.error?.code === "secret_detected" && body.error.details?.findings?.length) {
+        setSecrets(body.error.details.findings);
+        return;
+      }
       setError(body.error?.message ?? (xhr.status === 413 ? "That’s too much for the browser. Use the CLI: craton push." : `The upload failed (${xhr.status}).`));
     };
     setProgress(0);
@@ -375,6 +390,42 @@ export function UploadDialog({
                 <span className="text-xs text-muted-foreground tabular-nums">
                   {progress !== null && progress >= 1 ? "Adding the commit…" : `Uploading ${Math.round((progress ?? 0) * 100)}%${flowLine(flow, now)}`}
                 </span>
+              </div>
+            )}
+            {secrets && (
+              <div role="alert" className="flex flex-col gap-2 border border-destructive/40 bg-destructive/10 p-3 text-xs">
+                <p className="font-medium text-destructive">Nothing was added: {secrets.length === 1 ? "a credential was" : `${secrets.length} credentials were`} found in the files.</p>
+                <ul className="flex flex-col gap-1">
+                  {secrets.map((f, i) => (
+                    <li key={`${f.path}:${f.line}:${i}`} className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="font-mono">
+                        {f.path}:{f.line}
+                      </span>
+                      <span>
+                        {f.live ? "a live " : ""}
+                        {f.kind}
+                      </span>
+                      <span className="font-mono text-muted-foreground">{f.preview}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-pretty text-muted-foreground">
+                  History can’t be edited afterwards. Take {secrets.length === 1 ? "it" : "them"} out of the files, and replace {secrets.length === 1 ? "it" : "them"} at the source if {secrets.length === 1 ? "it was" : "they were"} real. A line that is only an example can carry{" "}
+                  <span className="font-mono">craton:allow-secret</span>.
+                </p>
+                {isAdmin && (
+                  <div className="flex flex-col gap-1.5 border-t border-destructive/30 pt-2">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-muted-foreground">As an administrator you can add them anyway. Say why; it is written to the audit log.</span>
+                      <Input value={allowReason} onChange={(e) => setAllowReason(e.target.value)} placeholder="Why this is safe" aria-label="Reason for adding the files anyway" maxLength={200} autoComplete="off" />
+                    </label>
+                    <div>
+                      <Button type="button" variant="outline" size="sm" disabled={allowReason.trim().length < 5} onClick={(ev) => submit(ev as unknown as React.FormEvent, allowReason.trim())}>
+                        Add anyway
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             {error && (

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const metadata: Metadata = {
+  alternates: { types: { "text/markdown": "/cli.md" } },
   title: "Install the CLI",
   description: "Install the Craton CLI on macOS, Linux or Windows and push your first geospatial dataset.",
 };

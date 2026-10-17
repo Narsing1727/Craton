@@ -14,6 +14,7 @@ import type { Ctx } from "../services/context.ts";
 import { ApiError, badRequest, notFound } from "../services/context.ts";
 import * as accounts from "../services/accounts.ts";
 import * as repos from "../services/repos.ts";
+import { datasetJsonLd } from "../services/dataset.ts";
 import * as chunks from "../services/chunks.ts";
 import * as history from "../services/history.ts";
 import * as collab from "../services/collab.ts";
@@ -38,6 +39,11 @@ import * as securitylog from "../services/securitylog.ts";
 import * as cards from "../services/cards.ts";
 import * as filters from "../services/filters.ts";
 import * as invites from "../services/invites.ts";
+import * as oauth from "../services/oauth.ts";
+import * as modelreview from "../services/modelreview.ts";
+import * as audit from "../services/audit.ts";
+import * as secretscan from "../services/secretscan.ts";
+import * as passkeys from "../services/passkeys.ts";
 import { buildStac } from "../services/stac.ts";
 import { checksBadge, licenseBadge, releaseBadge, sizeBadge } from "../services/badge.ts";
 import { commitFiles } from "../dev/push.ts";
@@ -114,8 +120,25 @@ export function createApp(ctx: Ctx) {
   app.use("*", async (c, next) => {
     const started = performance.now();
     await next();
-    if (!config.accessLog.enabled) return;
     const route = (c as unknown as { req: { routePath?: string } }).req.routePath;
+    // The audit log and each token's recent requests: from the request's shape and outcome, never its body.
+    const who = c.get("user");
+    if (who) {
+      const info = clientInfo(c);
+      const matched = Boolean(route) && route !== "/*";
+      audit.recordRequest(ctx, {
+        method: c.req.method,
+        unmatched: !matched,
+        route: (matched ? route! : c.req.path).replace(/^\/v1/, "").slice(0, 200),
+        params: c.req.param() as Record<string, string>,
+        status: c.res.status,
+        ms: performance.now() - started,
+        ip: info.ip,
+        userAgent: info.userAgent,
+        actor: { id: who.id, handle: who.handle, tokenId: who.tokenId, tokenKind: who.tokenKind },
+      });
+    }
+    if (!config.accessLog.enabled) return;
     config.accessLog.write(
       JSON.stringify({
         time: new Date().toISOString(),
@@ -276,6 +299,25 @@ export function createApp(ctx: Ctx) {
 
   const v1 = new Hono<Env>();
 
+  /** Who is asking, as the audit log records them. */
+  const secretActor = (c: Context<Env>) => {
+    const u = requireUser(c);
+    return { id: u.id, handle: u.handle, tokenId: u.tokenId, tokenKind: u.tokenKind };
+  };
+  /** The reason to push past the secret scan, when one was given: only an administrator of the repository may. */
+  const secretBypass = (c: Context<Env>, raw: unknown) => {
+    const reason = secretscan.cleanReason(raw);
+    if (reason) {
+      requireScope(c, "repo");
+      try {
+        repos.getRepoFor(ctx, c.req.param("owner")!, c.req.param("repo")!, userId(c), "admin");
+      } catch {
+        throw new ApiError(403, "forbidden", "Only an administrator of this repository can push past the secret scan.");
+      }
+    }
+    return reason;
+  };
+
   // Readiness for a load balancer: can this process really use its database and its chunk store right now? Writes and
   // removes one tiny probe chunk; the answer is kept for five seconds so a busy balancer does not hammer an object store.
   let lastReady: { at: number; body: { ready: boolean; checks: Record<string, string>; ms: number } } | null = null;
@@ -348,12 +390,14 @@ export function createApp(ctx: Ctx) {
   });
 
   /** A new session for a user who has proved who they are, plus the new-device notice. */
-  function signedIn(c: Context<Env>, id: number) {
+  function signedIn(c: Context<Env>, id: number, via: "password" | "google" | "github" | "passkey" = "password") {
     const session = accounts.startSession(ctx, id);
     const user = accounts.authenticate(ctx, session.token)!;
     // Tell the owner about sign-ins from a device we haven't seen for them.
     const info = clientInfo(c);
-    securitylog.record(ctx, user.id, "signed_in", { detail: twofactor.isEnabled(ctx, user.id) ? "password and two-step code" : "password", ...info });
+    // After the two-step code the first factor is no longer known here; an account with no password can only have used a provider.
+    const how = via === "passkey" ? "passkey" : via === "google" ? "Google" : via === "github" ? "GitHub" : !accounts.hasPassword(ctx, user.id) ? "Google or GitHub" : "password";
+    securitylog.record(ctx, user.id, "signed_in", { detail: twofactor.isEnabled(ctx, user.id) ? `${how} and two-step code` : how, ...info });
     const known = ctx.db.prepare("SELECT 1 FROM tokens WHERE user_id = ? AND kind = 'session' AND id <> ? AND ip IS ? AND user_agent IS ? LIMIT 1").get(user.id, user.tokenId, info.ip, info.userAgent);
     ctx.db.prepare("UPDATE tokens SET ip = ?, user_agent = ? WHERE id = ?").run(info.ip, info.userAgent?.slice(0, 300) ?? null, user.tokenId);
     const hadSessions = ctx.db.prepare("SELECT 1 FROM tokens WHERE user_id = ? AND kind = 'session' AND id <> ? LIMIT 1").get(user.id, user.tokenId);
@@ -378,6 +422,121 @@ export function createApp(ctx: Ctx) {
       if (who && err instanceof ApiError && err.code === "invalid_code") limits.take(`mfa:${who}`, budget);
       throw err;
     }
+  });
+  // ── Sign in with Google or GitHub ───────────────────────────────────────
+  // Which providers this server offers, so the sign-in page shows only buttons that work.
+  v1.get("/auth/providers", (c) => c.json({ google: oauth.enabled("google"), github: oauth.enabled("github"), passkeys: true }));
+  const providerOf = (c: Context<Env>) => c.req.param("provider") as oauth.Provider;
+  // Step 1: a one-time state and PKCE challenge are stored, and the web app sends the browser to `url`.
+  // With a signed-in session and { link: true } the result is added to that account instead of signing anyone in.
+  v1.post("/auth/:provider{google|github}/start", async (c) => {
+    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    const b = await body<{ next?: string; link?: boolean }>(c);
+    const linkUserId = b.link ? requireSession(c).id : null;
+    return c.json(oauth.startOAuth(ctx, providerOf(c), { next: b.next, linkUserId }));
+  });
+  // Step 2: the provider sent the browser back with a code. Answers one of: a session, a two-step ticket, "choose a
+  // username" (first time here), or { linked } when the request began in Settings.
+  v1.post("/auth/:provider{google|github}/callback", async (c) => {
+    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    const provider = providerOf(c);
+    const label = oauth.providerName(provider);
+    const b = await body<{ code?: string; state?: string }>(c);
+    const done = await oauth.finishOAuth(ctx, provider, { code: b.code ?? "", state: b.state ?? "" });
+    const g = done.claims;
+    const info = clientInfo(c);
+    if (done.linkUserId !== null) {
+      const me = requireSession(c);
+      if (me.id !== done.linkUserId) throw new ApiError(403, "forbidden", "This link request was started by someone else.");
+      const owner = oauth.identityOwner(ctx, g.sub, provider);
+      if (owner !== null && owner !== me.id) throw new ApiError(409, "identity_taken", `That ${label} account is already connected to another Craton account.`);
+      oauth.linkIdentity(ctx, me.id, g.sub, g.email, provider);
+      securitylog.record(ctx, me.id, "oauth_linked", { detail: `${label} ${g.email}`, ...info });
+      return c.json({ linked: true, email: g.email });
+    }
+    const after = (id: number) => (twofactor.isEnabled(ctx, id) ? c.json({ mfaRequired: true, ...twofactor.startLogin(ctx, id), next: done.next }) : signedIn(c, id, provider));
+    const known = oauth.identityOwner(ctx, g.sub, provider);
+    if (known !== null) return after(known);
+    const byEmail = oauth.userByEmail(ctx, g.email);
+    if (byEmail) {
+      // The provider vouches for the address. Joining an account whose address was never confirmed would let whoever
+      // registered it first (with a password) keep a way in, so that case is refused rather than merged.
+      if (!byEmail.verified) {
+        throw new ApiError(409, "email_unverified_account", `An account with this email exists but its address was never confirmed. Confirm it from the email we sent, or reset its password, then use ${label} again.`);
+      }
+      oauth.linkIdentity(ctx, byEmail.id, g.sub, g.email, provider);
+      securitylog.record(ctx, byEmail.id, "oauth_linked", { detail: `${label} ${g.email} (matched by verified email)`, ...info });
+      return after(byEmail.id);
+    }
+    const ticket = oauth.createPending(ctx, { subject: g.sub, email: g.email, name: g.name }, provider);
+    return c.json({ needsUsername: true, ticket, email: g.email, name: g.name, suggestion: oauth.suggestHandle(ctx, g.email, g.name), next: done.next });
+  });
+  // What the "choose a username" page shows for a ticket.
+  v1.post("/auth/:provider{google|github}/pending", async (c) => {
+    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
+    const b = await body<{ ticket?: string }>(c);
+    const p = oauth.readPending(ctx, b.ticket ?? "", providerOf(c));
+    return c.json({ email: p.email, name: p.name, suggestion: oauth.suggestHandle(ctx, p.email, p.name) });
+  });
+  // Step 3 (first time only): the username chosen, then the account exists and the session starts.
+  v1.post("/auth/:provider{google|github}/complete", async (c) => {
+    limit(c, `signup:${clientIp(c)}`, config.limits.signup, "Too many new accounts from this network. Try again in an hour.");
+    const provider = providerOf(c);
+    const b = await body<{ ticket?: string; username?: string; name?: string }>(c);
+    const p = oauth.readPending(ctx, b.ticket ?? "", provider);
+    const user = accounts.createOAuthUser(ctx, { handle: b.username ?? "", email: p.email, name: b.name || p.name });
+    oauth.linkIdentity(ctx, user.id, p.subject, p.email, provider);
+    oauth.dropPending(ctx, b.ticket ?? "");
+    securitylog.record(ctx, user.id, "oauth_linked", { detail: `${oauth.providerName(provider)} ${p.email} (account created)`, ...clientInfo(c) });
+    return signedIn(c, user.id, provider);
+  });
+  // ── Passkeys ───────────────────────────────────────────────────────────
+  // Sign in: the browser asks the device for any passkey it holds for this site; no username is needed first.
+  v1.post("/auth/passkey/options", (c) => {
+    limit(c, `passkey:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    return c.json(passkeys.loginOptions(ctx));
+  });
+  v1.post("/auth/passkey/login", async (c) => {
+    limit(c, `passkey:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    const proof = passkeys.finishLogin(ctx, await body(c));
+    if (proof.rolledBack) {
+      securitylog.record(ctx, proof.userId, "passkey_rollback", { detail: "signature counter went backwards", ...clientInfo(c) });
+      throw new ApiError(401, "passkey_cloned", "This passkey’s counter went backwards, which can mean it was copied, so it wasn’t accepted. Sign in another way, and remove the passkey if you don’t recognise this.");
+    }
+    // A passkey the device unlocked with a PIN, fingerprint or face is two factors in one. One that was only touched is one
+    // factor, so an account with two-step verification still asks for its code.
+    if (!proof.userVerified && twofactor.isEnabled(ctx, proof.userId)) return c.json({ mfaRequired: true, ...twofactor.startLogin(ctx, proof.userId) });
+    return signedIn(c, proof.userId, "passkey");
+  });
+  // Manage: web sessions only.
+  v1.post("/user/passkeys/options", (c) => {
+    const u = requireSession(c);
+    limit(c, `passkey-add:${u.id}`, { max: 20, windowMs: 60 * 60_000 }, "Too many attempts. Try again in an hour.");
+    return c.json(passkeys.registrationOptions(ctx, { id: u.id, handle: u.handle, name: u.name }));
+  });
+  v1.post("/user/passkeys", async (c) => {
+    const u = requireSession(c);
+    const made = passkeys.finishRegistration(ctx, u, await body(c));
+    securitylog.record(ctx, u.id, "passkey_added", { detail: made.name, ...clientInfo(c) });
+    return c.json(made, 201);
+  });
+  v1.get("/user/passkeys", (c) => c.json(passkeys.listPasskeys(ctx, requireSession(c).id)));
+  v1.patch("/user/passkeys/:id", async (c) => {
+    const u = requireSession(c);
+    const b = await body<{ name?: string }>(c);
+    passkeys.renamePasskey(ctx, u.id, c.req.param("id"), b.name);
+    return c.json(passkeys.listPasskeys(ctx, u.id));
+  });
+  v1.delete("/user/passkeys/:id", (c) => {
+    const u = requireSession(c);
+    // Never remove the last way in.
+    const others = passkeys.countPasskeys(ctx, u.id) - 1;
+    if (others < 1 && !accounts.hasPassword(ctx, u.id) && oauth.listIdentities(ctx, u.id).length === 0) {
+      throw new ApiError(409, "last_sign_in_method", "This passkey is the only way into this account. Add a password (use “Forgot password” on the sign-in page) or another passkey first.");
+    }
+    passkeys.removePasskey(ctx, u.id, c.req.param("id"));
+    securitylog.record(ctx, u.id, "passkey_removed", { ...clientInfo(c) });
+    return c.body(null, 204);
   });
   v1.post("/auth/logout", (c) => {
     const header = c.req.header("authorization");
@@ -417,6 +576,24 @@ export function createApp(ctx: Ctx) {
     writableOwners: stats.writableOwners(ctx, u.id),
   });
   v1.get("/user", (c) => c.json(userJson(requireUser(c))));
+  // Sign-in methods on this account: the Google identity (if any) and whether a password is set.
+  v1.get("/user/identities", (c) => {
+    const u = requireSession(c);
+    return c.json({ identities: oauth.listIdentities(ctx, u.id), hasPassword: accounts.hasPassword(ctx, u.id), googleAvailable: oauth.enabled("google"), githubAvailable: oauth.enabled("github"), passkeys: passkeys.countPasskeys(ctx, u.id) });
+  });
+  v1.delete("/user/identities/:provider{google|github}", (c) => {
+    const u = requireSession(c);
+    const provider = c.req.param("provider") as oauth.Provider;
+    const label = oauth.providerName(provider);
+    // Never remove the only way in: a password, a passkey or another connected provider has to remain.
+    const others = oauth.listIdentities(ctx, u.id).filter((i) => i.provider !== provider).length;
+    if (!accounts.hasPassword(ctx, u.id) && passkeys.countPasskeys(ctx, u.id) === 0 && others === 0) {
+      throw new ApiError(409, "last_sign_in_method", `${label} is the only way into this account. Add a password first (use “Forgot password” on the sign-in page), then disconnect ${label}.`);
+    }
+    if (!oauth.unlinkIdentity(ctx, u.id, provider)) throw notFound(`${label} connection`);
+    securitylog.record(ctx, u.id, "oauth_unlinked", { detail: label, ...clientInfo(c) });
+    return c.body(null, 204);
+  });
   v1.patch("/user", async (c) => {
     const b = await body<{ name?: string; bio?: string; role?: string | null; onboarded?: boolean }>(c);
     return c.json(userJson(accounts.updateProfile(ctx, requireUser(c).id, b)));
@@ -572,6 +749,35 @@ export function createApp(ctx: Ctx) {
     const u = requireUser(c);
     return c.json(stats.usage(ctx, u.id, u.plan as keyof typeof config.plans));
   });
+  // The last requests one of your access tokens made (method, route, status, time, where from): for debugging a script.
+  v1.get("/user/tokens/:id/requests", (c) => {
+    const u = requireSession(c);
+    const id = Number(c.req.param("id"));
+    const own = ctx.db.prepare("SELECT 1 FROM tokens WHERE id = ? AND user_id = ? AND kind = 'pat'").get(id, u.id);
+    if (!own) throw notFound("Token");
+    return c.json(audit.tokenRequests(ctx, id));
+  });
+  // Audit log. Owners of an organization see what happened under it; admins of a repository see what happened to it;
+  // a person sees what others did on their personal repositories. ?format=csv downloads up to 5,000 entries.
+  const auditAnswer = (c: Context<Env>, ownerId: number, repo?: string) => {
+    const q = (k: string) => c.req.query(k) || undefined;
+    const csv = q("format") === "csv";
+    const out = audit.listEvents(ctx, ownerId, { repo, actor: q("actor"), outcome: q("outcome"), before: q("before") ? Number(q("before")) : undefined, limit: csv ? 5000 : Number(q("limit") ?? 50), max: csv ? 5000 : 500 });
+    if (!csv) return c.json(out);
+    return c.body(audit.eventsCsv(out.events), 200, { "content-type": "text/csv; charset=utf-8", "content-disposition": 'attachment; filename="audit-log.csv"' });
+  };
+  v1.get("/orgs/:org/audit-log", (c) => {
+    const u = requireSession(c);
+    const org = accounts.getOwner(ctx, c.req.param("org"));
+    if (org.kind !== "org") throw notFound("Organization");
+    if (accounts.orgRole(ctx, org.id, u.id) !== "Owner") throw new ApiError(403, "forbidden", `Only owners of ${org.handle} can read its audit log.`);
+    return auditAnswer(c, org.id);
+  });
+  v1.get("/repos/:owner/:repo/audit-log", (c) => {
+    const repo = repoFor(c, "admin");
+    return auditAnswer(c, repo.owner_id, repo.name);
+  });
+  v1.get("/user/audit-log", (c) => auditAnswer(c, requireSession(c).id));
   v1.get("/user/tokens", (c) => {
     const header = c.req.header("authorization");
     return c.json(accounts.listTokens(ctx, requireUser(c).id, header?.startsWith("Bearer ") ? header.slice(7) : null));
@@ -781,10 +987,10 @@ export function createApp(ctx: Ctx) {
   v1.post("/repos/:owner/:repo/chunks", async (c) => {
     const repo = repoFor(c, "write");
     const data = await readLimited(c, CHUNK_BATCH_MAX_BYTES);
-    const results: { hash: string; size: number; deduplicated: boolean }[] = [];
+    const items: { hash: string; stored: Buffer }[] = [];
     let at = 0;
     while (at < data.length) {
-      if (results.length >= CHUNK_BATCH_MAX_CHUNKS) throw badRequest(`Send at most ${CHUNK_BATCH_MAX_CHUNKS} chunks per request.`);
+      if (items.length >= CHUNK_BATCH_MAX_CHUNKS) throw badRequest(`Send at most ${CHUNK_BATCH_MAX_CHUNKS} chunks per request.`);
       if (at + 69 > data.length) throw badRequest("The batch ends inside a chunk header.");
       const hash = data.subarray(at, at + 64).toString("latin1");
       const length = data.readUInt32BE(at + 64);
@@ -795,12 +1001,17 @@ export function createApp(ctx: Ctx) {
       if (at + length > data.length) throw badRequest(`Chunk ${hash.slice(0, 12)} is cut off.`);
       const payload = data.subarray(at, at + length);
       at += length;
-      const stored = Buffer.concat([Buffer.from([encoding]), payload]);
-      // Plan accounting uses the decoded size, which putStored checks; judge new bytes by the stored size here and let
-      // the decoded one be verified there (it can only be larger, never smaller than the claim of the hash).
-      if (!chunks.visibleToRepo(ctx, repo, hash)) plans.assertStorageAvailable(ctx, repo, stored.length);
-      results.push(await chunks.putStored(ctx, repo, hash, stored));
+      items.push({ hash, stored: Buffer.concat([Buffer.from([encoding]), payload]) });
     }
+    // The plan limit is judged over the whole batch before anything is written, counting what is new by its stored size.
+    let incoming = 0;
+    for (const it of items) {
+      if (chunks.visibleToRepo(ctx, repo, it.hash)) continue;
+      incoming += it.stored.length;
+      plans.assertStorageAvailable(ctx, repo, incoming);
+    }
+    // Stored a few at a time: against an object store each put is a round trip, and they do not depend on each other.
+    const results = await chunks.mapLimit(items, chunks.storeConcurrency(ctx), (it) => chunks.putStored(ctx, repo, it.hash, it.stored));
     return c.json({ stored: results.length, chunks: results }, 201);
   });
   // The other direction: POST the hashes wanted (JSON, up to 500) and receive frames, in the same layout as the batched
@@ -906,6 +1117,7 @@ export function createApp(ctx: Ctx) {
     }
     const branch = String(form.get("branch") || repo.default_branch);
     const result = await ingest.commitUpload(ctx, repo, user.handle, {
+      secrets: { who: secretActor(c), bypass: secretBypass(c, form.get("allowSecrets")) },
       branch,
       from: String(form.get("from") ?? "") || null,
       expected: String(form.get("expected") ?? "") || null,
@@ -939,8 +1151,12 @@ export function createApp(ctx: Ctx) {
   });
   v1.post("/repos/:owner/:repo/refs/heads/:branch{.+}", async (c) => {
     const repo = repoFor(c, "write");
-    const b = await body<{ commit: string; expected: string | null }>(c);
+    const b = await body<{ commit: string; expected: string | null; allowSecrets?: string }>(c);
     const branch = c.req.param("branch");
+    // Nothing moves until the new commits have been read for credentials: history can't be edited afterwards.
+    const bypass = secretBypass(c, b.allowSecrets);
+    const scan = await secretscan.scanBranchUpdate(ctx, repo, branch, b.commit);
+    secretscan.enforce(ctx, repo, secretActor(c), scan.findings, bypass, "/repos/:owner/:repo/refs/heads/:branch");
     const result = history.updateBranch(ctx, repo, branch, b.commit, b.expected ?? null, requireUser(c).handle);
     const checks = result.updated ? await runChecks(ctx, repo, b.commit, branch) : null;
     announceChecks(repo, branch, b.commit, checks, requireUser(c).id);
@@ -950,6 +1166,12 @@ export function createApp(ctx: Ctx) {
 
   // APA, BibTeX and CITATION.cff from the repository's real metadata (or its own CITATION.cff).
   v1.get("/repos/:owner/:repo/citation", async (c) => c.json(await citationFor(ctx, repoFor(c))));
+  // schema.org Dataset markup for search engines. Only for a public repository: a private one is not described to anyone.
+  v1.get("/repos/:owner/:repo/dataset.jsonld", async (c) => {
+    const repo = repoFor(c);
+    if (repo.visibility !== "public") throw notFound("Repository");
+    return c.json(await datasetJsonLd(ctx, repo));
+  });
 
   // ── Share links (repository admins make them; anyone holding one can read that snapshot) ──
   v1.get("/repos/:owner/:repo/share-links", (c) => c.json({ expiryChoices: sharing.EXPIRY_CHOICES, links: sharing.listLinks(ctx, repoFor(c, "admin")) }));
@@ -1376,6 +1598,57 @@ export function createApp(ctx: Ctx) {
     requireUser(c);
     return c.json({ unassigned: milestones.deleteMilestone(ctx, repoFor(c, "write"), Number(c.req.param("id"))) });
   });
+  // ── Model reviews: checklist, modelling log and sign-off pinned to one commit ─────────────────────
+  v1.get("/model-review-template", (c) => c.json({ id: modelreview.TEMPLATE_ID, items: modelreview.TEMPLATE }));
+  v1.get("/repos/:owner/:repo/model-reviews", (c) => c.json(modelreview.listReviews(ctx, repoFor(c))));
+  v1.post("/repos/:owner/:repo/model-reviews", async (c) => {
+    const user = requireUser(c);
+    const b = await body<{ title?: string; ref?: string }>(c);
+    return c.json(await modelreview.createReview(ctx, repoFor(c, "write"), user.id, b), 201);
+  });
+  v1.get("/repos/:owner/:repo/model-reviews/:n", (c) => c.json(modelreview.getReview(ctx, repoFor(c), Number(c.req.param("n")))));
+  v1.put("/repos/:owner/:repo/model-reviews/:n/items/:key", async (c) => {
+    const user = requireUser(c);
+    const b = await body<{ status?: string; note?: string }>(c);
+    return c.json(modelreview.setItem(ctx, repoFor(c, "write"), Number(c.req.param("n")), user.id, c.req.param("key"), b));
+  });
+  v1.post("/repos/:owner/:repo/model-reviews/:n/log", async (c) => {
+    const user = requireUser(c);
+    const b = await body<{ body?: string }>(c);
+    return c.json(modelreview.addLog(ctx, repoFor(c, "write"), Number(c.req.param("n")), user.id, b.body), 201);
+  });
+  v1.post("/repos/:owner/:repo/model-reviews/:n/evidence", async (c) => {
+    const user = requireUser(c);
+    const b = await body<{ ref?: string }>(c);
+    return c.json(await modelreview.refreshEvidence(ctx, repoFor(c, "write"), Number(c.req.param("n")), user.id, b));
+  });
+  v1.post("/repos/:owner/:repo/model-reviews/:n/submit", (c) => {
+    const user = requireUser(c);
+    return c.json(modelreview.submit(ctx, repoFor(c, "write"), Number(c.req.param("n")), user.id));
+  });
+  v1.post("/repos/:owner/:repo/model-reviews/:n/decision", async (c) => {
+    const user = requireUser(c);
+    const b = await body<{ decision?: string; comment?: string }>(c);
+    return c.json(modelreview.decide(ctx, repoFor(c, "write"), Number(c.req.param("n")), user.id, b));
+  });
+  v1.post("/repos/:owner/:repo/model-reviews/:n/reopen", async (c) => {
+    const user = requireUser(c);
+    const b = await body<{ reason?: string }>(c);
+    return c.json(modelreview.reopen(ctx, repoFor(c, "write"), Number(c.req.param("n")), user.id, b.reason));
+  });
+  v1.delete("/repos/:owner/:repo/model-reviews/:n", (c) => {
+    requireUser(c);
+    modelreview.deleteReview(ctx, repoFor(c, "admin"), Number(c.req.param("n")));
+    return c.body(null, 204);
+  });
+  v1.get("/repos/:owner/:repo/model-reviews/:n/export", (c) => {
+    const repo = repoFor(c);
+    const n = Number(c.req.param("n"));
+    const headers: Record<string, string> = { "content-type": "text/markdown; charset=utf-8" };
+    if (c.req.query("download") === "1") headers["content-disposition"] = `attachment; filename="model-review-${n}.md"`;
+    return c.body(modelreview.exportMarkdown(ctx, repo, n), 200, headers);
+  });
+
   v1.get("/repos/:owner/:repo/issues/:n", (c) => {
     const repo = repoFor(c);
     const n = Number(c.req.param("n"));

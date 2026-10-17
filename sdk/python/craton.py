@@ -2,7 +2,7 @@
 
     from craton import Craton
 
-    c = Craton("http://localhost:4000", token="bcn_pat_...")      # token optional for public repositories
+    c = Craton("http://localhost:4000", token="crt_pat_...")      # token optional for public repositories
     repo = c.repo("hydrolab", "chalakudy-basin")
     repo.releases()                                               # newest first
     repo.read("gauges.csv")                                       # bytes of a file at the default branch

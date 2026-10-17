@@ -8,6 +8,7 @@ import { Frame, FramePanel } from "@/components/ui/frame";
 import { IconTile } from "@/components/reui/icon-tile";
 
 export const metadata: Metadata = {
+  alternates: { types: { "text/markdown": "/about.md" } },
   title: "About",
   description: "What Craton is, who it's for, and what works today.",
 };

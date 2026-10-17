@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/craton-ui";
 import { Badge } from "@/components/ui/badge";
 
 export const metadata: Metadata = {
+  alternates: { types: { "text/markdown": "/changelog.md" } },
   title: "Changelog",
   description: "What's in Craton so far. There hasn't been a public release yet.",
 };

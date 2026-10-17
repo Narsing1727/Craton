@@ -32,3 +32,24 @@ export async function setSession(token: string) {
 export async function clearSession() {
   (await cookies()).delete(SESSION_COOKIE);
 }
+
+/** Binds a Google sign-in to the browser that started it: "<in|link>.<state>", checked when Google sends the browser back. */
+export const OAUTH_STATE_COOKIE = "craton_oauth_state";
+/** The two-step ticket after Google said who it is, read by the sign-in page for the code step (five minutes, like the ticket). */
+export const MFA_COOKIE = "craton_mfa_ticket";
+/** The ticket for "choose a username" after a first Google sign-in (fifteen minutes, like the API's). */
+export const GOOGLE_PENDING_COOKIE = "craton_google_pending";
+
+/** Options for a short-lived httpOnly cookie that only this site's own pages read. */
+export function shortCookie(path: string, maxAge: number) {
+  return { httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path, maxAge };
+}
+
+/** Session cookie options, for route handlers that set it on a redirect response. */
+export const sessionCookieOptions = {
+  httpOnly: true,
+  sameSite: "lax" as const,
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  maxAge: SESSION_MAX_AGE,
+};

@@ -133,6 +133,22 @@ export function ancestors(ctx: Ctx, repo: RepoRow, from: string): Set<string> {
   return seen;
 }
 
+/** The commits reachable from `to` that are not reachable from `from` (all of them when `from` is null), newest first. */
+export function commitsBetween(ctx: Ctx, repo: RepoRow, from: string | null, to: string): string[] {
+  const known = from ? ancestors(ctx, repo, from) : new Set<string>();
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const queue = [to];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (seen.has(id) || known.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    queue.push(...parentsOf(ctx, repo, id));
+  }
+  return out;
+}
+
 export const isAncestor = (ctx: Ctx, repo: RepoRow, maybeAncestor: string, of: string) => ancestors(ctx, repo, of).has(maybeAncestor);
 
 export function mergeBase(ctx: Ctx, repo: RepoRow, a: string, b: string): string | null {

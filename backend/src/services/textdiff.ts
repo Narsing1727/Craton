@@ -2,6 +2,7 @@
 // JSON or YAML config. What a person wants from it is "which Manning's n changed", so it is a plain unified diff
 // with a few lines of context, computed on lines with Myers' O(ND) algorithm after trimming what both share.
 
+import { describeStructured } from "./describe.ts";
 import type { Ctx } from "./context.ts";
 import { ApiError, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
@@ -166,6 +167,9 @@ async function textAt(ctx: Ctx, repo: RepoRow, ref: string, path: string): Promi
   const commit = getObject<CommitObject>(ctx, repo, resolveRef(ctx, repo, ref), "commit");
   const entry = getObject<TreeObject>(ctx, repo, commit.tree, "tree").entries.find((e) => e.path === path);
   if (!entry) return null;
+  // A point cloud or NetCDF grid is compared by what its header says (any size: only the header is read).
+  const described = await describeStructured(ctx, repo, entry.blob, path);
+  if (described) return { lines: described, size: entry.size };
   if (entry.size > MAX_BYTES) return { lines: null, size: entry.size };
   const buf = await new BlobReader(ctx, getObject<BlobObject>(ctx, repo, entry.blob, "blob")).readAll();
   return { lines: linesOf(buf), size: entry.size };

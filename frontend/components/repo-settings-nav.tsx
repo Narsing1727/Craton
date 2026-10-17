@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Settings, Share2, ShieldCheck, Users, Webhook } from "lucide-react";
+import { ScrollText, Settings, Share2, ShieldCheck, Users, Webhook } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /** Lives in the settings layout, so it stays mounted while the page beside it changes. */
@@ -13,6 +13,7 @@ export function RepoSettingsNav({ base }: { base: string }) {
     { href: `${base}/settings/collaborators`, label: "Collaborators", icon: Users },
     { href: `${base}/settings/sharing`, label: "Sharing", icon: Share2 },
     { href: `${base}/settings/webhooks`, label: "Webhooks", icon: Webhook },
+    { href: `${base}/settings/audit`, label: "Audit log", icon: ScrollText },
   ];
   return (
     <nav aria-label="Repository settings" className="flex flex-col">

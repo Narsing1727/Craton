@@ -108,8 +108,13 @@ export default async function RepoPage({
   // Open the folder that holds the preview so the tree starts on real data.
   const firstDir = preview?.path.includes("/") ? [preview.path.split("/")[0]] : [];
 
+  // Dataset Search: the landing page of a public repository describes itself with schema.org markup.
+  const jsonLd = summary.live && summary.repo.visibility === "public" ? await api.datasetJsonLd(owner, repo) : null;
+
   return (
-    <CodeView
+    <>
+      {jsonLd && <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }} />}
+      <CodeView
       owner={owner}
       repo={repo}
       data={summary.repo}
@@ -123,6 +128,7 @@ export default async function RepoPage({
       crs={summary.crs}
       preview={preview}
       hasRelease={(releases?.length ?? 0) > 0}
-    />
+      />
+    </>
   );
 }

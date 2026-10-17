@@ -10,6 +10,9 @@ export type FilePreview = { path: string; src: string; meta: RenderMeta | null; 
 /** Files that are plain text by their name: model inputs, configs, notes. The server still checks the bytes. */
 const TEXT_FILE = /\.(txt|md|json|ya?ml|toml|ini|cfg|inp|net|prj|rasmap|bat|sh|py|r|[pgufh]\d\d|x\d\d|c\d\d|b\d\d|o\d\d)$/i;
 
+/** Point clouds, NetCDF grids and HDF5 files (HEC-RAS plans and results): compared by what their headers and structure say (the API describes both versions as lines). */
+const HEADER_FILE = /\.(las|laz|nc|cdf|hdf|h5|hdf5|he5)$/i;
+
 export async function changePreviews(
   owner: string,
   repo: string,
@@ -23,7 +26,7 @@ export async function changePreviews(
     files.map(async (f) => {
       if (f.change === "removed") return;
       // A changed text file gets a line diff instead of a map.
-      if (f.change === "modified" && base && TEXT_FILE.test(f.name)) {
+      if (f.change === "modified" && base && (TEXT_FILE.test(f.name) || HEADER_FILE.test(f.name))) {
         const diff = await api.textDiff(owner, repo, head, f.name, base).catch(() => null);
         if (diff) out[f.name] = { path: f.name, src: "", meta: null, error: null, isDiff: true, text: diff };
         return;

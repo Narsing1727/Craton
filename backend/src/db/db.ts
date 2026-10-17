@@ -436,6 +436,137 @@ const migrations: string[] = [
   );
   `,/* 22: why a webhook was paused by Craton itself (ten failed deliveries in a row); NULL when active or paused by a person. */ `
   ALTER TABLE webhooks ADD COLUMN paused_reason TEXT;
+  `,/* 23: rasters must be laid out as Cloud Optimized GeoTIFFs (tiled, overviews, directories first) for checks to pass. */ `
+  ALTER TABLE repos ADD COLUMN require_cog INTEGER NOT NULL DEFAULT 0;
+  `,/* 23: sign-in with an identity provider (Google): who is linked to whom, the in-flight sign-ins (state, PKCE verifier, nonce), and people who signed in with Google but have not chosen a username yet. */ `
+  CREATE TABLE oauth_identities (
+    provider TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (provider, subject)
+  );
+  CREATE INDEX oauth_identities_user ON oauth_identities (user_id);
+  CREATE TABLE oauth_flows (
+    state_hash TEXT PRIMARY KEY,
+    verifier TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    next TEXT,
+    link_user_id INTEGER,
+    expires_at TEXT NOT NULL
+  );
+  CREATE TABLE oauth_pending (
+    ticket_hash TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    email TEXT NOT NULL,
+    name TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  `,/* 24: model reviews: a checklist, modelling log and sign-off pinned to one commit, with the automated findings captured when it was made. */ `
+  CREATE TABLE model_reviews (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    template TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','in_review','changes_requested','approved')),
+    ref TEXT NOT NULL,
+    commit_id TEXT NOT NULL,
+    merkle_root TEXT NOT NULL,
+    evidence TEXT NOT NULL DEFAULT '{}',
+    created_by INTEGER NOT NULL REFERENCES owners(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    submitted_at TEXT,
+    UNIQUE (repo_id, number)
+  );
+  CREATE TABLE model_review_items (
+    review_id INTEGER NOT NULL REFERENCES model_reviews(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','pass','fail','na')),
+    note TEXT NOT NULL DEFAULT '',
+    updated_by INTEGER REFERENCES owners(id),
+    updated_at TEXT,
+    PRIMARY KEY (review_id, key)
+  );
+  CREATE TABLE model_review_log (
+    id INTEGER PRIMARY KEY,
+    review_id INTEGER NOT NULL REFERENCES model_reviews(id) ON DELETE CASCADE,
+    author_id INTEGER NOT NULL REFERENCES owners(id),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE TABLE model_review_signoffs (
+    id INTEGER PRIMARY KEY,
+    review_id INTEGER NOT NULL REFERENCES model_reviews(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES owners(id),
+    decision TEXT NOT NULL CHECK (decision IN ('approve','request_changes')),
+    comment TEXT NOT NULL DEFAULT '',
+    independent INTEGER NOT NULL,
+    commit_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  `,/* 25: audit log (who changed what, on whose repositories) and the last requests each personal access token made. */ `
+  CREATE TABLE audit_events (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    owner_id INTEGER,
+    owner_handle TEXT,
+    repo TEXT,
+    actor_id INTEGER,
+    actor_handle TEXT,
+    token_id INTEGER,
+    token_kind TEXT,
+    action TEXT NOT NULL,
+    method TEXT NOT NULL,
+    route TEXT NOT NULL,
+    params TEXT NOT NULL DEFAULT '{}',
+    status INTEGER NOT NULL,
+    ip TEXT,
+    user_agent TEXT
+  );
+  CREATE INDEX audit_owner ON audit_events (owner_id, id DESC);
+  CREATE INDEX audit_repo ON audit_events (owner_id, repo, id DESC);
+  CREATE TABLE token_requests (
+    id INTEGER PRIMARY KEY,
+    token_id INTEGER NOT NULL,
+    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    method TEXT NOT NULL,
+    route TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    ms REAL NOT NULL,
+    ip TEXT
+  );
+  CREATE INDEX token_requests_token ON token_requests (token_id, id DESC);
+  `,/* 26: passkeys (WebAuthn): the public keys, a stable per-account user handle, and one-time challenges. */ `
+  CREATE TABLE passkeys (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    public_key BLOB NOT NULL,
+    alg INTEGER NOT NULL,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    transports TEXT NOT NULL DEFAULT '',
+    device_type TEXT NOT NULL DEFAULT 'singleDevice',
+    backed_up INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    last_used_at TEXT
+  );
+  CREATE INDEX passkeys_user ON passkeys (user_id);
+  CREATE TABLE passkey_users (
+    user_id INTEGER PRIMARY KEY REFERENCES owners(id) ON DELETE CASCADE,
+    handle TEXT NOT NULL
+  );
+  CREATE TABLE passkey_challenges (
+    hash TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('create','get')),
+    user_id INTEGER,
+    expires_at TEXT NOT NULL
+  );
+  `,/* 27: a sign-in flow belongs to one identity provider (Google or GitHub), so one provider's state can never finish the other's. */ `
+  ALTER TABLE oauth_flows ADD COLUMN provider TEXT NOT NULL DEFAULT 'google';
   `,
 ];
 

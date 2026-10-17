@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Check, Copy, KeyRound, Plus } from "lucide-react";
 import { ConfirmAction } from "@/components/craton-actions";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,9 @@ const scopeOptions = [
   { id: "read:org", label: "read:org · read organization membership" },
   { id: "admin:org", label: "admin:org · invite, remove and change roles of organization members" },
 ];
-import { createTokenAction, revokeTokenAction } from "@/app/actions";
+import { createTokenAction, revokeTokenAction, tokenRequestsAction } from "@/app/actions";
+import type { ApiTokenRequest } from "@/lib/api";
+import { timeAgo } from "@/lib/format";
 
 export type TokenRow = { id: number; name: string; created: string; lastUsed: string; scope: string; expires?: string; current?: boolean; /** Repositories the token is limited to; absent means all. */ repos?: string[] };
 
@@ -58,7 +60,7 @@ export function TokensView({ initial, live }: { initial: TokenRow[]; live: boole
       token = result.data.token;
       id = result.data.id;
     } else {
-      token = `bcn_pat_${Math.random().toString(36).substring(2, 12)}_${Math.random().toString(36).substring(2, 10)}`;
+      token = `crt_pat_${Math.random().toString(36).substring(2, 12)}_${Math.random().toString(36).substring(2, 10)}`;
     }
     setGeneratedToken(token);
 
@@ -210,7 +212,8 @@ export function TokensView({ initial, live }: { initial: TokenRow[]; live: boole
           <Card className="overflow-hidden py-0">
             <ul className="divide-y divide-border text-sm">
               {tokenList.map((t) => (
-                <li key={t.id} className="flex items-center justify-between p-4 hover:bg-muted/20">
+                <li key={t.id} className="flex flex-col gap-2 p-4 hover:bg-muted/20">
+                  <div className="flex items-center justify-between">
                   <div className="flex items-start gap-3">
                     <KeyRound className="size-5 mt-0.5 text-accent shrink-0" />
                     <div>
@@ -257,10 +260,63 @@ export function TokensView({ initial, live }: { initial: TokenRow[]; live: boole
                       onConfirm={() => void handleRevoke(t)}
                     />
                   )}
+                  </div>
+                  {!t.current && <TokenRequests id={t.id} />}
                 </li>
               ))}
             </ul>
           </Card>
         </div>
+  );
+}
+
+/** The last requests one token made, loaded on demand: for working out why a script or CI job is failing. */
+function TokenRequests({ id }: { id: number }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<ApiTokenRequest[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && rows === null) {
+      start(async () => {
+        const r = await tokenRequestsAction(id);
+        if (r.ok) setRows(r.requests);
+        else setError(r.error);
+      });
+    }
+  }
+
+  return (
+    <div className="pl-8">
+      <button type="button" onClick={toggle} aria-expanded={open} className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+        {open ? "Hide recent requests" : "Recent requests"}
+      </button>
+      {open && (
+        <div className="mt-2 text-xs">
+          {pending && <p className="text-muted-foreground">Loading…</p>}
+          {error && <p className="text-destructive">{error}</p>}
+          {rows && rows.length === 0 && <p className="text-muted-foreground">This token hasn’t made a request yet. Its last 100 show here.</p>}
+          {rows && rows.length > 0 && (
+            <table className="w-full max-w-2xl border-collapse font-mono">
+              <caption className="sr-only">The last requests made with this token</caption>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={`${r.at}-${i}`} className="border-t border-border">
+                    <td className="py-1 pr-3 text-muted-foreground tabular-nums">{timeAgo(r.at)}</td>
+                    <td className="py-1 pr-3">{r.method}</td>
+                    <td className="py-1 pr-3 break-all">{r.route}</td>
+                    <td className={`py-1 pr-3 tabular-nums ${r.status >= 400 ? "text-destructive" : ""}`}>{r.status}</td>
+                    <td className="py-1 text-right text-muted-foreground tabular-nums">{r.ms} ms</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

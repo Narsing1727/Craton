@@ -7,7 +7,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import QRCode from "qrcode";
 import { fetchUser, send, type ApiUser } from "@/lib/api";
-import { clearSession, getSessionToken, setSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { clearSession, getSessionToken, GOOGLE_PENDING_COOKIE, MFA_COOKIE, setSession } from "@/lib/session";
 
 /** `mfaTicket`: the password was right and a code from the authenticator app is the next step. `restart`: that step expired, go back to the password. */
 export type FormResult = { ok: false; error: string; field?: string; restart?: boolean } | { ok: true; message?: string; mfaTicket?: string };
@@ -29,6 +30,7 @@ export async function loginAction(_: FormResult | null, form: FormData): Promise
 
 async function finishSignIn(token: string, next: string): Promise<never> {
   await setSession(token);
+  (await cookies()).delete(MFA_COOKIE); // a ticket left over from a Google sign-in
   const me = await fetchUser(token);
   redirect(me?.onboardedAt ? safeNext(next, "/dashboard") : "/onboarding");
 }
@@ -46,6 +48,20 @@ export async function loginMfaAction(_: FormResult | null, form: FormData): Prom
   return finishSignIn(result.data.token, String(form.get("next") ?? ""));
 }
 
+/** Signing in with a passkey: the options (a one-time challenge), then the device's answer. No username is needed. */
+export async function passkeyLoginOptionsAction() {
+  const r = await send<{ challenge: string; rpId: string; timeout?: number; userVerification?: "preferred"; allowCredentials?: [] }>("POST", "/auth/passkey/options", {}, null);
+  return r.ok ? ({ ok: true as const, options: r.data }) : ({ ok: false as const, error: r.error });
+}
+
+export async function passkeyLoginAction(credential: unknown, next: string): Promise<FormResult> {
+  const r = await send<{ token?: string; mfaRequired?: boolean; ticket?: string }>("POST", "/auth/passkey/login", { credential }, null);
+  if (!r.ok) return { ok: false, error: r.error };
+  // The device did not verify the person and the account has two-step verification: the code is the next step.
+  if (r.data.mfaRequired && r.data.ticket) return { ok: true, mfaTicket: r.data.ticket };
+  return finishSignIn(r.data.token!, next);
+}
+
 export async function signupAction(_: FormResult | null, form: FormData): Promise<FormResult> {
   const username = String(form.get("username") ?? "").trim().toLowerCase();
   const email = String(form.get("email") ?? "").trim();
@@ -59,6 +75,53 @@ export async function signupAction(_: FormResult | null, form: FormData): Promis
   }
   await setSession(result.data.token);
   redirect("/onboarding");
+}
+
+/** First sign-in with Google: the person picks a username (permanent, it is in every URL), then the account exists. */
+export async function completeGoogleSignupAction(_: FormResult | null, form: FormData): Promise<FormResult> {
+  const username = String(form.get("username") ?? "").trim().toLowerCase();
+  const name = String(form.get("name") ?? "").trim();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(username)) return { ok: false, field: "username", error: "Use lowercase letters, numbers and single dashes (up to 39)." };
+  const jar = await cookies();
+  const ticket = jar.get(GOOGLE_PENDING_COOKIE)?.value;
+  if (!ticket) return { ok: false, error: "That step expired. Continue with Google again.", restart: true };
+  const result = await send<{ token: string }>("POST", "/auth/google/complete", { ticket, username, name: name || undefined }, null);
+  if (!result.ok) {
+    if (result.code === "invalid_ticket") return { ok: false, error: result.error, restart: true };
+    return { ok: false, field: /taken|reserved|username/i.test(result.error) ? "username" : undefined, error: result.error };
+  }
+  jar.delete(GOOGLE_PENDING_COOKIE);
+  await setSession(result.data.token);
+  redirect(safeNext(String(form.get("next") ?? ""), "/onboarding"));
+}
+
+/** Settings → Security: take Google off the account (the API refuses while it is the only way in). */
+export async function disconnectGoogleAction() {
+  const result = await send<null>("DELETE", "/user/identities/google");
+  if (result.ok) revalidatePath("/settings");
+  return result;
+}
+
+// ── Passkeys (Settings → Security) ───────────────────────────────────────
+
+export async function passkeyRegisterOptionsAction() {
+  const r = await send<Record<string, unknown>>("POST", "/user/passkeys/options");
+  return r.ok ? ({ ok: true as const, options: r.data }) : ({ ok: false as const, error: r.error });
+}
+export async function passkeyRegisterAction(credential: unknown, name: string) {
+  const r = await send<{ id: string; name: string }>("POST", "/user/passkeys", { credential, name });
+  if (r.ok) revalidatePath("/settings");
+  return r;
+}
+export async function renamePasskeyAction(id: string, name: string) {
+  const r = await send<unknown>("PATCH", `/user/passkeys/${encodeURIComponent(id)}`, { name });
+  if (r.ok) revalidatePath("/settings");
+  return r;
+}
+export async function removePasskeyAction(id: string) {
+  const r = await send<null>("DELETE", `/user/passkeys/${encodeURIComponent(id)}`);
+  if (r.ok) revalidatePath("/settings");
+  return r;
 }
 
 export async function logoutAction() {

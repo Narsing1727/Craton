@@ -20,7 +20,7 @@ export default async function RepoSettingsPage({ params }: { params: Promise<Par
       repo={repo}
       repoData={summary.repo}
       branches={branches.map((b) => b.name)}
-      settings={{ requireChecks: summary.requireChecks, requireReview: summary.requireReview, requireOwnerReview: summary.requireOwnerReview, crs: summary.crs, verticalDatum: summary.verticalDatum, nodata: summary.nodata }}
+      settings={{ requireChecks: summary.requireChecks, requireReview: summary.requireReview, requireOwnerReview: summary.requireOwnerReview, requireCog: summary.requireCog, crs: summary.crs, verticalDatum: summary.verticalDatum, nodata: summary.nodata }}
       licenses={(licenses ?? []).map((l) => ({ id: l.id, name: l.name }))}
       live={summary.live}
       locks={locks ?? []}

@@ -48,6 +48,7 @@ export type ApiRepo = {
   requireChecks: boolean;
   requireReview: boolean;
   requireOwnerReview?: boolean;
+  requireCog?: boolean;
   stars: number;
   forks: number;
   tags: string[];
@@ -77,6 +78,8 @@ export type ApiTableDiff = {
   truncated: boolean;
 };
 export type ApiTwoFactor = { enabled: boolean; enabledAt: string | null; recoveryCodesLeft: number };
+/** How an account signs in: connected identity providers, whether a password is set, and whether this server offers Google. */
+export type ApiIdentities = { identities: { provider: string; email: string; since: string }[]; hasPassword: boolean; googleAvailable: boolean; passkeys: number };
 export type ApiShareLink = { id: number; note: string; ref: string; commit: string; createdBy: string; createdAt: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null; uses: number; active: boolean };
 export type ApiSharedView = {
   repository: { owner: string; name: string; description: string; license: string; topics: string[]; crs: string };
@@ -145,6 +148,75 @@ export type ApiStorage = {
 
 export type ApiActivity = { type: "commit" | "branch" | "pr" | "comment" | "review" | "issue" | "release"; actor: string; text: string; repo: string; href: string; detail: string; at: string };
 export type ApiInboxItem = ApiActivity & { key: string; read: boolean; done: boolean; reason: "mention" | "reply" | "activity" | "lock" | "review" };
+export type ApiPasskey = { id: string; name: string; createdAt: string; lastUsedAt: string | null; transports: string[]; synced: boolean; backedUp: boolean };
+export type ApiAuditEvent = {
+  id: number;
+  at: string;
+  actor: string | null;
+  action: string;
+  repo: string | null;
+  owner: string | null;
+  method: string;
+  route: string;
+  params: Record<string, string>;
+  status: number;
+  outcome: "done" | "denied";
+  via: "token" | "browser" | null;
+  ip: string | null;
+};
+export type ApiAuditPage = { events: ApiAuditEvent[]; next: number | null };
+export type ApiTokenRequest = { at: string; method: string; route: string; status: number; ms: number; ip: string | null };
+export type AuditScope = { kind: "repo"; owner: string; repo: string } | { kind: "org"; org: string } | { kind: "user" };
+export type ApiReviewCounts = { todo: number; pass: number; fail: number; na: number };
+export type ApiReviewItem = {
+  key: string;
+  group: string;
+  text: string;
+  hint: string;
+  source: string;
+  status: "todo" | "pass" | "fail" | "na";
+  note: string;
+  updatedBy: string | null;
+  updatedAt: string | null;
+  suggestion: { status: "pass" | "fail" | null; detail: string } | null;
+};
+export type ApiModelReviewSummary = {
+  number: number;
+  title: string;
+  status: "draft" | "in_review" | "changes_requested" | "approved";
+  ref: string;
+  commit: string;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  counts: ApiReviewCounts;
+  lastDecision: { by: string | null; decision: string; at: string } | null;
+};
+export type ApiModelReview = {
+  number: number;
+  title: string;
+  template: string;
+  status: ApiModelReviewSummary["status"];
+  ref: string;
+  commit: string;
+  merkleRoot: string;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt: string | null;
+  counts: ApiReviewCounts;
+  items: ApiReviewItem[];
+  log: { id: number; author: string | null; body: string; at: string }[];
+  signoffs: { id: number; user: string | null; decision: "approve" | "request_changes"; comment: string; independent: boolean; commit: string; at: string }[];
+  evidence: {
+    capturedAt: string;
+    commit: string;
+    merkleRoot: string;
+    files: { count: number; bytes: number };
+    checks: { status: "passed" | "failed"; at: string; steps: { name: string; status: string; detail: string }[] } | null;
+    runs: { path: string; solution: string | null; unstable: boolean; maxWselError: number | null; computeTotal: string | null; runWindow: string | null }[];
+  };
+};
 export type ApiMilestone = { id: number; title: string; description: string; due: string | null; state: "open" | "closed"; open: number; closed: number; createdAt: string };
 export type ApiIssueTemplate = { file: string; name: string; about: string; label: "data-quality" | "question" | "enhancement" | "bug" | null; body: string };
 export type ApiCollaborator = { handle: string; name: string; role: "Read" | "Write" | "Admin" };
@@ -183,6 +255,11 @@ export type ApiFile = {
   storedBytes: number;
   codecs: string[];
   raster: { width: number; height: number; bitsPerSample: number; sampleFormat: string; epsg: number | null; verticalEpsg: number | null; nodata: number | null; pixelScale: [number, number] | null; origin: [number, number] | null } | null;
+  /** Why a raster is not laid out as a Cloud Optimized GeoTIFF (empty: it is); null when unknown or not a raster. */
+  cog?: string[] | null;
+  hdf5?: { version: number; groups: number; datasets: number; top: string[]; biggest: { path: string; type: string | null; shape: number[] | null }[]; results: boolean; properties: { path: string; name: string; value: string }[]; run: { group: string; solution: string | null; unstable: boolean; maxWselError: number | null; computeTotal: string | null; runWindow: string | null; cores: number | null; unstableAt: string | null; volume: { group: string; name: string; value: string | number | number[] }[] } | null; problems: string[]; notes: string[]; limited: boolean } | null;
+  netcdf?: { format: string; conventions: string | null; records: number; dimensions: { name: string; length: number | null }[]; variables: { name: string; type: string; dimensions: string[]; units: string | null; longName: string | null }[]; globals: { name: string; value: string | number | number[] }[]; problems: string[] } | null;
+  pointCloud?: { version: string; pointFormat: number; pointRecordLength: number; pointCount: number; compressed: boolean; scale: number[]; offset: number[]; min: number[]; max: number[]; epsg: number | null; generatingSoftware: string; problems: string[] } | null;
   vector: { valid: boolean; shapeType: string; bbox: number[]; features: number | null; epsg: number | null; sidecars: string[]; fields?: { name: string; type: string; length: number; decimals: number }[] } | null;
   /** Where the file is on Earth, [west, south, east, north] degrees, when its coordinate system can be placed. */
   extent?: number[] | null;
@@ -402,12 +479,18 @@ export const api = {
   tableDiff: (owner: string, repo: string, ref: string, path: string, base: string) =>
     get<ApiTableDiff>(`${repoPath(owner, repo)}/table-diff/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}?base=${encodeURIComponent(base)}`),
   twoFactor: () => get<ApiTwoFactor>("/user/2fa"),
+  identities: () => get<ApiIdentities>("/user/identities"),
+  passkeys: () => get<ApiPasskey[]>("/user/passkeys"),
+  /** Which sign-in buttons this server can honour (a visitor, so no session is needed). */
+  providers: () => get<{ google: boolean; passkeys: boolean }>("/auth/providers", 2500),
   shared: () => get<{ owner: string; name: string; role: "Read" | "Write" | "Admin" }[]>("/user/shared"),
   invites: (owner: string, repo: string) => get<ApiInvite[]>(`${repoPath(owner, repo)}/invites`),
   invitePreview: (token: string) => get<ApiInvitePreview>(`/invites/${encodeURIComponent(token)}`),
   collaborators: (owner: string, repo: string) => get<ApiCollaborator[]>(`${repoPath(owner, repo)}/collaborators`),
   shareLinks: (owner: string, repo: string) => get<{ expiryChoices: number[]; links: ApiShareLink[] }>(`${repoPath(owner, repo)}/share-links`),
   citation: (owner: string, repo: string) => get<ApiCitation>(`${repoPath(owner, repo)}/citation`),
+  /** schema.org Dataset markup for a public repository (404 for a private one, so null). */
+  datasetJsonLd: (owner: string, repo: string) => get<Record<string, unknown>>(`${repoPath(owner, repo)}/dataset.jsonld`),
   paths: (owner: string, repo: string, ref: string) => get<{ commit: string; files: { path: string; size: number }[] }>(`${repoPath(owner, repo)}/paths/${encodeURIComponent(ref)}`),
   // The root layout asks for this on every page. A visitor with no session cookie is nobody: do not make every page wait on
   // an API round trip to learn that. A signed-in visitor's page waits only briefly; if the API is slow they look signed
@@ -426,6 +509,18 @@ export const api = {
   inboxCount: () => get<{ unread: number }>("/user/inbox/count"),
   templates: (owner: string, repo: string) => get<{ issues: ApiIssueTemplate[]; pull: string | null }>(`${repoPath(owner, repo)}/templates`),
   milestones: (owner: string, repo: string) => get<ApiMilestone[]>(`${repoPath(owner, repo)}/milestones`),
+  auditLog: (scope: AuditScope, q: { actor?: string; outcome?: string; before?: number; limit?: number } = {}) => {
+    const base = scope.kind === "repo" ? `${repoPath(scope.owner, scope.repo)}/audit-log` : scope.kind === "org" ? `/orgs/${encodeURIComponent(scope.org)}/audit-log` : "/user/audit-log";
+    const params = new URLSearchParams();
+    if (q.actor) params.set("actor", q.actor);
+    if (q.outcome) params.set("outcome", q.outcome);
+    if (q.before) params.set("before", String(q.before));
+    if (q.limit) params.set("limit", String(q.limit));
+    return get<ApiAuditPage>(`${base}${params.size ? `?${params}` : ""}`);
+  },
+  tokenRequests: (id: number) => get<ApiTokenRequest[]>(`/user/tokens/${id}/requests`),
+  modelReviews: (owner: string, repo: string) => get<ApiModelReviewSummary[]>(`${repoPath(owner, repo)}/model-reviews`),
+  modelReview: (owner: string, repo: string, n: number) => get<ApiModelReview>(`${repoPath(owner, repo)}/model-reviews/${n}`),
   repoActivity: (owner: string, repo: string, limit = 30) => get<ApiActivity[]>(`${repoPath(owner, repo)}/activity?limit=${limit}`),
   allIssues: () => get<(ApiIssue & { repo: string })[]>("/issues"),
   allPulls: () => get<(ApiPull & { repo: string })[]>("/pulls"),
@@ -473,8 +568,8 @@ export async function send<T>(method: "POST" | "PUT" | "PATCH" | "DELETE", path:
     });
     if (res.status === 204) return { ok: true, data: null as T };
     const json = await res.json().catch(() => null);
-    // Sign-in itself answers 401 for a wrong password or code; those have their own messages.
-    if (res.status === 401 && !path.startsWith("/auth/login")) return { ok: false, error: "Sign in to do this." };
+    // The sign-in endpoints (password, two-step code, Google, passkey) answer 401 with their own, more useful messages.
+    if (res.status === 401 && !path.startsWith("/auth/")) return { ok: false, error: "Sign in to do this." };
     if (res.status === 429) return { ok: false, error: waitMessage(res.headers.get("retry-after"), json?.error?.message), code: "rate_limited" };
     if (!res.ok) return { ok: false, error: json?.error?.message ?? `Request failed (${res.status}).`, code: json?.error?.code };
     return { ok: true, data: json as T };

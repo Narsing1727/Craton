@@ -6,6 +6,8 @@
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { prefersMarkdown } from "@/lib/negotiate";
+import { TWIN_PAGES } from "@/lib/llms";
 
 const SESSION_COOKIE = "craton_session";
 const APP_ONLY = ["/dashboard", "/issues", "/pulls", "/new", "/settings", "/orgs/new", "/onboarding", "/stars"];
@@ -18,6 +20,12 @@ export function proxy(request: NextRequest) {
     APP_ONLY.some((p) => pathname === p || (p === "/settings" && pathname.startsWith("/settings/"))) ||
     /^\/orgs\/[^/]+\/settings$/.test(pathname); // organization settings
 
+  // A tool that asks for Markdown gets the page's Markdown version from the page's own address.
+  if (TWIN_PAGES.some((p) => p.path === pathname) && prefersMarkdown(request.headers.get("accept"))) {
+    const url = request.nextUrl.clone();
+    url.pathname = `${pathname}.md`;
+    return NextResponse.rewrite(url);
+  }
   if (!signedIn && isApp) {
     const url = new URL("/login", request.url);
     url.searchParams.set("next", pathname + search);
@@ -30,5 +38,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/login", "/signup", "/dashboard", "/issues", "/pulls", "/new", "/settings/:path*", "/orgs/new", "/orgs/:org/settings", "/onboarding", "/stars"],
+  matcher: ["/", "/login", "/signup", "/dashboard", "/issues", "/pulls", "/new", "/settings/:path*", "/orgs/new", "/orgs/:org/settings", "/onboarding", "/stars", "/docs", "/api-reference", "/cli", "/pricing", "/security", "/about", "/changelog", "/help"], // the last eight: lib/llms.ts TWIN_PAGES (a matcher has to be written out)
 };

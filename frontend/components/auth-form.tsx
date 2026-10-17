@@ -1,14 +1,15 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Eye, EyeOff, Info, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff, Info, KeyRound, ShieldCheck } from "lucide-react";
 import { CratonLogo } from "@/components/craton-logo";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { loginAction, loginMfaAction, signupAction, type FormResult } from "@/app/auth-actions";
+import { loginAction, loginMfaAction, passkeyLoginAction, passkeyLoginOptionsAction, signupAction, type FormResult } from "@/app/auth-actions";
+import { conditionalSupported, getPasskey, passkeyErrorMessage, passkeysSupported } from "@/lib/webauthn";
 import { DotPattern } from "@/components/ui/dot-pattern";
 import { cn } from "@/lib/utils";
 
@@ -20,21 +21,44 @@ type AuthFormProps = {
   notice?: string;
   /** Local development only: the seeded demo account. */
   demoHint?: boolean;
+  /** This server offers "Continue with Google" (the API says so; the button is not drawn otherwise). */
+  google?: boolean;
+  /** This server accepts passkeys (the API says so). The button also needs a browser that can use them. */
+  passkeys?: boolean;
+  /** A two-step ticket from a Google sign-in on an account with two-step verification: go straight to the code. */
+  initialMfaTicket?: string;
 };
+
+function GoogleMark() {
+  return (
+    <svg viewBox="0 0 48 48" className="size-4" aria-hidden>
+      <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.4-4.1 7-10.1 7-17.1z" />
+      <path fill="#FBBC05" d="M10.5 28.7c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7l-7.9-6.1C.9 16.4 0 20.1 0 24s.9 7.6 2.6 10.8l7.9-6.1z" />
+      <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z" />
+    </svg>
+  );
+}
 
 const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 
-export function AuthForm({ mode, next, notice, demoHint }: AuthFormProps) {
+export function AuthForm({ mode, next, notice, demoHint, google, passkeys, initialMfaTicket }: AuthFormProps) {
   const isLogin = mode === "login";
   const [state, formAction, pending] = useActionState<FormResult | null, FormData>(isLogin ? loginAction : signupAction, null);
   const [showPassword, setShowPassword] = useState(false);
+  // Passkeys: a button, and the browser's own autofill list in the username field where it has one.
+  const [canPasskey, setCanPasskey] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [passkeyError, setPasskeyError] = useState<string | null>(null);
+  const [passkeyTicket, setPasskeyTicket] = useState<string | null>(null);
+  const autofill = useRef<AbortController | null>(null);
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   // Controlled, so a failed attempt (React resets forms after an action) keeps what was typed.
   const [loginValue, setLoginValue] = useState("");
   const [touched, setTouched] = useState(false);
   // After a correct password on an account with two-step verification, the next step is a code.
-  const ticket = isLogin && state?.ok ? state.mfaTicket : undefined;
+  const ticket = (isLogin && state?.ok ? state.mfaTicket : undefined) ?? passkeyTicket ?? (isLogin ? initialMfaTicket : undefined);
   const [leftTicket, setLeftTicket] = useState<string | null>(null);
   const codeStep = Boolean(ticket && ticket !== leftTicket);
 
@@ -42,7 +66,56 @@ export function AuthForm({ mode, next, notice, demoHint }: AuthFormProps) {
   const fieldError = (name: string) => (serverError?.field === name ? serverError.error : null);
   const usernameError = fieldError("username") ?? (!isLogin && username && !HANDLE.test(username) ? "Lowercase letters, numbers and single dashes." : null);
   const passwordError = fieldError("password") ?? (!isLogin && touched && password.length > 0 && password.length < 12 ? "Use at least 12 characters." : null);
-  const formError = serverError && !serverError.field ? serverError.error : null;
+  const formError = (serverError && !serverError.field ? serverError.error : null) ?? passkeyError;
+
+  /** A passkey answer goes to the server; success redirects, so only a failure or a two-step code request comes back. */
+  async function finishWithPasskey(credential: Awaited<ReturnType<typeof getPasskey>>) {
+    const r = await passkeyLoginAction(credential, next ?? "");
+    if (r && !r.ok) setPasskeyError(r.error);
+    else if (r && r.ok && r.mfaTicket) setPasskeyTicket(r.mfaTicket);
+  }
+
+  async function signInWithPasskey() {
+    setPasskeyError(null);
+    setPasskeyBusy(true);
+    autofill.current?.abort(); // the browser allows one passkey request at a time
+    try {
+      const o = await passkeyLoginOptionsAction();
+      if (!o.ok) return void setPasskeyError(o.error);
+      await finishWithPasskey(await getPasskey(o.options));
+    } catch (err) {
+      const message = passkeyErrorMessage(err);
+      if (message) setPasskeyError(message);
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isLogin || !passkeys) return;
+    setCanPasskey(passkeysSupported());
+    let cancelled = false;
+    const controller = new AbortController();
+    autofill.current = controller;
+    (async () => {
+      if (!(await conditionalSupported()) || cancelled) return;
+      try {
+        const o = await passkeyLoginOptionsAction();
+        if (!o.ok || cancelled) return;
+        const credential = await getPasskey(o.options, { conditional: true, signal: controller.signal });
+        if (!cancelled) await finishWithPasskey(credential);
+      } catch {
+        // Cancelled by us, or dismissed by the person: nothing to say.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLogin, passkeys]);
+
+  const passkeyButton = isLogin && passkeys && canPasskey;
 
   return (
     <main id="main" className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-background px-4 py-12">
@@ -73,6 +146,30 @@ export function AuthForm({ mode, next, notice, demoHint }: AuthFormProps) {
               <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
               {notice}
             </p>
+          )}
+          {(google || passkeyButton) && (
+            <>
+              <div className="flex flex-col gap-2">
+                {passkeyButton && (
+                  <Button type="button" variant="outline" className="w-full gap-2" onClick={() => void signInWithPasskey()} loading={passkeyBusy} disabled={passkeyBusy}>
+                    <KeyRound className="size-4" aria-hidden />
+                    Sign in with a passkey
+                  </Button>
+                )}
+                {google && (
+                  /* A plain anchor on purpose: a Next <Link> would prefetch this route and start a sign-in nobody asked for. */
+                  <a href={`/auth/google${next ? `?next=${encodeURIComponent(next)}` : ""}`} className={cn(buttonVariants({ variant: "outline" }), "w-full gap-2")}>
+                    <GoogleMark />
+                    Continue with Google
+                  </a>
+                )}
+              </div>
+              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground" aria-hidden>
+                <span className="h-px flex-1 bg-border" />
+                or
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            </>
           )}
           <form action={formAction} noValidate>
             {next && <input type="hidden" name="next" value={next} />}
@@ -110,7 +207,7 @@ export function AuthForm({ mode, next, notice, demoHint }: AuthFormProps) {
                   name={isLogin ? "login" : "email"}
                   type={isLogin ? "text" : "email"}
                   inputMode="email"
-                  autoComplete={isLogin ? "username" : "email"}
+                  autoComplete={isLogin ? "username webauthn" : "email"}
                   autoCapitalize="none"
                   spellCheck={false}
                   placeholder="you@agency.org"

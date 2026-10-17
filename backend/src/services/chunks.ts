@@ -63,6 +63,37 @@ export async function putChunk(ctx: Ctx, repo: RepoRow, hash: string, data: Buff
   return { hash, size: data.length, deduplicated, storedSize: exists ? null : storedSize };
 }
 
+/** How many chunk puts run at once: the setting, else 8 for local disk and 24 for an object store. */
+export function storeConcurrency(ctx: Ctx): number {
+  return config.storeConcurrency.override || (ctx.store.kind === "local-disk" || ctx.store.kind === "memory" ? 8 : 24);
+}
+
+/**
+ * Run `fn` over `items` with at most `limit` in flight, results in the order of `items`. An object store answers a put
+ * in tens of milliseconds, so storing a few hundred chunks one after another is seconds of waiting that overlapping
+ * them removes; the first failure stops starting new work and is thrown.
+ */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  let failed: unknown = null;
+  const worker = async () => {
+    while (failed === null) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        out[i] = await fn(items[i], i);
+      } catch (err) {
+        failed = err ?? new Error("failed");
+        return;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  if (failed !== null) throw failed;
+  return out;
+}
+
 /**
  * A chunk the client already encoded (the first byte names the encoding, as in storage). The bytes are decoded within the
  * size limit and re-hashed: the server never stores something it has not seen to be exactly the chunk its hash names.

@@ -16,6 +16,11 @@ export const SECURITY_EVENT_TYPES = [
   "two_factor_enabled",
   "two_factor_disabled",
   "recovery_codes_regenerated",
+  "oauth_linked",
+  "oauth_unlinked",
+  "passkey_added",
+  "passkey_removed",
+  "passkey_rollback",
 ] as const;
 export type SecurityEventType = (typeof SECURITY_EVENT_TYPES)[number];
 

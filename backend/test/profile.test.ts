@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { compressChunk, decompressChunk, codecOf } from "../src/core/compress.ts";
-import { hintForPath, tiffHint } from "../src/core/profile.ts";
+import { hintForPath, lasHint, tiffHint } from "../src/core/profile.ts";
 
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
@@ -108,4 +108,46 @@ test("a smooth raster picks the delta encoding, a big-endian one too, and a deco
     assert.equal(r.codec, be ? "delta4be+shuffle4+zstd" : "delta4+shuffle4+zstd");
     assert.ok(decompressChunk(r.stored).equals(data));
   }
+});
+
+test("fixed-length records are shuffled by record, and a decoder finds the width in the chunk itself", () => {
+  // 34-byte records like LAS point format 3: slowly changing integer coordinates, a small intensity, a class byte.
+  const rec = 34;
+  const n = 3000;
+  const data = Buffer.alloc(rec * n);
+  for (let i = 0; i < n; i++) {
+    const o = i * rec;
+    data.writeInt32LE(63600000 + i * 3 + (i % 7), o);
+    data.writeInt32LE(84890000 + i * 2, o + 4);
+    data.writeInt32LE(40000 + (i % 400), o + 8);
+    data.writeUInt16LE(100 + (i % 50), o + 12);
+    data[o + 15] = 2;
+    data.writeDoubleLE(1000 + i * 0.001, o + 20);
+  }
+  const hinted = compressChunk(Buffer.from(data), sha(data), { kind: "records", width: rec });
+  const plain = compressChunk(Buffer.from(data), sha(data), { kind: "text" });
+  assert.equal(hinted.codec, "records+zstd");
+  assert.ok(hinted.stored.length < plain.stored.length * 0.8, `${hinted.stored.length} vs ${plain.stored.length}`);
+  assert.ok(decompressChunk(hinted.stored).equals(data));
+  assert.equal(codecOf(hinted.stored), "records+zstd");
+  // An odd-sized tail and out-of-range widths still round-trip (the width is only a hint).
+  const odd = data.subarray(0, data.length - 7);
+  assert.ok(decompressChunk(compressChunk(Buffer.from(odd), sha(odd), { kind: "records", width: rec }).stored).equals(odd));
+  assert.ok(decompressChunk(compressChunk(Buffer.from(odd), sha(odd), { kind: "records", width: 1 }).stored).equals(odd));
+});
+
+test("a LAS header gives its record length; LAZ and non-LAS give no record hint", () => {
+  const head = (format: number, recordLength: number) => {
+    const b = Buffer.alloc(227);
+    b.write("LASF", 0, "latin1");
+    b[104] = format;
+    b.writeUInt16LE(recordLength, 105);
+    return b;
+  };
+  const rd = (b: Buffer) => (offset: number, length: number) => (offset >= b.length ? null : b.subarray(offset, offset + length));
+  assert.deepEqual(lasHint(rd(head(3, 34))), { kind: "records", width: 34 });
+  assert.deepEqual(lasHint(rd(head(1, 28))), { kind: "records", width: 28 });
+  assert.deepEqual(lasHint(rd(head(3 | 0x80, 34))), { kind: "incompressible" }, "LAZ is already compressed");
+  assert.equal(lasHint(rd(Buffer.from("not a las file at all, only some text"))), null);
+  assert.deepEqual(lasHint(rd(head(3, 0))), { kind: "auto" });
 });

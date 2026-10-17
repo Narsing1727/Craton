@@ -20,7 +20,7 @@ export const schemas: Record<string, Schema> = {
   ),
   Repo: obj({
     owner: str, name: str, description: str, visibility: { type: "string", enum: ["public", "private"] }, defaultBranch: str, crs: str,
-    nodata: nullable(num), verticalDatum: nullable(int), requireChecks: bool, requireReview: bool, requireOwnerReview: bool,
+    nodata: nullable(num), verticalDatum: nullable(int), requireChecks: bool, requireReview: bool, requireOwnerReview: bool, requireCog: bool,
     stars: int, forks: int, license: str, topics: arr(str), lockPatterns: arr(str), sizeBytes: int, createdAt: str, updatedAt: str,
   }),
   RepoDetail: {
@@ -77,7 +77,7 @@ export const schemas: Record<string, Schema> = {
   FileInfo: obj(
     {
       path: str, ref: str, commit: str, size: int, sha256: str, blob: str, dataType: nullable(str), chunkCount: int, uniqueChunks: int,
-      storedBytes: int, codecs: arr(str), raster: { type: ["object", "null"] }, vector: { type: ["object", "null"] }, extent: { type: ["array", "null"], items: num },
+      storedBytes: int, codecs: arr(str), raster: { type: ["object", "null"] }, cog: { type: ["array", "null"], items: str }, pointCloud: { type: ["object", "null"] }, netcdf: { type: ["object", "null"] }, hdf5: { type: ["object", "null"] }, vector: { type: ["object", "null"] }, extent: { type: ["array", "null"], items: num },
       table: { type: ["object", "null"] }, history: arr(obj({ sha: str, message: str, author: str, timestamp: str, change: str })),
     },
     ["path", "ref", "commit", "size", "sha256", "blob", "chunkCount", "uniqueChunks", "storedBytes", "codecs", "history"],

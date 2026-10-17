@@ -26,7 +26,7 @@ const routes = [
   "/", "/explore", "/trending", "/dashboard", "/pulls", "/issues", "/stars", "/search?q=dem",
   "/settings", "/settings/security", "/settings/billing", "/settings/tokens", "/settings/developer", "/new", "/orgs/new",
   "/hydrolab", R, `${R}/issues`, `${R}/pulls`, `${R}/checks`, `${R}/branches`, `${R}/commits`, `${R}/releases`, `${R}/storage`, `${R}/insights`,
-  `${R}/settings`, `${R}/settings/webhooks`, `${R}/settings/sharing`, `${R}/settings/collaborators`, `${R}/milestones`, `${R}/compare`, `${R}/releases/new`, `${R}/issues/new`, `${R}/pulls/new`, `${R}/tags`,
+  `${R}/settings`, `${R}/settings/webhooks`, `${R}/settings/sharing`, `${R}/settings/collaborators`, `${R}/milestones`, `${R}/reviews`, `${R}/compare`, `${R}/releases/new`, `${R}/issues/new`, `${R}/pulls/new`, `${R}/tags`,
   `${R}/blob/terrain/basin_dem.tif`, `${R}/blob/gauges.csv`, `${R}/blob/README.md`, `${R}/blob/vectors/catchment.shp`, `${R}/tree/main/terrain`,
   `${R}/commit/${commits[0].sha}`, `${R}/pull/${pulls[0].number}`, `${R}/issues/${issues[0].number}`,
   "/docs", "/api-reference", "/cli", "/pricing", "/about", "/help", "/security", "/changelog", "/contact", "/terms", "/privacy",

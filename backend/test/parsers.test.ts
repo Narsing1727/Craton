@@ -52,3 +52,18 @@ test("HEC-RAS plan references", () => {
   const files = hecRas();
   assert.deepEqual(hecRasPlanRefs(files["model/chalakudy.p01"].toString()), { geom: "g01", flow: "u01" });
 });
+
+test("only the AUTHORITY of the whole coordinate system counts, not the unit's or the datum's", () => {
+  // ESRI-style WKT as PDAL writes it into LAS files: no code of its own, but the unit carries EPSG 9002 (foot).
+  const esri =
+    'PROJCS["NAD_1983_HARN_Lambert_Conformal_Conic",GEOGCS["GCS_North_American_1983_HARN",DATUM["D_North_American_1983_HARN",SPHEROID["GRS_1980",6378137.0,298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Lambert_Conformal_Conic"],PARAMETER["False_Easting",1312335.958],UNIT["foot",0.3048,AUTHORITY["EPSG","9002"]]]';
+  assert.equal(epsgFromWkt(esri), null, "a unit's code is not the CRS");
+  // The same with its own code at the top level.
+  assert.equal(epsgFromWkt(esri.slice(0, -1) + ',AUTHORITY["EPSG","2992"]]'), 2992);
+  // A datum or base CRS code inside is ignored when the top level has none; a name still gives a UTM zone.
+  assert.equal(epsgFromWkt('PROJCS["WGS 84 / UTM zone 43N",GEOGCS["WGS 84",DATUM["WGS_1984",AUTHORITY["EPSG","6326"]],AUTHORITY["EPSG","4326"]],UNIT["metre",1,AUTHORITY["EPSG","9001"]]]'), 32643);
+  // WKT2 uses ID.
+  assert.equal(epsgFromWkt('PROJCRS["WGS 84 / UTM zone 43N",BASEGEOGCRS["WGS 84",ID["EPSG",4326]],ID["EPSG",32643]]'), 32643);
+  // Quotes can hold brackets and the word AUTHORITY.
+  assert.equal(epsgFromWkt('PROJCS["odd [AUTHORITY[\\"EPSG\\",\\"1\\"]] name",AUTHORITY["EPSG","32644"]]'), 32644);
+});

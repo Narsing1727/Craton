@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { notify } from "@/components/button-status";
-import { Download, LogOut, MailCheck, MailWarning, Trash2 } from "lucide-react";
+import { Download, KeyRound, LogOut, MailCheck, MailWarning, Trash2 } from "lucide-react";
+import { ConfirmAction } from "@/components/craton-actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,8 +15,9 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { changePasswordAction, deleteAccountAction, resendVerificationAction, revokeSessionAction, saveProfileAction } from "@/app/auth-actions";
-import type { ApiSecurityEvent, ApiSession, ApiTwoFactor } from "@/lib/api";
+import { changePasswordAction, deleteAccountAction, disconnectGoogleAction, passkeyRegisterAction, passkeyRegisterOptionsAction, removePasskeyAction, renamePasskeyAction, resendVerificationAction, revokeSessionAction, saveProfileAction } from "@/app/auth-actions";
+import { createPasskey, passkeyErrorMessage, passkeysSupported } from "@/lib/webauthn";
+import type { ApiIdentities, ApiPasskey, ApiSecurityEvent, ApiSession, ApiTwoFactor } from "@/lib/api";
 import { TwoFactorCard } from "@/components/two-factor-card";
 import { timeAgo } from "@/lib/format";
 
@@ -32,8 +34,26 @@ function device(ua: string | null) {
   return os ? `${browser} on ${os}` : browser;
 }
 
-export function SettingsView({ tab, profile, sessions, twoFactor, events = [] }: { tab: Tab; profile: AccountProfile | null; sessions: ApiSession[]; twoFactor: ApiTwoFactor | null; events?: ApiSecurityEvent[] }) {
+export function SettingsView({
+  tab,
+  profile,
+  sessions,
+  twoFactor,
+  events = [],
+  identities = null,
+  passkeys = null,
+}: {
+  tab: Tab;
+  profile: AccountProfile | null;
+  sessions: ApiSession[];
+  twoFactor: ApiTwoFactor | null;
+  events?: ApiSecurityEvent[];
+  identities?: ApiIdentities | null;
+  passkeys?: ApiPasskey[] | null;
+}) {
   const me = profile ?? { handle: "priyam", name: "Priya Menon", email: "priya@hydrolab.org", bio: "Hydrologist building open flood models.", emailVerified: true };
+  // Unknown (API down, demo) is treated as "has a password": the old behaviour.
+  const hasPassword = identities?.hasPassword ?? true;
   return (
     <div className="flex flex-col gap-8">
       <div>
@@ -48,11 +68,13 @@ export function SettingsView({ tab, profile, sessions, twoFactor, events = [] }:
       </TabsContent>
       <TabsContent value="security" className="flex flex-col gap-4">
         <EmailCard me={me} live={Boolean(profile)} />
-        <PasswordCard live={Boolean(profile)} />
+        {identities && <SignInMethodsCard identities={identities} />}
+        {passkeys && <PasskeysCard passkeys={passkeys} />}
+        <PasswordCard live={Boolean(profile)} hasPassword={hasPassword} />
         <TwoFactorCard status={twoFactor} live={Boolean(profile)} />
         <SessionsCard sessions={sessions} />
         {profile && <SecurityLogCard events={events} />}
-        <DataCard handle={me.handle} live={Boolean(profile)} />
+        <DataCard handle={me.handle} live={Boolean(profile)} hasPassword={hasPassword} />
       </TabsContent>
     </Tabs>
     </div>
@@ -158,7 +180,197 @@ function EmailCard({ me, live }: { me: AccountProfile; live: boolean }) {
   );
 }
 
-function PasswordCard({ live }: { live: boolean }) {
+const TRANSPORT: Record<string, string> = { internal: "this device", hybrid: "a phone", usb: "a security key", nfc: "a security key", ble: "a security key", smartcard: "a smart card" };
+
+/** Passkeys: sign in with a fingerprint, face, PIN or security key. The private key never leaves the device. */
+function PasskeysCard({ passkeys }: { passkeys: ApiPasskey[] }) {
+  const router = useRouter();
+  const [supported, setSupported] = useState(true);
+  useEffect(() => setSupported(passkeysSupported()), []);
+  const [name, setName] = useState("");
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
+  const [pending, start] = useTransition();
+
+  function add() {
+    start(async () => {
+      const options = await passkeyRegisterOptionsAction();
+      if (!options.ok) return void notify.error("Couldn’t start adding a passkey", { description: options.error });
+      try {
+        const credential = await createPasskey(options.options as Parameters<typeof createPasskey>[0]);
+        const label = name.trim() || `${device(navigator.userAgent)} passkey`;
+        const made = await passkeyRegisterAction(credential, label);
+        if (!made.ok) return void notify.error("Couldn’t add the passkey", { description: made.error });
+        setName("");
+        notify.success("Passkey added", { description: "You can now sign in with it." });
+        router.refresh();
+      } catch (err) {
+        const message = passkeyErrorMessage(err);
+        if (message) notify.error("No passkey was added", { description: message });
+      }
+    });
+  }
+
+  function rename() {
+    if (!renaming) return;
+    const target = renaming;
+    start(async () => {
+      const r = await renamePasskeyAction(target.id, target.value);
+      if (!r.ok) return void notify.error("Couldn’t rename it", { description: r.error });
+      setRenaming(null);
+      router.refresh();
+    });
+  }
+
+  async function remove(p: ApiPasskey) {
+    const r = await removePasskeyAction(p.id);
+    if (!r.ok) return void notify.error("Couldn’t remove the passkey", { description: r.error });
+    notify.success(`Removed ${p.name}`);
+    router.refresh();
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Passkeys</CardTitle>
+        <CardDescription>Sign in with your fingerprint, face, screen lock or a security key, with nothing to type and nothing to phish. The private key stays on your device.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4 pt-4">
+        {passkeys.length > 0 && (
+          <ul className="flex flex-col divide-y divide-border border border-border">
+            {passkeys.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
+                <div className="flex min-w-0 items-start gap-3">
+                  <KeyRound className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <div className="min-w-0">
+                    {renaming?.id === p.id ? (
+                      <form
+                        className="flex items-center gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          rename();
+                        }}
+                      >
+                        <Input value={renaming.value} onChange={(e) => setRenaming({ id: p.id, value: e.target.value })} className="h-8 w-52" maxLength={60} aria-label="Passkey name" autoFocus />
+                        <Button type="submit" size="sm" disabled={pending || !renaming.value.trim()}>
+                          Save
+                        </Button>
+                        <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(null)}>
+                          Cancel
+                        </Button>
+                      </form>
+                    ) : (
+                      <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                        {p.name}
+                        {p.synced && <Badge variant="outline">Synced</Badge>}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Added {timeAgo(p.createdAt)} · {p.lastUsedAt ? `used ${timeAgo(p.lastUsedAt)}` : "not used yet"}
+                      {p.transports.length > 0 && ` · ${[...new Set(p.transports.map((t) => TRANSPORT[t] ?? t))].join(", ")}`}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button variant="ghost" size="sm" onClick={() => setRenaming({ id: p.id, value: p.name })}>
+                    Rename
+                  </Button>
+                  <ConfirmAction
+                    trigger={
+                      <Button variant="ghost" size="sm" className="text-destructive hover:bg-destructive/10">
+                        Remove
+                      </Button>
+                    }
+                    title={`Remove “${p.name}”?`}
+                    description="You won’t be able to sign in with it any more. Your other ways of signing in are not affected."
+                    confirmLabel="Remove passkey"
+                    onConfirm={() => void remove(p)}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {supported ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name it, like “Work laptop”…" className="h-8 w-60" maxLength={60} aria-label="Name for the new passkey" autoComplete="off" />
+            <Button size="sm" onClick={add} loading={pending} disabled={pending}>
+              Add a passkey
+            </Button>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">This browser can’t create passkeys. Open Settings in a current Chrome, Edge, Safari or Firefox to add one.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Google, with a way to connect or disconnect it. Only drawn when the API answered. */
+function SignInMethodsCard({ identities }: { identities: ApiIdentities }) {
+  const google = identities.identities.find((i) => i.provider === "google");
+  const [removing, startRemove] = useTransition();
+  const router = useRouter();
+  const search = useSearchParams();
+  const note = (
+    {
+      linked: "Google is connected. You can now sign in with it.",
+      taken: "That Google account is already connected to another Craton account.",
+      denied: "Google sign-in was cancelled.",
+      expired: "That Google sign-in expired. Try again.",
+      error: "Couldn’t connect Google. Try again in a moment.",
+      off: "Google sign-in isn’t set up on this server.",
+      offline: "The Craton API isn’t reachable right now. Try again in a moment.",
+    } as Record<string, string>
+  )[search.get("google") ?? ""];
+
+  function disconnect() {
+    startRemove(async () => {
+      const result = await disconnectGoogleAction();
+      if (!result.ok) return void notify.error("Couldn’t disconnect Google", { description: result.error });
+      notify.success("Google disconnected");
+      router.refresh();
+    });
+  }
+
+  if (!google && !identities.googleAvailable) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Sign-in methods</CardTitle>
+        <CardDescription>{google ? "You can sign in with your password or with Google." : "Add Google to sign in without typing your password."}</CardDescription>
+      </CardHeader>
+      <CardContent className="pt-4">
+        {note && (
+          <p role="status" className="mb-4 border border-border bg-muted/30 p-3 text-xs text-muted-foreground text-pretty">
+            {note}
+          </p>
+        )}
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Google</p>
+            <p className="truncate text-xs text-muted-foreground">{google ? `Connected as ${google.email}` : "Not connected"}</p>
+          </div>
+          {google ? (
+            <Button variant="outline" size="sm" onClick={disconnect} loading={removing} disabled={removing || !identities.hasPassword}>
+              Disconnect
+            </Button>
+          ) : (
+            <a href="/auth/google?link=1" className="inline-flex h-8 items-center border border-border px-3 text-sm font-medium hover:bg-muted">
+              Connect Google
+            </a>
+          )}
+        </div>
+        {google && !identities.hasPassword && (
+          <p className="mt-3 text-xs text-muted-foreground text-pretty">
+            Google is the only way into this account, so it can’t be disconnected yet. <a href="/forgot-password" className="underline underline-offset-2 hover:text-foreground">Add a password</a> first: we’ll email you a link to set one.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PasswordCard({ live, hasPassword }: { live: boolean; hasPassword: boolean }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +390,22 @@ function PasswordCard({ live }: { live: boolean }) {
       notify.success("Password changed", { description: "Every other browser was signed out." });
       router.refresh();
     });
+  }
+
+  if (!hasPassword) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Password</CardTitle>
+          <CardDescription>This account signs in with Google and has no password. If you would like one as well, we will email you a link to set it.</CardDescription>
+        </CardHeader>
+        <CardFooter className="mt-4 border-t border-border">
+          <a href="/forgot-password" className="inline-flex h-8 items-center border border-border px-3 text-sm font-medium hover:bg-muted">
+            Add a password
+          </a>
+        </CardFooter>
+      </Card>
+    );
   }
 
   return (
@@ -216,6 +444,9 @@ function PasswordCard({ live }: { live: boolean }) {
 }
 
 const EVENT_LABEL: Record<string, string> = {
+  passkey_added: "Passkey added",
+  passkey_removed: "Passkey removed",
+  passkey_rollback: "Passkey refused (its counter went backwards)",
   signed_in: "Signed in",
   sign_in_failed: "Failed sign-in attempt",
   password_changed: "Password changed",
@@ -227,8 +458,10 @@ const EVENT_LABEL: Record<string, string> = {
   two_factor_enabled: "Two-step verification turned on",
   two_factor_disabled: "Two-step verification turned off",
   recovery_codes_regenerated: "Recovery codes replaced",
+  oauth_linked: "Google connected",
+  oauth_unlinked: "Google disconnected",
 };
-const CONCERNING = new Set(["sign_in_failed", "password_reset_requested", "two_factor_disabled"]);
+const CONCERNING = new Set(["sign_in_failed", "password_reset_requested", "two_factor_disabled", "passkey_rollback"]);
 
 function SecurityLogCard({ events }: { events: ApiSecurityEvent[] }) {
   return (
@@ -311,7 +544,7 @@ function SessionsCard({ sessions }: { sessions: ApiSession[] }) {
   );
 }
 
-function DataCard({ handle, live }: { handle: string; live: boolean }) {
+function DataCard({ handle, live, hasPassword = true }: { handle: string; live: boolean; hasPassword?: boolean }) {
   const [open, setOpen] = useState(false);
   const [confirmHandle, setConfirmHandle] = useState("");
   const [password, setPassword] = useState("");
@@ -365,10 +598,12 @@ function DataCard({ handle, live }: { handle: string; live: boolean }) {
                   </FieldLabel>
                   <Input id="confirm-handle" autoComplete="off" spellCheck={false} value={confirmHandle} onChange={(e) => setConfirmHandle(e.target.value)} />
                 </Field>
-                <Field>
-                  <FieldLabel htmlFor="delete-password">Password</FieldLabel>
-                  <Input id="delete-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-                </Field>
+                {hasPassword && (
+                  <Field>
+                    <FieldLabel htmlFor="delete-password">Password</FieldLabel>
+                    <Input id="delete-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                  </Field>
+                )}
                 {error && (
                   <p role="alert" className="text-sm text-destructive">
                     {error}
@@ -377,7 +612,7 @@ function DataCard({ handle, live }: { handle: string; live: boolean }) {
               </FieldGroup>
             </CardContent>
             <CardFooter className="mt-4 gap-2 border-t border-destructive/20">
-              <Button type="submit" variant="destructive" loading={deleting} disabled={deleting || confirmHandle.trim() !== handle || !password}>
+              <Button type="submit" variant="destructive" loading={deleting} disabled={deleting || confirmHandle.trim() !== handle || (hasPassword && !password)}>
                 <Trash2 data-icon="inline-start" />
                 {deleting ? "Deleting…" : "Delete my account"}
               </Button>

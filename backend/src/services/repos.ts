@@ -29,6 +29,7 @@ export type RepoRow = {
   topics: string;
   lock_patterns: string;
   require_owner_review: number;
+  require_cog: number;
   size_bytes: number;
   created_at: string;
   updated_at: string;
@@ -90,7 +91,7 @@ export function listRepos(ctx: Ctx, userId: number | null, filter: { owner?: str
 export function updateRepo(
   ctx: Ctx,
   repo: RepoRow,
-  patch: Partial<{ name: string; description: string; defaultBranch: string; visibility: "public" | "private"; crs: string; nodata: number | null; verticalDatum: number | null; requireChecks: boolean; requireReview: boolean; requireOwnerReview: boolean; license: string; topics: string[]; lockPatterns: string[] }>,
+  patch: Partial<{ name: string; description: string; defaultBranch: string; visibility: "public" | "private"; crs: string; nodata: number | null; verticalDatum: number | null; requireChecks: boolean; requireReview: boolean; requireOwnerReview: boolean; requireCog: boolean; license: string; topics: string[]; lockPatterns: string[] }>,
 ) {
   if (patch.name !== undefined) {
     const name = patch.name.trim().toLowerCase();
@@ -126,6 +127,7 @@ export function updateRepo(
   if (patch.requireChecks !== undefined) set.push(["require_checks", patch.requireChecks ? 1 : 0]);
   if (patch.requireReview !== undefined) set.push(["require_review", patch.requireReview ? 1 : 0]);
   if (patch.requireOwnerReview !== undefined) set.push(["require_owner_review", patch.requireOwnerReview ? 1 : 0]);
+  if (patch.requireCog !== undefined) set.push(["require_cog", patch.requireCog ? 1 : 0]);
   if (patch.visibility !== undefined && patch.visibility !== repo.visibility) {
     set.push(["visibility", patch.visibility]);
     if (patch.visibility === "public") {
@@ -162,6 +164,7 @@ export function repoJson(repo: RepoRow) {
     requireChecks: Boolean(repo.require_checks),
     requireReview: Boolean(repo.require_review),
     requireOwnerReview: Boolean(repo.require_owner_review),
+    requireCog: Boolean(repo.require_cog),
     stars: repo.stars,
     forks: repo.forks,
     tags: JSON.parse(repo.tags) as string[],

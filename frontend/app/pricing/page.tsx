@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/accordion";
 
 export const metadata: Metadata = {
+  alternates: { types: { "text/markdown": "/pricing.md" } },
   title: "Pricing",
   description: "Craton's free plan, its limits, and what paid plans will add.",
 };

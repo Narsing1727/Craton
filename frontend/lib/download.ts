@@ -10,8 +10,8 @@ export function downloadFile(filename: string, content: string, type = "text/pla
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Deterministic fake SHA-256 for mock data (same input, same hash). */
-export function mockSha256(input: string) {
+/** A stable stand-in for a SHA-256 in demo data: eight rounds of FNV-1a, shown as 64 hex characters. */
+export function mockSha256(input: string): string {
   let h1 = 0x811c9dc5;
   let out = "";
   for (let round = 0; round < 8; round++) {

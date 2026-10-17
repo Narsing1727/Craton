@@ -10,6 +10,7 @@ import { ScrollProgress } from "@/components/ui/scroll-progress";
 import { File, Folder, Tree } from "@/components/ui/file-tree";
 
 export const metadata: Metadata = {
+  alternates: { types: { "text/markdown": "/docs.md" } },
   title: "Documentation",
   description: "Install Craton, version your first basin model, and learn how chunking, map diffs, checks and provenance work.",
 };
@@ -19,9 +20,9 @@ const slug = (s: string) => s.toLowerCase().replaceAll("&", "and").replace(/[^a-
 const nav = [
   { heading: "Getting started", items: ["Introduction", "Install the CLI", "Your first repository", "Authentication"] },
   { heading: "By goal", items: ["Version a HEC-RAS project", "Share a DEM with a partner", "See what changed in a DEM", "Review a change as a team", "Work with part of a big repository"] },
-  { heading: "Working with data", items: ["Supported formats", "Chunking & deduplication", "Large file workflow", "Map diffs"] },
-  { heading: "Collaboration", items: ["Branches", "Pull requests", "Reviews", "Code owners", "Provenance"] },
-  { heading: "Reference", items: ["CLI commands", "REST API", "Webhooks", "Rate limits"] },
+  { heading: "Working with data", items: ["Supported formats", "Chunking & deduplication", "Large file workflow", "Map diffs", "Your own checks", "Secret scanning"] },
+  { heading: "Collaboration", items: ["Branches", "Pull requests", "Reviews", "Model review", "Code owners", "Provenance"] },
+  { heading: "Reference", items: ["CLI commands", "REST API", "Webhooks", "Rate limits", "For agents and AI tools"] },
 ];
 
 // What each kind of file gets today. Every file is stored as content-defined chunks; the rest is per format.
@@ -216,17 +217,68 @@ export default function DocsPage() {
             <Link href="/hydrolab/chalakudy-basin/compare?base=main&head=levee-scenario" className="text-sm text-accent hover:underline">Compare two branches →</Link>
           </DocSection>
 
+          <DocSection title="Your own checks">
+            <P>
+              Put a file called <code className="font-mono text-foreground">.craton-checks.json</code> at the root of the repository and every push is judged against it, next to the built-in checks. The rules live in the repository, so they are reviewed in pull requests like the model and they travel with a clone.
+            </P>
+            <pre className="max-w-3xl overflow-x-auto border border-border bg-card p-4 text-xs leading-relaxed">{`{
+  "version": 1,
+  "checks": [
+    { "name": "Terrain is on the project grid",
+      "files": "terrain/*.tif",
+      "expect": { "crs": 32643, "nodata": -9999, "cellSize": { "min": 5, "max": 30 },
+                  "within": [75.9, 10.2, 76.4, 10.4] } },
+    { "name": "Gauge tables", "files": "gauges/*.csv",
+      "expect": { "columns": ["station", "datetime", "discharge"],
+                  "notEmpty": ["discharge"], "numeric": { "discharge": { "min": 0 } },
+                  "unique": ["station", "datetime"], "sorted": "datetime" } },
+    { "name": "Plans ran cleanly", "files": "model/*.p??.hdf",
+      "expect": { "run": { "stable": true, "maxWselError": { "max": 0.05 } } } },
+    { "require": ["README.md", "model/*.prj"] },
+    { "files": "**", "expect": { "maxBytes": "500MB" }, "severity": "warn" }
+  ]
+}`}</pre>
+            <P>
+              Expectations are judged only from what each file&rsquo;s own header says, and a kind of file that cannot answer one is skipped. If no matched file could answer it, the check says so instead of passing silently. An unknown key, a wrong type or a check that does nothing is itself a failure, with its path. Set <code className="font-mono text-foreground">&quot;severity&quot;: &quot;warn&quot;</code> to roll a rule out without blocking anyone.
+            </P>
+            <div className="grid max-w-3xl gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+              <p><span className="text-foreground">Rasters:</span> crs, nodata, cellSize, width, height, dataType, cog, within</p>
+              <p><span className="text-foreground">Vectors:</span> crs, geometry, fields, features, within</p>
+              <p><span className="text-foreground">Tables (CSV):</span> columns, rows, notEmpty, numeric, unique, sorted</p>
+              <p><span className="text-foreground">Models and grids:</span> run, groups (HDF5), variables (NetCDF), points (LAS)</p>
+              <p><span className="text-foreground">Any file:</span> minBytes, maxBytes, and require / forbid patterns</p>
+            </div>
+          </DocSection>
+
+          <DocSection title="Secret scanning">
+            <P>
+              History can&rsquo;t be edited, so a password that lands in a commit stays there. Every push and every upload from the browser is therefore read first, and refused if a file it adds or changes holds a credential: a Craton access token that still works, a GitHub token, an AWS access key id, a Google API key or client secret, a Slack token, a Stripe live key, an Anthropic or OpenAI key, a private key, or a database address with a real password. Only text files up to 2 MB are read, and only what is new in the push, including commits a later commit undid.
+            </P>
+            <P>
+              The message names the file and line and shows the first few characters, never the secret. Take it out and push again; if it was ever real, replace it at its source. A line that is only an example can carry <code className="font-mono text-sm text-foreground">craton:allow-secret</code>. An administrator of the repository who knows it is safe can push anyway with a reason (<code className="font-mono text-sm text-foreground">craton push --allow-secrets &quot;why&quot;</code>, or the same field on the API); the reason goes into the audit log, and a live Craton token that went into a public repository this way is revoked at once. New Craton tokens start with <code className="font-mono text-sm text-foreground">crt_pat_</code> and end in a checksum, so scanners (ours and others&rsquo;) can recognise them without guessing.
+            </P>
+          </DocSection>
+
           <DocSection title="Branches">
             <P>A branch is free until you change a file: it points at existing chunks. Use one per scenario, such as a levee raise or a new survey.</P>
             <CommandLine command="craton branch levee-scenario && craton switch levee-scenario" />
           </DocSection>
 
           <DocSection title="Pull requests">
-            <P>Open a pull request to propose merging a branch. Checks validate CRS, vertical datum, nodata, shapefile sets, model schema and chunk integrity before a merge is allowed.</P>
+            <P>Open a pull request to propose merging a branch. Checks validate CRS (rasters, shapefiles, GeoPackage layers and LAS point clouds), vertical datum, nodata, Cloud Optimized GeoTIFF layout (advisory unless the repository requires it), shapefile sets, HEC-RAS and SWMM model structure, point cloud headers and chunk integrity before a merge is allowed.</P>
           </DocSection>
 
           <DocSection title="Reviews">
             <P>Reviewers comment on the pull request, approve or ask for changes; each file shows its map or table diff. Branch protection can require passing checks, an approval of the latest commit, and approval from code owners.</P>
+          </DocSection>
+
+          <DocSection title="Model review">
+            <P>
+              Use the Model review tab when a model is ready to be checked. A review is pinned to one commit and its Merkle root, so the sign-off always means these exact files. It carries a QA checklist drawn from common flood-modelling practice (file and version management, terrain, mesh, roughness, boundaries, structures, run results, calibration, deliverables), a modelling log that is never edited, and a decision by a reviewer.
+            </P>
+            <P>
+              The validation findings and each HEC-RAS plan&rsquo;s own run status are captured as evidence and shown beside the items they bear on. They are suggestions: a person marks every item. Approval needs every item decided and every failure explained. An author may approve their own review; the record then says it was not independent. The export is a Markdown document you can attach to a submission.
+            </P>
           </DocSection>
 
           <DocSection title="Code owners">
@@ -263,6 +315,15 @@ export default function DocsPage() {
 
           <DocSection title="Rate limits">
             <P>API calls are limited to 1,200 per minute per token (per address when you are not signed in), with <code className="font-mono text-sm text-foreground">RateLimit-*</code> headers on every response and <code className="font-mono text-sm text-foreground">Retry-After</code> when you hit it. The CLI moves chunks a few at a time and retries; what you can store is limited by your plan.</P>
+          </DocSection>
+
+          <DocSection title="For agents and AI tools">
+            <P>
+              Every reading page has a Markdown version at the same address with <code className="font-mono text-sm text-foreground">.md</code> added (<code className="font-mono text-sm text-foreground">/docs.md</code>, <code className="font-mono text-sm text-foreground">/api-reference.md</code>, <code className="font-mono text-sm text-foreground">/cli.md</code> and the others), and the page itself answers with it when a request says <code className="font-mono text-sm text-foreground">Accept: text/markdown</code>. They are made from the pages people read, so they can&rsquo;t disagree with them.
+            </P>
+            <P>
+              <a href="/llms.txt" className="text-accent underline underline-offset-2">/llms.txt</a> lists them in the llmstxt.org layout, <a href="/llms-full.txt" className="text-accent underline underline-offset-2">/llms-full.txt</a> is all of them in one file, and <a href="/skill.md" className="text-accent underline underline-offset-2">/skill.md</a> is an agent skill: how to sign in, the everyday commands and the rules that matter (pull before you push, locks, checks, secrets). The whole REST API is also an OpenAPI document at <code className="font-mono text-sm text-foreground">/v1/openapi.json</code>, and a read-only MCP server is described in the API reference.
+            </P>
           </DocSection>
         </article>
       </div>

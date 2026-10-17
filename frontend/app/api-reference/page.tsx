@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { loadOperations, loadWebhookEvents, opKey, type OpDetail } from "@/lib/openapi";
 
 export const metadata: Metadata = {
+  alternates: { types: { "text/markdown": "/api-reference.md" } },
   title: "API reference",
   description: "The Craton REST API: repositories, chunked transfer, history, checks, reviews and releases.",
 };
@@ -29,7 +30,21 @@ const groups: Group[] = [
       { method: "POST", path: "/auth/forgot", note: "Ask for a password reset email: { login } (a username or an email). Always answers the same, whether or not there is such an account." },
       { method: "POST", path: "/auth/reset", note: "Set a new password with the emailed token: { token, password }. Other sessions are signed out." },
       { method: "POST", path: "/auth/verify", note: "Confirm an email address with the token from the verification email: { token }." },
+      { method: "GET", path: "/auth/providers", note: "Which sign-in providers this server offers: { google }. The sign-in page shows only buttons that work." },
+      { method: "POST", path: "/auth/passkey/options", note: "Begin signing in with a passkey: returns { challenge, rpId, userVerification, allowCredentials: [] }, so the device offers whichever passkeys it holds for this site. No username needed." },
+      { method: "POST", path: "/auth/passkey/login", note: "Finish it: { credential } as the browser returned it (ids and bytes as base64url). The challenge, origin, relying-party hash, user presence, signature and counter are all checked. Answers a session { token }, or { mfaRequired, ticket } when the device did not verify the person and the account has two-step verification." },
+      { method: "POST", path: "/auth/{provider}/start", note: "Begin signing in with Google or GitHub (provider is google or github): { next?, link? } returns { url, state }. Send the browser to url. With a session and link: true the Google account is added to that account instead." },
+      { method: "POST", path: "/auth/{provider}/callback", note: "Finish it with the { code, state } the provider sent back. Answers a session { token }, { mfaRequired, ticket } for an account with two-step verification, { needsUsername, ticket, suggestion } the first time, or { linked } when it began in Settings. Everything is checked: state, PKCE, the ID token's signature, audience, expiry and nonce, and that Google verified the address." },
+      { method: "POST", path: "/auth/{provider}/pending", note: "What the choose-a-username step shows for a ticket: { ticket } gives { email, name, suggestion }." },
+      { method: "POST", path: "/auth/{provider}/complete", note: "First sign-in with Google: { ticket, username, name? } creates the account (its address already verified, no password) and starts the session." },
       { method: "GET", path: "/user", note: "The signed-in user and the owners they can push to.", auth: "token" },
+      { method: "GET", path: "/user/identities", note: "How this account signs in: { identities, hasPassword, googleAvailable }. Web sessions only." },
+      { method: "POST", path: "/user/passkeys/options", note: "Begin adding a passkey: returns the WebAuthn creation options (challenge, relying party, user handle, accepted algorithms, passkeys to exclude). Web sessions only; 20 requests an hour.", auth: "token" },
+      { method: "POST", path: "/user/passkeys", note: "Finish adding one: { credential, name? }. Up to 20 per account. Attestation is not used.", auth: "token" },
+      { method: "GET", path: "/user/passkeys", note: "Your passkeys: name, when added and last used, transports, whether it syncs between devices.", auth: "token" },
+      { method: "PATCH", path: "/user/passkeys/{id}", note: "Rename one: { name }.", auth: "token" },
+      { method: "DELETE", path: "/user/passkeys/{id}", note: "Remove one. Refused while it is the only way into the account.", auth: "token" },
+      { method: "DELETE", path: "/user/identities/{provider}", note: "Disconnect Google or GitHub. Refused while it is the only way in (no password, passkey or other provider): add a password first (\"Forgot password\" sets one by email)." },
       { method: "PATCH", path: "/user", note: "Change your profile: { name?, bio?, role?, onboarded? }." },
       { method: "DELETE", path: "/user", note: "Delete your account: { handle, password }. Your conversations stay as @ghost; blocked while you are the only owner of an organization." },
       { method: "POST", path: "/user/verify/resend", note: "Send the verification email again." },
@@ -52,6 +67,8 @@ const groups: Group[] = [
       { method: "POST", path: "/user/tokens", note: "Create a token. It’s shown once; only its hash is stored.", auth: "token" },
       // body: { note, scopes, expiresInDays, repos: ["owner/name", ...] } limits the token to those repositories
       { method: "DELETE", path: "/user/tokens/{id}", note: "Revoke a token immediately.", auth: "token" },
+      { method: "GET", path: "/user/tokens/{id}/requests", note: "The last 100 requests that access token made: method, route, status, milliseconds, time and where from. Never bodies or query strings. Web sessions only.", auth: "token" },
+      { method: "GET", path: "/user/audit-log", note: "What others did, or tried and were refused, on your personal repositories. Filters: actor, outcome (done|denied), before, limit; ?format=csv for up to 5,000 entries.", auth: "token" },
     ],
   },
   {
@@ -63,6 +80,7 @@ const groups: Group[] = [
       { method: "GET", path: "/owners/{handle}/usage", note: "Storage for one account or organization (members only).", auth: "token" },
       { method: "GET", path: "/owners/{handle}/starred", note: "Repositories that person starred (those you can see)." },
       { method: "POST", path: "/orgs", note: "Create an organization; you become its owner.", auth: "token" },
+      { method: "GET", path: "/orgs/{org}/audit-log", note: "Changes made, and attempts refused, under the organization: who, what, which repository, outcome, and whether by token or browser. Owners only. Same filters and CSV as /user/audit-log.", auth: "token" },
       { method: "POST", path: "/orgs/{org}/members", note: "Add a member (owners and maintainers).", auth: "token" },
       { method: "PATCH", path: "/orgs/{org}", note: "Change the name or description (owners): { name?, bio? }.", auth: "token" },
       { method: "DELETE", path: "/orgs/{org}", note: "Delete an empty organization: { confirm } is its handle. Web sessions only.", auth: "token" },
@@ -86,6 +104,7 @@ const groups: Group[] = [
       { method: "DELETE", path: "/repos/{owner}/{repo}", note: "Delete; chunks other repositories use are kept.", auth: "admin" },
       { method: "GET", path: "/repos/{owner}/{repo}/storage", note: "Logical vs stored bytes, savings, and public repositories sharing chunks." },
       { method: "GET", path: "/repos/{owner}/{repo}/citation", note: "APA, BibTeX and CITATION.cff, from the repository’s own CITATION.cff or its real metadata." },
+      { method: "GET", path: "/repos/{owner}/{repo}/dataset.jsonld", note: "schema.org Dataset markup (JSON-LD) for a public repository, in the form Google Dataset Search reads. 404 for a private one." },
       { method: "GET", path: "/repos/{owner}/{repo}/audit", note: "Every commit with its Merkle root, per-file inclusion proofs and the ref log." },
     ],
   },
@@ -112,7 +131,7 @@ const groups: Group[] = [
     intro: "History is append-only: a branch moves only by fast-forward, and only if it’s still where you last saw it.",
     endpoints: [
       { method: "GET", path: "/repos/{owner}/{repo}/refs", note: "Branch and tag tips." },
-      { method: "POST", path: "/repos/{owner}/{repo}/refs/heads/{branch}", note: "Move a branch: { commit, expected }. Runs checks on the new tip.", auth: "write" },
+      { method: "POST", path: "/repos/{owner}/{repo}/refs/heads/{branch}", note: "Move a branch: { commit, expected }. Runs checks on the new tip. The new commits are read for credentials first and refused with 422 secret_detected (file, line and kind, never the secret); an administrator can add { allowSecrets: \"reason\" } to push anyway, which is written to the audit log.", auth: "write" },
       { method: "GET", path: "/repos/{owner}/{repo}/branches", note: "Branches with ahead/behind counts against the default branch." },
       { method: "POST", path: "/repos/{owner}/{repo}/branches", note: "Create a branch: { name, from }.", auth: "write" },
       { method: "DELETE", path: "/repos/{owner}/{repo}/branches/{name}", note: "Delete a branch pointer; commits stay.", auth: "write" },
@@ -132,7 +151,7 @@ const groups: Group[] = [
       { method: "POST", path: "/repos/{owner}/{repo}/restore", note: "Put one file back to an earlier version as a new commit: { path, from, branch?, message? }. History is never rewritten.", auth: "write" },
       { method: "GET", path: "/repos/{owner}/{repo}/raw/{ref}/{path}", note: "File bytes (up to 16 MB; larger files go through the CLI)." },
       { method: "GET", path: "/repos/{owner}/{repo}/table-diff/{ref}/{path}", note: "A CSV compared with another version (?base=): rows added, removed and changed cell by cell, matched by a key." },
-      { method: "POST", path: "/repos/{owner}/{repo}/upload", note: "Add files from the browser: multipart `file` parts with a matching JSON `paths` list, plus folder, branch, from, expected and message. One commit; locks, plan limits and the branch-moved check apply. Up to 100 MB and 200 files.", auth: "write" },
+      { method: "POST", path: "/repos/{owner}/{repo}/upload", note: "Add files from the browser: multipart `file` parts with a matching JSON `paths` list, plus folder, branch, from, expected and message. One commit; locks, plan limits and the branch-moved check apply. Files are read for credentials first (422 secret_detected); an administrator can add an `allowSecrets` reason field to go ahead. Up to 100 MB and 200 files.", auth: "write" },
       { method: "GET", path: "/repos/{owner}/{repo}/paths/{ref}", note: "Every file path with its size, for file finders." },
       { method: "GET", path: "/repos/{owner}/{repo}/archive/{ref}", note: "The repository (or ?path=<folder>) as a ZIP, streamed. Over 4 GB, use the CLI." },
     ],
@@ -181,7 +200,7 @@ const groups: Group[] = [
     title: "Checks, reviews and releases",
     intro: "Checks run on every push. With branch protection on, failing checks or a missing approval block the merge.",
     endpoints: [
-      { method: "GET", path: "/repos/{owner}/{repo}/checks", note: "Check runs: CRS, vertical datum, nodata, shapefile sets, model schema, integrity." },
+      { method: "GET", path: "/repos/{owner}/{repo}/checks", note: "Check runs: CRS, vertical datum, nodata, Cloud Optimized GeoTIFF layout, shapefile sets, HEC-RAS model schema, SWMM models, point clouds, integrity." },
       { method: "GET", path: "/repos/{owner}/{repo}/raster-stats/{ref}/{path}", note: "Numbers behind a raster change: summary of each version, a shared histogram, mean change, RMSE, area raised and lowered, volume. ?base=<ref> required." },
       { method: "GET", path: "/repos/{owner}/{repo}/badge/checks.svg", note: "Status badge of the default branch's latest check run. Public repositories only." },
       { method: "GET", path: "/repos/{owner}/{repo}/badge/{release|size|license}.svg", note: "Badges for the latest release, the stored size and the licence. Public repositories only." },
@@ -203,6 +222,19 @@ const groups: Group[] = [
       { method: "GET", path: "/repos/{owner}/{repo}/milestones", note: "Milestones with open and closed issue counts; open ones first, by due date." },
       { method: "POST", path: "/repos/{owner}/{repo}/milestones", note: "Create one: { title, description?, due? (YYYY-MM-DD) }.", auth: "write" },
       { method: "PATCH", path: "/repos/{owner}/{repo}/milestones/{id}", note: "Rename (issues follow), change the date, close or reopen.", auth: "write" },
+      { method: "GET", path: "/model-review-template", note: "The default model review checklist: id and the items, each with group, wording, a hint and where the wording comes from." },
+      { method: "GET", path: "/repos/{owner}/{repo}/model-reviews", note: "Model reviews of this repository, newest first, with item counts and the last decision." },
+      { method: "GET", path: "/repos/{owner}/{repo}/audit-log", note: "The same log for one repository. Admins only.", auth: "admin" },
+      { method: "POST", path: "/repos/{owner}/{repo}/model-reviews", note: "Open a review pinned to a commit: { title, ref? } (default branch). Captures the gate's findings and each HEC-RAS plan's run summary as evidence.", auth: "write" },
+      { method: "GET", path: "/repos/{owner}/{repo}/model-reviews/{n}", note: "One review: the pinned commit and Merkle root, the checklist with suggestions drawn from evidence, the modelling log, sign-offs and evidence." },
+      { method: "PUT", path: "/repos/{owner}/{repo}/model-reviews/{n}/items/{key}", note: "Mark one checklist item: { status: todo|pass|fail|na, note? }. Locked once approved.", auth: "write" },
+      { method: "POST", path: "/repos/{owner}/{repo}/model-reviews/{n}/log", note: "Append to the modelling log: { body }. Entries are never edited or removed.", auth: "write" },
+      { method: "POST", path: "/repos/{owner}/{repo}/model-reviews/{n}/evidence", note: "Capture the findings again, optionally re-pinning to another ref: { ref? }. Not possible once approved.", auth: "write" },
+      { method: "POST", path: "/repos/{owner}/{repo}/model-reviews/{n}/submit", note: "Send the review for decision.", auth: "write" },
+      { method: "POST", path: "/repos/{owner}/{repo}/model-reviews/{n}/decision", note: "Approve or ask for changes: { decision: approve|request_changes, comment? }. Approval needs every item marked and every failed item explained; whether the reviewer is the author is recorded.", auth: "write" },
+      { method: "POST", path: "/repos/{owner}/{repo}/model-reviews/{n}/reopen", note: "Reopen an approved review as a draft: { reason }.", auth: "write" },
+      { method: "DELETE", path: "/repos/{owner}/{repo}/model-reviews/{n}", note: "Delete a review that is not approved.", auth: "admin" },
+      { method: "GET", path: "/repos/{owner}/{repo}/model-reviews/{n}/export", note: "The review as Markdown to attach to a submission (?download=1 for a file)." },
       { method: "DELETE", path: "/repos/{owner}/{repo}/milestones/{id}", note: "Delete; its issues stay and lose the milestone.", auth: "write" },
       { method: "GET", path: "/repos/{owner}/{repo}/pulls", note: "Pull requests with check status and approvals of the current head." },
       { method: "POST", path: "/repos/{owner}/{repo}/pulls", note: "Open a pull request: { title, body, source, target }.", auth: "write" },
@@ -371,7 +403,7 @@ export default async function ApiReferencePage() {
               Send a <Link href="/settings/tokens" className="text-foreground underline underline-offset-2">personal access token</Link> as a bearer token. Public repositories can be read without one.
             </p>
             <div className="mt-3 flex flex-col gap-2">
-              <CommandLine command='curl -H "Authorization: Bearer bcn_pat_…" http://localhost:4000/v1/user' />
+              <CommandLine command='curl -H "Authorization: Bearer crt_pat_…" http://localhost:4000/v1/user' />
               <CommandLine command="curl http://localhost:4000/v1/repos/hydrolab/chalakudy-basin/compare/main...levee-scenario" />
             </div>
           </section>
@@ -440,7 +472,7 @@ export default async function ApiReferencePage() {
     "craton": {
       "command": "node",
       "args": ["--disable-warning=ExperimentalWarning", "<path>/backend/src/mcp/server.ts"],
-      "env": { "CRATON_SERVER": "http://localhost:4000", "CRATON_TOKEN": "bcn_pat_…" }
+      "env": { "CRATON_SERVER": "http://localhost:4000", "CRATON_TOKEN": "crt_pat_…" }
     }
   }
 }`}</pre>

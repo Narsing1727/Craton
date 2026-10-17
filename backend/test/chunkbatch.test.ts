@@ -139,3 +139,30 @@ test("shuffle and unshuffle are exact inverses, including a trailing partial ele
     }
   }
 });
+
+test("a batch is stored a few chunks at a time: against a slow object store it takes a fraction of one-by-one", async () => {
+  class SlowStore extends MemoryStore {
+    puts = 0;
+    async put(hash: string, stored: Buffer) {
+      this.puts++;
+      await new Promise((r) => setTimeout(r, 30));
+      return super.put(hash, stored);
+    }
+  }
+  const store = new SlowStore();
+  const slowApp = createApp({ db: openDb(":memory:"), store } as Ctx);
+  const signup = await slowApp.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "kai", email: "kai@example.org", password: "a-very-long-password" }) });
+  const t = ((await signup.json()) as { token: string }).token;
+  const auth = { authorization: `Bearer ${t}` };
+  assert.equal((await slowApp.request("/v1/repos", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ name: "slow", visibility: "private" }) })).status, 201);
+  const parts = Array.from({ length: 80 }, (_, i) => Buffer.from(`slow store chunk number ${i} ${"y".repeat(i)}`));
+  const body = Buffer.concat(parts.map((d) => frame(sha(d), d)));
+  const started = Date.now();
+  const res = await slowApp.request("/v1/repos/kai/slow/chunks", { method: "POST", headers: { ...auth, "content-type": "application/octet-stream" }, body });
+  const elapsed = Date.now() - started;
+  assert.equal(res.status, 201);
+  const out = (await res.json()) as { chunks: { hash: string }[] };
+  assert.deepEqual(out.chunks.map((c) => c.hash), parts.map(sha), "results keep the order of the frames");
+  assert.equal(store.puts, 80);
+  assert.ok(elapsed < 80 * 30 * 0.5, `took ${elapsed} ms; one by one would be about ${80 * 30} ms`);
+});

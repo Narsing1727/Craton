@@ -5,7 +5,7 @@ A one-file Python client for the [Craton](../../README.md) API. Standard library
 ```python
 from craton import Craton
 
-repo = Craton("http://localhost:4000", token="bcn_pat_...").repo("hydrolab", "chalakudy-basin")
+repo = Craton("http://localhost:4000", token="crt_pat_...").repo("hydrolab", "chalakudy-basin")
 
 repo.releases()                                   # newest first
 rows = repo.table("gauges.csv")                   # a CSV as a list of dicts

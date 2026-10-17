@@ -253,6 +253,7 @@ export const loadRepo = cache(async (owner: string, name: string) => {
       requireChecks: true,
       requireReview: false,
       requireOwnerReview: false,
+      requireCog: false,
       starred: false,
       access: "admin" as "none" | "read" | "write" | "admin",
     });
@@ -272,6 +273,7 @@ export const loadRepo = cache(async (owner: string, name: string) => {
     requireChecks: r.requireChecks,
     requireReview: r.requireReview,
     requireOwnerReview: Boolean(r.requireOwnerReview),
+    requireCog: Boolean(r.requireCog),
     starred: r.starred,
     access: r.access,
   };
@@ -405,6 +407,9 @@ export const loadInbox = cache(async (view: "inbox" | "done" = "inbox") => {
 export const loadTemplates = cache(async (owner: string, name: string) => (await api.templates(owner, name)) ?? { issues: [], pull: null });
 
 export const loadMilestones = cache(async (owner: string, name: string) => (await api.milestones(owner, name)) ?? []);
+
+export const loadModelReviews = cache(async (owner: string, name: string) => (await api.modelReviews(owner, name)) ?? []);
+export const loadModelReview = cache(async (owner: string, name: string, n: number) => api.modelReview(owner, name, n));
 
 export const loadRepoActivity = cache(async (owner: string, name: string, limit = 30) => {
   const live = await api.repoActivity(owner, name, limit);
