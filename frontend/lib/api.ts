@@ -79,7 +79,7 @@ export type ApiTableDiff = {
 };
 export type ApiTwoFactor = { enabled: boolean; enabledAt: string | null; recoveryCodesLeft: number };
 /** How an account signs in: connected identity providers, whether a password is set, and whether this server offers Google. */
-export type ApiIdentities = { identities: { provider: string; email: string; since: string }[]; hasPassword: boolean; googleAvailable: boolean; passkeys: number };
+export type ApiIdentities = { identities: { provider: string; email: string; since: string }[]; hasPassword: boolean; googleAvailable: boolean; githubAvailable: boolean; passkeys: number };
 export type ApiShareLink = { id: number; note: string; ref: string; commit: string; createdBy: string; createdAt: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null; uses: number; active: boolean };
 export type ApiSharedView = {
   repository: { owner: string; name: string; description: string; license: string; topics: string[]; crs: string };
@@ -482,7 +482,7 @@ export const api = {
   identities: () => get<ApiIdentities>("/user/identities"),
   passkeys: () => get<ApiPasskey[]>("/user/passkeys"),
   /** Which sign-in buttons this server can honour (a visitor, so no session is needed). */
-  providers: () => get<{ google: boolean; passkeys: boolean }>("/auth/providers", 2500),
+  providers: () => get<{ google: boolean; github: boolean; passkeys: boolean }>("/auth/providers", 2500),
   shared: () => get<{ owner: string; name: string; role: "Read" | "Write" | "Admin" }[]>("/user/shared"),
   invites: (owner: string, repo: string) => get<ApiInvite[]>(`${repoPath(owner, repo)}/invites`),
   invitePreview: (token: string) => get<ApiInvitePreview>(`/invites/${encodeURIComponent(token)}`),

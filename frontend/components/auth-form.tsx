@@ -23,11 +23,21 @@ type AuthFormProps = {
   demoHint?: boolean;
   /** This server offers "Continue with Google" (the API says so; the button is not drawn otherwise). */
   google?: boolean;
+  /** This server offers "Continue with GitHub". */
+  github?: boolean;
   /** This server accepts passkeys (the API says so). The button also needs a browser that can use them. */
   passkeys?: boolean;
   /** A two-step ticket from a Google sign-in on an account with two-step verification: go straight to the code. */
   initialMfaTicket?: string;
 };
+
+function GitHubMark() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden fill="currentColor">
+      <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.79.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
+    </svg>
+  );
+}
 
 function GoogleMark() {
   return (
@@ -42,7 +52,7 @@ function GoogleMark() {
 
 const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 
-export function AuthForm({ mode, next, notice, demoHint, google, passkeys, initialMfaTicket }: AuthFormProps) {
+export function AuthForm({ mode, next, notice, demoHint, google, github, passkeys, initialMfaTicket }: AuthFormProps) {
   const isLogin = mode === "login";
   const [state, formAction, pending] = useActionState<FormResult | null, FormData>(isLogin ? loginAction : signupAction, null);
   const [showPassword, setShowPassword] = useState(false);
@@ -147,7 +157,7 @@ export function AuthForm({ mode, next, notice, demoHint, google, passkeys, initi
               {notice}
             </p>
           )}
-          {(google || passkeyButton) && (
+          {(google || github || passkeyButton) && (
             <>
               <div className="flex flex-col gap-2">
                 {passkeyButton && (
@@ -161,6 +171,12 @@ export function AuthForm({ mode, next, notice, demoHint, google, passkeys, initi
                   <a href={`/auth/google${next ? `?next=${encodeURIComponent(next)}` : ""}`} className={cn(buttonVariants({ variant: "outline" }), "w-full gap-2")}>
                     <GoogleMark />
                     Continue with Google
+                  </a>
+                )}
+                {github && (
+                  <a href={`/auth/github${next ? `?next=${encodeURIComponent(next)}` : ""}`} className={cn(buttonVariants({ variant: "outline" }), "w-full gap-2")}>
+                    <GitHubMark />
+                    Continue with GitHub
                   </a>
                 )}
               </div>

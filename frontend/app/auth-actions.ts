@@ -77,15 +77,17 @@ export async function signupAction(_: FormResult | null, form: FormData): Promis
   redirect("/onboarding");
 }
 
-/** First sign-in with Google: the person picks a username (permanent, it is in every URL), then the account exists. */
-export async function completeGoogleSignupAction(_: FormResult | null, form: FormData): Promise<FormResult> {
+/** First sign-in with Google or GitHub: the person picks a username (permanent, it is in every URL), then the account exists. */
+export async function completeOAuthSignupAction(_: FormResult | null, form: FormData): Promise<FormResult> {
+  const provider = String(form.get("provider")) === "github" ? "github" : "google";
+  const label = provider === "github" ? "GitHub" : "Google";
   const username = String(form.get("username") ?? "").trim().toLowerCase();
   const name = String(form.get("name") ?? "").trim();
   if (!/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(username)) return { ok: false, field: "username", error: "Use lowercase letters, numbers and single dashes (up to 39)." };
   const jar = await cookies();
   const ticket = jar.get(GOOGLE_PENDING_COOKIE)?.value;
-  if (!ticket) return { ok: false, error: "That step expired. Continue with Google again.", restart: true };
-  const result = await send<{ token: string }>("POST", "/auth/google/complete", { ticket, username, name: name || undefined }, null);
+  if (!ticket) return { ok: false, error: `That step expired. Continue with ${label} again.`, restart: true };
+  const result = await send<{ token: string }>("POST", `/auth/${provider}/complete`, { ticket, username, name: name || undefined }, null);
   if (!result.ok) {
     if (result.code === "invalid_ticket") return { ok: false, error: result.error, restart: true };
     return { ok: false, field: /taken|reserved|username/i.test(result.error) ? "username" : undefined, error: result.error };
@@ -95,9 +97,9 @@ export async function completeGoogleSignupAction(_: FormResult | null, form: For
   redirect(safeNext(String(form.get("next") ?? ""), "/onboarding"));
 }
 
-/** Settings → Security: take Google off the account (the API refuses while it is the only way in). */
-export async function disconnectGoogleAction() {
-  const result = await send<null>("DELETE", "/user/identities/google");
+/** Settings → Security: take Google or GitHub off the account (the API refuses while it is the only way in). */
+export async function disconnectIdentityAction(provider: "google" | "github") {
+  const result = await send<null>("DELETE", `/user/identities/${provider === "github" ? "github" : "google"}`);
   if (result.ok) revalidatePath("/settings");
   return result;
 }

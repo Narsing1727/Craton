@@ -15,11 +15,12 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { changePasswordAction, deleteAccountAction, disconnectGoogleAction, passkeyRegisterAction, passkeyRegisterOptionsAction, removePasskeyAction, renamePasskeyAction, resendVerificationAction, revokeSessionAction, saveProfileAction } from "@/app/auth-actions";
+import { changePasswordAction, deleteAccountAction, disconnectIdentityAction, passkeyRegisterAction, passkeyRegisterOptionsAction, removePasskeyAction, renamePasskeyAction, resendVerificationAction, revokeSessionAction, saveProfileAction } from "@/app/auth-actions";
 import { createPasskey, passkeyErrorMessage, passkeysSupported } from "@/lib/webauthn";
 import type { ApiIdentities, ApiPasskey, ApiSecurityEvent, ApiSession, ApiTwoFactor } from "@/lib/api";
 import { TwoFactorCard } from "@/components/two-factor-card";
 import { timeAgo } from "@/lib/format";
+import { PROVIDERS, PROVIDER_NAME, providerNotice, type OAuthProvider } from "@/lib/oauth-routes-shared";
 
 type Tab = "profile" | "security";
 
@@ -305,66 +306,70 @@ function PasskeysCard({ passkeys }: { passkeys: ApiPasskey[] }) {
   );
 }
 
-/** Google, with a way to connect or disconnect it. Only drawn when the API answered. */
+/** Google and GitHub, each with a way to connect or disconnect it. Only drawn when the API answered. */
 function SignInMethodsCard({ identities }: { identities: ApiIdentities }) {
-  const google = identities.identities.find((i) => i.provider === "google");
   const [removing, startRemove] = useTransition();
   const router = useRouter();
   const search = useSearchParams();
-  const note = (
-    {
-      linked: "Google is connected. You can now sign in with it.",
-      taken: "That Google account is already connected to another Craton account.",
-      denied: "Google sign-in was cancelled.",
-      expired: "That Google sign-in expired. Try again.",
-      error: "Couldn’t connect Google. Try again in a moment.",
-      off: "Google sign-in isn’t set up on this server.",
-      offline: "The Craton API isn’t reachable right now. Try again in a moment.",
-    } as Record<string, string>
-  )[search.get("google") ?? ""];
+  const rows = PROVIDERS.map((provider) => ({
+    provider,
+    name: PROVIDER_NAME[provider],
+    linked: identities.identities.find((i) => i.provider === provider),
+    available: provider === "google" ? identities.googleAvailable : identities.githubAvailable,
+  })).filter((r) => r.linked || r.available);
+  const note = PROVIDERS.map((p) => providerNotice(p, search.get(p) ?? undefined, "settings")).find(Boolean);
 
-  function disconnect() {
+  function disconnect(provider: OAuthProvider, name: string) {
     startRemove(async () => {
-      const result = await disconnectGoogleAction();
-      if (!result.ok) return void notify.error("Couldn’t disconnect Google", { description: result.error });
-      notify.success("Google disconnected");
+      const result = await disconnectIdentityAction(provider);
+      if (!result.ok) return void notify.error(`Couldn’t disconnect ${name}`, { description: result.error });
+      notify.success(`${name} disconnected`);
       router.refresh();
     });
   }
 
-  if (!google && !identities.googleAvailable) return null;
+  if (!rows.length) return null;
+  const connected = rows.filter((r) => r.linked);
   return (
     <Card>
       <CardHeader>
         <CardTitle>Sign-in methods</CardTitle>
-        <CardDescription>{google ? "You can sign in with your password or with Google." : "Add Google to sign in without typing your password."}</CardDescription>
+        <CardDescription>{connected.length ? `You can sign in with your password or with ${connected.map((r) => r.name).join(" or ")}.` : `Add ${rows.map((r) => r.name).join(" or ")} to sign in without typing your password.`}</CardDescription>
       </CardHeader>
-      <CardContent className="pt-4">
+      <CardContent className="flex flex-col gap-4 pt-4">
         {note && (
-          <p role="status" className="mb-4 border border-border bg-muted/30 p-3 text-xs text-muted-foreground text-pretty">
+          <p role="status" className="border border-border bg-muted/30 p-3 text-xs text-muted-foreground text-pretty">
             {note}
           </p>
         )}
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">Google</p>
-            <p className="truncate text-xs text-muted-foreground">{google ? `Connected as ${google.email}` : "Not connected"}</p>
-          </div>
-          {google ? (
-            <Button variant="outline" size="sm" onClick={disconnect} loading={removing} disabled={removing || !identities.hasPassword}>
-              Disconnect
-            </Button>
-          ) : (
-            <a href="/auth/google?link=1" className="inline-flex h-8 items-center border border-border px-3 text-sm font-medium hover:bg-muted">
-              Connect Google
-            </a>
-          )}
-        </div>
-        {google && !identities.hasPassword && (
-          <p className="mt-3 text-xs text-muted-foreground text-pretty">
-            Google is the only way into this account, so it can’t be disconnected yet. <a href="/forgot-password" className="underline underline-offset-2 hover:text-foreground">Add a password</a> first: we’ll email you a link to set one.
-          </p>
-        )}
+        {rows.map((r) => {
+          // Another way in has to remain: a password, a passkey, or the other provider.
+          const canRemove = identities.hasPassword || identities.passkeys > 0 || connected.length > 1;
+          return (
+            <div key={r.provider}>
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{r.name}</p>
+                  <p className="truncate text-xs text-muted-foreground">{r.linked ? `Connected as ${r.linked.email}` : "Not connected"}</p>
+                </div>
+                {r.linked ? (
+                  <Button variant="outline" size="sm" onClick={() => disconnect(r.provider, r.name)} loading={removing} disabled={removing || !canRemove}>
+                    Disconnect
+                  </Button>
+                ) : (
+                  <a href={`/auth/${r.provider}?link=1`} className="inline-flex h-8 items-center border border-border px-3 text-sm font-medium hover:bg-muted">
+                    Connect {r.name}
+                  </a>
+                )}
+              </div>
+              {r.linked && !canRemove && (
+                <p className="mt-3 text-xs text-muted-foreground text-pretty">
+                  {r.name} is the only way into this account, so it can’t be disconnected yet. <a href="/forgot-password" className="underline underline-offset-2 hover:text-foreground">Add a password</a> first: we’ll email you a link to set one.
+                </p>
+              )}
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );
@@ -458,8 +463,8 @@ const EVENT_LABEL: Record<string, string> = {
   two_factor_enabled: "Two-step verification turned on",
   two_factor_disabled: "Two-step verification turned off",
   recovery_codes_regenerated: "Recovery codes replaced",
-  oauth_linked: "Google connected",
-  oauth_unlinked: "Google disconnected",
+  oauth_linked: "Sign-in provider connected",
+  oauth_unlinked: "Sign-in provider disconnected",
 };
 const CONCERNING = new Set(["sign_in_failed", "password_reset_requested", "two_factor_disabled", "passkey_rollback"]);
 

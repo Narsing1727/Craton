@@ -6,5 +6,5 @@ export const metadata: Metadata = { title: "Create your account", description: "
 
 export default async function SignupPage() {
   const providers = await api.providers();
-  return <AuthForm mode="signup" google={Boolean(providers?.google)} />;
+  return <AuthForm mode="signup" google={Boolean(providers?.google)} github={Boolean(providers?.github)} />;
 }

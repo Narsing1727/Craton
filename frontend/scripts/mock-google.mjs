@@ -8,6 +8,8 @@
 //     CRATON_GOOGLE_AUTH_URL=http://localhost:9099/auth CRATON_GOOGLE_TOKEN_URL=http://localhost:9099/token
 //     CRATON_GOOGLE_JWKS_URL=http://localhost:9099/certs   node src/server.ts
 //   and run: npm run e2e:google
+//   For GitHub also set CRATON_GITHUB_CLIENT_ID=e2e-gh CRATON_GITHUB_CLIENT_SECRET=e2e-gh-secret CRATON_GITHUB_AUTH_URL=http://localhost:9099/gh/authorize
+//   CRATON_GITHUB_TOKEN_URL=http://localhost:9099/gh/token CRATON_GITHUB_API_URL=http://localhost:9099/gh/api   and run: npm run e2e:github
 import http from "node:http";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 
@@ -17,6 +19,10 @@ const b64 = (v) => Buffer.from(typeof v === "string" ? v : JSON.stringify(v)).to
 let identity = { sub: "g-1", email: "e2e.user@example.org", name: "E2E User", email_verified: true };
 let deny = false;
 const codes = new Map();
+let ghIdentity = { id: 5001, login: "e2e-gh", name: "E2E GitHub", emails: [{ email: "e2e.gh@example.org", primary: true, verified: true }] };
+let ghDeny = false;
+const ghCodes = new Map();
+const ghTokens = new Map();
 
 http
   .createServer((req, res) => {
@@ -71,6 +77,57 @@ http
         res.end(JSON.stringify({ id_token: `${head}.${body}.${sig}`, access_token: "unused" }));
       });
       return;
+    }
+    // ── GitHub: /gh/authorize, /gh/token and the API under /gh/api, for npm run e2e:github ──
+    if (url.pathname === "/_gh_identity") {
+      ghDeny = url.searchParams.get("deny") === "1";
+      ghIdentity = {
+        id: Number(url.searchParams.get("id") ?? ghIdentity.id),
+        login: url.searchParams.get("login") ?? ghIdentity.login,
+        name: url.searchParams.get("name") ?? ghIdentity.name,
+        emails: url.searchParams.has("email") ? [{ email: url.searchParams.get("email"), primary: true, verified: url.searchParams.get("verified") !== "0" }] : ghIdentity.emails,
+      };
+      res.end(JSON.stringify({ ghIdentity, ghDeny }));
+      return;
+    }
+    if (url.pathname === "/gh/authorize") {
+      const back = new URL(url.searchParams.get("redirect_uri"));
+      if (ghDeny) back.searchParams.set("error", "access_denied");
+      else {
+        const code = randomBytes(8).toString("hex");
+        ghCodes.set(code, { challenge: url.searchParams.get("code_challenge"), identity: JSON.parse(JSON.stringify(ghIdentity)) });
+        back.searchParams.set("code", code);
+      }
+      back.searchParams.set("state", url.searchParams.get("state"));
+      res.statusCode = 302;
+      res.setHeader("location", back.toString());
+      return res.end();
+    }
+    if (url.pathname === "/gh/token" && req.method === "POST") {
+      let raw = "";
+      req.on("data", (d) => (raw += d));
+      req.on("end", () => {
+        const f = new URLSearchParams(raw);
+        const entry = ghCodes.get(f.get("code"));
+        ghCodes.delete(f.get("code"));
+        res.setHeader("content-type", "application/json");
+        const ok = entry && f.get("client_id") === "e2e-gh" && createHash("sha256").update(f.get("code_verifier") ?? "").digest("base64url") === entry.challenge;
+        if (!ok) return res.end(JSON.stringify({ error: "bad_verification_code" }));
+        const access = `gho_${randomBytes(10).toString("hex")}`;
+        ghTokens.set(access, entry.identity);
+        res.end(JSON.stringify({ access_token: access, token_type: "bearer" }));
+      });
+      return;
+    }
+    if (url.pathname.startsWith("/gh/api/")) {
+      const who = ghTokens.get((req.headers.authorization ?? "").replace(/^Bearer /, ""));
+      res.setHeader("content-type", "application/json");
+      if (!who) {
+        res.statusCode = 401;
+        return res.end(JSON.stringify({ message: "Bad credentials" }));
+      }
+      if (url.pathname === "/gh/api/user") return res.end(JSON.stringify({ id: who.id, login: who.login, name: who.name }));
+      if (url.pathname === "/gh/api/user/emails") return res.end(JSON.stringify(who.emails));
     }
     res.statusCode = 404;
     res.end();

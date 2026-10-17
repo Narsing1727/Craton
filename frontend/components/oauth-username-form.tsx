@@ -8,14 +8,16 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { DotPattern } from "@/components/ui/dot-pattern";
-import { completeGoogleSignupAction, type FormResult } from "@/app/auth-actions";
+import { completeOAuthSignupAction, type FormResult } from "@/app/auth-actions";
+import { PROVIDER_NAME, type OAuthProvider } from "@/lib/oauth-routes-shared";
 import { cn } from "@/lib/utils";
 
 const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 
-/** The one step after a first Google sign-in: choose the username that goes in every URL. */
-export function GoogleUsernameForm({ email, name, suggestion, next }: { email: string; name: string; suggestion: string; next?: string }) {
-  const [state, formAction, pending] = useActionState<FormResult | null, FormData>(completeGoogleSignupAction, null);
+/** The one step after a first sign-in with a provider: choose the username that goes in every URL. */
+export function OAuthUsernameForm({ provider, email, name, suggestion, next }: { provider: OAuthProvider; email: string; name: string; suggestion: string; next?: string }) {
+  const label = PROVIDER_NAME[provider];
+  const [state, formAction, pending] = useActionState<FormResult | null, FormData>(completeOAuthSignupAction, null);
   const [username, setUsername] = useState(suggestion);
   const serverError = state && !state.ok ? state : null;
   const usernameError = (serverError?.field === "username" ? serverError.error : null) ?? (username && !HANDLE.test(username) ? "Lowercase letters, numbers and single dashes." : null);
@@ -33,13 +35,14 @@ export function GoogleUsernameForm({ email, name, suggestion, next }: { email: s
             <h1>Choose your username</h1>
           </CardTitle>
           <CardDescription>
-            Google confirmed <span className="font-mono text-foreground">{email}</span>. One more thing: the username that appears on your profile and commits.
+            {label} confirmed <span className="font-mono text-foreground">{email}</span>. One more thing: the username that appears on your profile and commits.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form action={formAction} noValidate>
             {next && <input type="hidden" name="next" value={next} />}
             <input type="hidden" name="name" value={name} />
+            <input type="hidden" name="provider" value={provider} />
             <FieldGroup>
               <Field data-invalid={usernameError ? true : undefined}>
                 <FieldLabel htmlFor="username">Username</FieldLabel>
@@ -68,8 +71,8 @@ export function GoogleUsernameForm({ email, name, suggestion, next }: { email: s
                 <p role="alert" className="border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive text-pretty">
                   {formError}{" "}
                   {serverError?.restart && (
-                    <a href="/auth/google" className="underline underline-offset-2">
-                      Continue with Google again
+                    <a href={`/auth/${provider}`} className="underline underline-offset-2">
+                      Continue with {label} again
                     </a>
                   )}
                 </p>

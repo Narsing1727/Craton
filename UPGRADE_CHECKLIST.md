@@ -239,6 +239,17 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 148 | **`/skill.md`**: an agent skill (front matter + sign-in, everyday commands, pull-before-push, locks, checks, secrets, API, MCP). A test checks every command it names exists and the flags it mentions are in the CLI's help | Open `http://localhost:3100/skill.md` |
 | 149 | Docs → Reference → "For agents and AI tools", OPERATING.md section, `CRATON_SITE_URL` also sets the links in these files | Docs page |
 
+### 15. Sign-in providers
+
+| # | What it does | How to check |
+|---|---|---|
+| 150 | **Continue with GitHub**, next to Google: OAuth 2.0 with PKCE, one-time state, the account read from GitHub's API and **only a verified email accepted** (never a no-reply address); same rules as Google for matching, unconfirmed accounts, two-step verification | Needs a GitHub OAuth app; without one, `npm run e2e:github` against the stand-in |
+| 151 | One provider-aware flow for both (routes `/auth/{provider}/…`, one web handler pair, one username step); a sign-in started for one provider cannot be finished as the other | Backend test "state from one provider cannot finish the other's" |
+| 152 | Settings → Security → **Sign-in methods** lists Google and GitHub, connect/disconnect each; the last way in (no password, no passkey, no other provider) cannot be removed | Settings → Security |
+| 153 | **`backend/.env` settings file** read at start (real environment variables win; `CRATON_ENV_FILE` to point elsewhere; tests never read the default); `.env.example` shows every provider setting | Copy `backend/.env.example` to `.env` |
+| 154 | **`npm run setup:oauth -- --google-id … --google-secret … [--github-id … --github-secret …] [--web-url …]`** writes the settings and prints the exact redirect addresses to register with Google and GitHub; refuses half a pair | Run it with the values from the provider consoles, restart the API |
+| 155 | Security-log wording is provider-neutral ("Sign-in provider connected"); the detail names which | Settings → Security → activity |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.
@@ -250,7 +261,7 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 
 ## Not done or still demo (so you do not look for it)
 
-- **Google sign-in has never talked to the real Google.** It is tested against a stand-in that signs tokens the way Google does (22 browser checks and 11 API tests), but I have no credentials, so the first real attempt may need a consent-screen tweak. Other providers (GitHub, Microsoft) are not built.
+- **Google sign-in has never talked to the real Google.** It is tested against a stand-in that signs tokens the way Google does (22 browser checks and 11 API tests), but I have no credentials, so the first real attempt may need a consent-screen tweak. GitHub sign-in has the same limit (tested against a stand-in for GitHub). Microsoft is not built.
 - Stars, followers, wiki, forks, teams and billing are demo.
 - Not built: SSO/SAML/SCIM, QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, light theme, comments pinned to a map location.
 - Chunk packs for R2 and the R2 store itself have never run against live R2 (simulated with a 40 ms put).

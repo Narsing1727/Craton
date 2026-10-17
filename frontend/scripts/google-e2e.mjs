@@ -166,8 +166,9 @@ const cookieNames = async (ctx) => (await ctx.cookies()).map((c) => c.name);
   await page.getByRole("button", { name: "Disconnect" }).click();
   await page.waitForFunction(() => /Not connected/.test(document.body.innerText), null, { timeout: 10000 });
   check("disconnect works while a password exists", true);
+  await page.getByText("Sign-in provider disconnected").first().waitFor({ timeout: 15000 }).catch(() => {});
   const log = await page.locator("body").innerText();
-  check("both events are in the security log", /Google connected/.test(log) && /Google disconnected/.test(log));
+  check("both events are in the security log", /Sign-in provider connected/.test(log) && /Sign-in provider disconnected/.test(log));
   check("no console or page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
   await ctx.close();
 }
