@@ -270,6 +270,16 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 164 | Optional **"let people with a confirmed @domain address join as Members"**: existing people are added when it is switched on, new people when they confirm their address or sign in with Google/GitHub; an unconfirmed address never counts; sub-domains and look-alikes do not match; removing the domain or switching it off removes nobody | Organization → Settings → Domains → the switch |
 | 165 | Owners only (a maintainer is refused, a non-member sees nothing); the verify route is rate limited; every change is on the audit log | Backend tests, audit log |
 
+### 18. Reading big files by range, and from Python
+
+| # | What it does | How to check |
+|---|---|---|
+| 166 | The raw-file route answers **HTTP byte ranges** (`Range: bytes=a-b`, `a-`, `-n`): 206 with `Content-Range`, 416 with the size when past the end, up to 64 MB per request; HEAD gives the size | `curl -r 0-99 …/v1/repos/<owner>/<repo>/raw/main/<path>` |
+| 167 | A whole file is **streamed chunk by chunk, any size** (the old 16 MB cap and "use the CLI" message are gone); the checksum header is unchanged | Download a big raster from the file page |
+| 168 | **`craton://owner/repo@version/path` in Python** (fsspec): `pandas.read_csv`, `fsspec.open`, `fs.ls`, `fs.glob`, `fs.info`, seek and partial reads, only the requested bytes transferred; read-only, with a clear message on write | `pip install "./sdk/python[fsspec]"` (see sdk/python/README.md) |
+| 169 | Versions are part of the address: a branch, tag or commit, so a notebook result names the exact data it used | `craton://hydrolab/chalakudy-basin@v1.0.0/…` |
+| 170 | Tested against the real server over real HTTP (`cli.test.ts`), including negative offsets, head/tail seeks and 404s | Backend tests |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.
@@ -283,6 +293,6 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 
 - **Google sign-in has never talked to the real Google.** It is tested against a stand-in that signs tokens the way Google does (22 browser checks and 11 API tests), but I have no credentials, so the first real attempt may need a consent-screen tweak. GitHub sign-in has the same limit (tested against a stand-in for GitHub). Microsoft is not built.
 - Stars, followers, wiki, forks, teams and billing are demo.
-- Not built: SSO/SAML/SCIM, a Slack app with slash commands (only incoming webhooks), QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, light theme, comments pinned to a map location.
+- Not built: SSO/SAML/SCIM, writing through fsspec (reads only), a Slack app with slash commands (only incoming webhooks), QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, light theme, comments pinned to a map location.
 - Chunk packs for R2 and the R2 store itself have never run against live R2 (simulated with a 40 ms put).
 - Flood3D scenario import and the Studio menu bar belong to Nerolith, not Craton.

@@ -44,6 +44,7 @@ import * as modelreview from "../services/modelreview.ts";
 import * as audit from "../services/audit.ts";
 import * as secretscan from "../services/secretscan.ts";
 import * as domains from "../services/domains.ts";
+import { parseRange } from "../core/range.ts";
 import * as passkeys from "../services/passkeys.ts";
 import { buildStac } from "../services/stac.ts";
 import { checksBadge, licenseBadge, releaseBadge, sizeBadge } from "../services/badge.ts";
@@ -65,6 +66,9 @@ type Env = { Variables: { user: accounts.AuthedUser | null } };
 
 /** What a personal access token may do. Web sessions can do everything their user can. */
 const SCOPES = { repo: "Read and write repositories", "read:repo": "Read repositories", "read:org": "Read organization membership", "admin:org": "Manage organization members" };
+
+/** The most one Range request returns (bigger asks are answered in pieces). */
+const MAX_RANGE_BYTES = 64 * 1024 * 1024;
 
 export function createApp(ctx: Ctx) {
   const app = new Hono<Env>();
@@ -1373,6 +1377,9 @@ export function createApp(ctx: Ctx) {
     const commit = history.getObject<CommitObject>(ctx, repo, id, "commit");
     return c.json({ ...history.commitJson(row), changes: history.commitChanges(ctx, repo, commit), checks: listCheckRuns(ctx, repo, { commit: id, limit: 1 })[0] ?? null });
   });
+  // A file's bytes. Supports `Range: bytes=…` (one range), so a client can read the middle of a large raster without
+  // downloading it (the Python filesystem and anything that speaks HTTP ranges rely on this). Without a Range the whole
+  // file is streamed chunk by chunk, so the size is not limited by memory.
   v1.get("/repos/:owner/:repo/raw/:ref/:path{.+}", async (c) => {
     const repo = repoFor(c);
     const commit = history.getObject<CommitObject>(ctx, repo, history.resolveRef(ctx, repo, c.req.param("ref")), "commit");
@@ -1380,9 +1387,23 @@ export function createApp(ctx: Ctx) {
     const entry = tree.entries.find((e) => e.path === c.req.param("path"));
     if (!entry) throw new ApiError(404, "not_found", "File not found");
     const blob = history.getObject<BlobObject>(ctx, repo, entry.blob, "blob");
-    if (blob.size > 16 * 1024 * 1024) throw badRequest("Files over 16 MB download through the CLI: craton pull.");
-    const data = await new chunks.BlobReader(ctx, blob).readAll();
-    return c.body(new Uint8Array(data), 200, { "content-type": "application/octet-stream", "x-craton-sha256": blob.sha256 });
+    const headers = { "content-type": "application/octet-stream", "x-craton-sha256": blob.sha256, "accept-ranges": "bytes", "cache-control": "private, no-cache" };
+    const range = parseRange(c.req.header("range"), blob.size);
+    if (range === "unsatisfiable") return c.body(null, 416, { ...headers, "content-range": `bytes */${blob.size}` });
+    if (range) {
+      // At most 64 MB per request; a client that wants more asks again from where this one stopped (the answer says how far it got).
+      const end = Math.min(range.end, range.start + MAX_RANGE_BYTES - 1);
+      const data = await new chunks.BlobReader(ctx, blob).read(range.start, end - range.start + 1);
+      return c.body(new Uint8Array(data), 206, { ...headers, "content-range": `bytes ${range.start}-${end}/${blob.size}`, "content-length": String(data.length) });
+    }
+    let next = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (next >= blob.chunks.length) return controller.close();
+        controller.enqueue(new Uint8Array(await chunks.readChunk(ctx, blob.chunks[next++].hash)));
+      },
+    });
+    return c.body(body, 200, { ...headers, "content-length": String(blob.size) });
   });
 
   // Every file path at a ref, with sizes: all "Go to file" needs, without the manifest's blobs.

@@ -45,16 +45,16 @@ class Craton:
 
     # -- transport -----------------------------------------------------------
 
-    def _request(self, path: str, query: Optional[Dict[str, str]] = None) -> bytes:
-        with self._open(path, query) as res:
+    def _request(self, path: str, query: Optional[Dict[str, str]] = None, headers: Optional[Dict[str, str]] = None) -> bytes:
+        with self._open(path, query, headers) as res:
             return res.read()
 
-    def _open(self, path: str, query: Optional[Dict[str, str]] = None):
-        """The open HTTP response, for callers that read it as a stream. Errors raise CratonError."""
+    def _open(self, path: str, query: Optional[Dict[str, str]] = None, headers: Optional[Dict[str, str]] = None):
+        """The open HTTP response, for callers that read it as a stream. Errors raise CratonError. `headers` adds request headers (Range)."""
         url = f"{self.server}/v1{path}"
         if query:
             url += "?" + urllib.parse.urlencode({k: v for k, v in query.items() if v is not None})
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        req = urllib.request.Request(url, headers={"Accept": "application/json", **(headers or {})})
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
         try:
@@ -206,7 +206,7 @@ class Repo:
         return self.client.get(f"{self._base}/file/{_q(ref or self.default_branch)}/{_qpath(path)}")
 
     def read(self, path: str, ref: Optional[str] = None) -> bytes:
-        """A file's bytes (the API serves up to 16 MB this way; use the CLI for larger files)."""
+        """A file's bytes, all of them. For part of a big file use the fsspec filesystem (craton_fsspec), which reads byte ranges."""
         return self.client._request(f"{self._base}/raw/{_q(ref or self.default_branch)}/{_qpath(path)}")
 
     def text(self, path: str, ref: Optional[str] = None, encoding: str = "utf-8") -> str:

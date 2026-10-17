@@ -20,7 +20,7 @@ const slug = (s: string) => s.toLowerCase().replaceAll("&", "and").replace(/[^a-
 const nav = [
   { heading: "Getting started", items: ["Introduction", "Install the CLI", "Your first repository", "Authentication"] },
   { heading: "By goal", items: ["Version a HEC-RAS project", "Share a DEM with a partner", "See what changed in a DEM", "Review a change as a team", "Work with part of a big repository"] },
-  { heading: "Working with data", items: ["Supported formats", "Chunking & deduplication", "Large file workflow", "Map diffs", "Your own checks", "Secret scanning"] },
+  { heading: "Working with data", items: ["Supported formats", "Chunking & deduplication", "Large file workflow", "Map diffs", "Python and notebooks", "Your own checks", "Secret scanning"] },
   { heading: "Collaboration", items: ["Branches", "Pull requests", "Reviews", "Model review", "Organization domains", "Code owners", "Provenance"] },
   { heading: "Reference", items: ["CLI commands", "REST API", "Webhooks", "Rate limits", "For agents and AI tools"] },
 ];
@@ -215,6 +215,12 @@ export default function DocsPage() {
             <P>Every commit, comparison and pull request shows what changed in each file, down to which chunks are new. Locally, status shows the same before you commit.</P>
             <CommandLine command="craton status" />
             <Link href="/hydrolab/chalakudy-basin/compare?base=main&head=levee-scenario" className="text-sm text-accent hover:underline">Compare two branches →</Link>
+          </DocSection>
+
+          <DocSection title="Python and notebooks">
+            <P>
+              Install the client with <code className="font-mono text-sm text-foreground">pip install &quot;./sdk/python[fsspec]&quot;</code> and any tool that takes an fsspec address can read a file at an exact version, fetching only the bytes it needs: <code className="font-mono text-sm text-foreground">pd.read_csv(&quot;craton://hydrolab/chalakudy-basin@v1.2.0/gauges.csv&quot;, storage_options=&#123;&quot;server&quot;: …, &quot;token&quot;: …&#125;)</code>. Paths are <code className="font-mono text-sm text-foreground">owner/repo@version/path</code>, where the version is a branch, tag or commit. Opening a 30 GB raster and reading one window moves only that window, because the server answers HTTP byte ranges; <code className="font-mono text-sm text-foreground">@v1.0.0</code> pins exactly what a result was computed from. It is read-only: push changes with the CLI.
+            </P>
           </DocSection>
 
           <DocSection title="Your own checks">

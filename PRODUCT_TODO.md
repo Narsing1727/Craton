@@ -197,7 +197,7 @@ maintainer) can release, and a lock icon next to the file.
 - [ ] **Sparse clone** `craton clone --only terrain/`; Kart's spatial-filter clone is the model (only the
       features inside an area are fetched).
 - [ ] **Export a folder as GeoPackage / GeoParquet.** `M`
-- [ ] **Public read-only tokens** scoped to one repository.
+- [x] **Public read-only tokens** scoped to one repository. · Access tokens can be limited to named repositories (checklist 6).
 - [x] **Browser upload.** `M` · "Upload files" on the repository page: choose or drop files **or a whole folder** (relative
       paths kept), pick the destination folder, see which files will **replace** existing ones before committing,
       and commit straight to the branch or to a **new branch for review**. One commit comes out, with a real progress
@@ -252,7 +252,7 @@ and shapefiles; tables and schemas are the gap.
       table diff. Left: retyped columns, and shapefile (.dbf) fields.
 - [x] **Raster statistics diff.** `S` · `GET /repos/:o/:r/raster-stats/:ref/*?base=`: summary of each version (min, 5th/50th/95th percentile, mean, max, nodata), a shared-range histogram, and the cell-by-cell change (mean, RMSE, share raised/lowered, volume for projected grids). Shown under every raster heatmap on commit, compare and pull request pages. Computed on the sampled grid the heatmap uses, and says so.
 - [ ] **CRS and nodata mismatch warning** when a changed file disagrees with the repository settings. `S`
-- [ ] **Checks as code** in `.craton/checks.yml`. `L`
+- [x] **Checks as code.** `L` · Built as `.craton-checks.json` at the repository root (the CLI owns `.craton/`).
 - [x] **Restore a file to an earlier version.** `S` · From the file's history, "Restore" adds a commit that puts it
       back (the replaced version stays in history and can be restored again). Respects locks and write
       access; runs checks and webhooks like a push. API: `POST /restore`.
@@ -268,10 +268,10 @@ and shapefiles; tables and schemas are the gap.
       server refuses private, loopback and link-local destinations (checked again at delivery, and the
       connection goes only to the address it checked). Left: more events (issues, locks), auto-pause after
       repeated failure, per-organization hooks, rotating a secret without recreating.
-- [ ] **Slack / Teams notifications** on push, PR, failed checks. `S` (after webhooks)
-- [ ] **Python SDK** with fsspec so notebooks read a file at a commit. `M`
+- [x] **Slack / Teams notifications** on push, PR, failed checks. `S` · Built as chat webhooks (Slack, Teams, Discord); a webhook whose address is a chat service's incoming-webhook posts a short message instead of the signed JSON (checklist 156-160).
+- [x] **Python SDK** with fsspec so notebooks read a file at a commit. `M` · `craton://owner/repo@version/path`, reads by HTTP byte range (checklist 166-170).
 - [ ] **QGIS plugin.** `L`
-- [ ] **MCP server** so assistants can answer "what changed in the DEM since the last release". `S`
+- [x] **MCP server** so assistants can answer "what changed in the DEM since the last release". `S`
 - [~] **Release notes from history.** `S` · "Generate from commits" on the new-release form lists the commits
       since the latest release. Left: group by changed files, and between any two tags.
 - [x] **CI status badge** for README files. `S` · `GET /repos/:o/:r/badge/checks.svg` (public repositories only; passing / failing / none yet), with a copyable Markdown snippet on the Checks page.
@@ -285,7 +285,7 @@ and shapefiles; tables and schemas are the gap.
       code can't be replayed; 10 wrong codes lock an account's guessing for 15 minutes. Turning it on or off,
       or making new codes, needs the password again and emails the owner. A password reset doesn't bypass it.
       Left: enforcing it per organization, passkeys, and remembering a trusted device.
-- [ ] **Passkeys.** `M`
+- [x] **Passkeys.** `M` · Built 2026-10-16 (checklist 126-137).
 - [x] **Security activity log.** `S` · `GET /user/security-log`; sign-ins, failed attempts, password change/reset, tokens created or revoked, browsers signed out, two-step on/off, recovery codes. Newest first, last 200 per person, no secrets stored; card on Settings → Security (migration 14, 4 tests).
 - [x] **Tokens limited to specific repositories.** `S` · A token can name up to 20 repositories ("owner/name"); outside them it acts as no token (public data readable, private repositories hidden, writes and account routes closed). Set when creating a token; the list shows the limit (migration 16, 4 tests).
 - [x] **Per-repository collaborators.** `S` · Share one private repository with one person without making them part

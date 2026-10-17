@@ -14,5 +14,11 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 
+[project.optional-dependencies]
+fsspec = ["fsspec>=2023.1"]
+
+[project.entry-points."fsspec.specs"]
+craton = "craton_fsspec:CratonFileSystem"
+
 [tool.setuptools]
-py-modules = ["craton"]
+py-modules = ["craton", "craton_fsspec"]

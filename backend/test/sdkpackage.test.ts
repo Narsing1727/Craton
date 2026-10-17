@@ -14,13 +14,16 @@ test("pyproject.toml parses, names the module, and asks for nothing else", () =>
   const script = `
 import json, sys, tomllib
 d = tomllib.load(open(sys.argv[1], "rb"))
-print(json.dumps({"name": d["project"]["name"], "deps": d["project"]["dependencies"], "modules": d["tool"]["setuptools"]["py-modules"], "readme": d["project"]["readme"]}))
+print(json.dumps({"name": d["project"]["name"], "deps": d["project"]["dependencies"], "modules": d["tool"]["setuptools"]["py-modules"], "readme": d["project"]["readme"], "extra": d["project"]["optional-dependencies"], "entry": d["project"]["entry-points"]["fsspec.specs"]}))
 `;
   const r = spawnSync("python", ["-c", script, path.join(sdk, "pyproject.toml")], { encoding: "utf8" });
   if (r.error || /No module named tomllib/.test(r.stderr)) return; // no Python 3.11 here: nothing to check
   assert.equal(r.status, 0, r.stderr);
   const meta = JSON.parse(r.stdout);
-  assert.deepEqual([meta.name, meta.deps, meta.modules], ["craton-client", [], ["craton"]]);
+  assert.deepEqual([meta.name, meta.deps, meta.modules], ["craton-client", [], ["craton", "craton_fsspec"]]);
+  // fsspec is an extra, not a dependency, and the filesystem is registered for tools that look it up by name.
+  assert.deepEqual(meta.extra, { fsspec: ["fsspec>=2023.1"] });
+  assert.deepEqual(meta.entry, { craton: "craton_fsspec:CratonFileSystem" });
   assert.ok(fs.existsSync(path.join(sdk, meta.readme)), "the README it names exists");
 });
 

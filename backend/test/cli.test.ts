@@ -551,3 +551,20 @@ test("a push containing a credential is refused with where it is, and an adminis
   const after = (await api("GET", "/repos/alice/basin/refs", undefined, token)).branches.find((b: any) => b.name === "main").commit_id;
   assert.notEqual(after, before);
 });
+
+test("the Python fsspec filesystem reads a version of a file by byte range, lists folders and refuses writes", () => {
+  const script = path.resolve(root, "../sdk/python/check_fsspec.py");
+  let out: string;
+  try {
+    out = execFileSync("python", [script], { env: { ...process.env, CRATON_SERVER: server, CRATON_TOKEN: token }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException & { stderr?: string };
+    if (err.code === "ENOENT" || /No module named 'fsspec'/.test(String(err.stderr))) return; // no Python or no fsspec here: nothing to check
+    throw new Error(`${err.message}\n${err.stderr}`);
+  }
+  const r = JSON.parse(out);
+  assert.deepEqual(r.listing, [["terrain/basin_dem.tif", "file"]]);
+  assert.ok(r.size > 100_000, `${r.size} bytes`);
+  for (const k of ["size_ok", "middle_ok", "tail_ok", "head_ok", "sha_ok", "pair_ok", "negative_ok", "csv_ok", "isdir", "isfile", "readonly", "missing"]) assert.equal(r[k], true, k);
+  assert.deepEqual(r.glob, ["alice/basin@main/vectors/catchment.shp"]);
+});
