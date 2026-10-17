@@ -18,6 +18,7 @@ import { badRequest, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { config } from "../config.ts";
 import { sendWebhookPausedEmail } from "./email.ts";
+import { FORMATS, chatBody, detectFormat, type Format } from "./chatformat.ts";
 
 export const EVENTS = ["push", "pull_request", "release", "issue", "lock"] as const;
 export type WebhookEvent = (typeof EVENTS)[number] | "ping";
@@ -129,7 +130,7 @@ export function sign(secret: string, id: string, timestamp: number, body: string
 
 // ── CRUD ───────────────────────────────────────────────────────────────────
 
-type HookRow = { id: number; repo_id: number; url: string; secret: string; events: string; active: number; paused_reason: string | null; created_at: string };
+type HookRow = { id: number; repo_id: number; url: string; secret: string; events: string; active: number; paused_reason: string | null; created_at: string; format: Format };
 
 const cleanEvents = (input: unknown): string[] => {
   const list = Array.isArray(input) ? input.map(String) : [];
@@ -141,7 +142,7 @@ const cleanEvents = (input: unknown): string[] => {
 };
 
 function hookJson(r: HookRow) {
-  return { id: r.id, url: r.url, events: JSON.parse(r.events) as string[], active: Boolean(r.active), pausedReason: r.paused_reason, createdAt: r.created_at };
+  return { id: r.id, url: r.url, format: r.format, events: JSON.parse(r.events) as string[], active: Boolean(r.active), pausedReason: r.paused_reason, createdAt: r.created_at };
 }
 
 function findHook(ctx: Ctx, repo: RepoRow, id: number): HookRow {
@@ -158,19 +159,33 @@ export function listHooks(ctx: Ctx, repo: RepoRow) {
   });
 }
 
-export function createHook(ctx: Ctx, repo: RepoRow, userId: number, input: { url: string; events: string[] }) {
+/** The format asked for, or the one the address implies (Slack, Teams and Discord have their own webhook hosts). */
+const chooseFormat = (asked: unknown, url: string): Format => {
+  if (asked === undefined || asked === null || asked === "" || asked === "auto") return detectFormat(url);
+  if (!(FORMATS as readonly unknown[]).includes(asked)) throw badRequest(`format must be one of: auto, ${FORMATS.join(", ")}.`);
+  return asked as Format;
+};
+
+export function createHook(ctx: Ctx, repo: RepoRow, userId: number, input: { url: string; events: string[]; format?: string }) {
   const url = validateUrl(input.url).toString();
+  const format = chooseFormat(input.format, url);
   const events = cleanEvents(input.events);
   if ((ctx.db.prepare("SELECT COUNT(*) AS n FROM webhooks WHERE repo_id = ?").get(repo.id) as { n: number }).n >= 10) throw badRequest("A repository can have up to ten webhooks.");
   const secret = newSecret();
-  const id = Number(ctx.db.prepare("INSERT INTO webhooks (repo_id, url, secret, events, created_by) VALUES (?, ?, ?, ?, ?)").run(repo.id, url, secret, JSON.stringify(events), userId).lastInsertRowid);
-  // The secret is shown once, here; after this only a hash-free reference is kept in the UI.
-  return { ...hookJson(findHook(ctx, repo, id)), secret };
+  const id = Number(ctx.db.prepare("INSERT INTO webhooks (repo_id, url, secret, events, created_by, format) VALUES (?, ?, ?, ?, ?, ?)").run(repo.id, url, secret, JSON.stringify(events), userId, format).lastInsertRowid);
+  // The secret is shown once, here. A chat room does not check signatures, so a chat webhook has none to show.
+  return format === "json" ? { ...hookJson(findHook(ctx, repo, id)), secret } : hookJson(findHook(ctx, repo, id));
 }
 
-export function updateHook(ctx: Ctx, repo: RepoRow, id: number, patch: { url?: string; events?: string[]; active?: boolean }) {
+export function updateHook(ctx: Ctx, repo: RepoRow, id: number, patch: { url?: string; events?: string[]; active?: boolean; format?: string }) {
   findHook(ctx, repo, id);
-  if (patch.url !== undefined) ctx.db.prepare("UPDATE webhooks SET url = ? WHERE id = ?").run(validateUrl(patch.url).toString(), id);
+  if (patch.url !== undefined) {
+    const url = validateUrl(patch.url).toString();
+    // A new address implies its own format unless one is given with it.
+    ctx.db.prepare("UPDATE webhooks SET url = ?, format = ? WHERE id = ?").run(url, chooseFormat(patch.format, url), id);
+  } else if (patch.format !== undefined) {
+    ctx.db.prepare("UPDATE webhooks SET format = ? WHERE id = ?").run(chooseFormat(patch.format, findHook(ctx, repo, id).url), id);
+  }
   if (patch.events !== undefined) ctx.db.prepare("UPDATE webhooks SET events = ? WHERE id = ?").run(JSON.stringify(cleanEvents(patch.events)), id);
   // Resuming or pausing by hand clears the automatic pause's explanation.
   if (patch.active !== undefined) ctx.db.prepare("UPDATE webhooks SET active = ?, paused_reason = NULL WHERE id = ?").run(patch.active ? 1 : 0, id);
@@ -265,7 +280,7 @@ function post(target: URL, headers: Record<string, string>, body: string): Promi
   });
 }
 
-type DueRow = { id: number; webhook_id: number; event: string; message_id: string; payload: string; attempt: number; url: string; secret: string };
+type DueRow = { id: number; webhook_id: number; event: string; message_id: string; payload: string; attempt: number; url: string; secret: string; format: Format; owner: string; repo_name: string };
 
 /** How many finished deliveries in a row must fail before Craton stops sending to a receiver. */
 export const PAUSE_AFTER_FAILURES = 10;
@@ -295,7 +310,7 @@ function pauseIfDead(ctx: Ctx, webhookId: number, url: string, lastError: string
 
 async function attempt(ctx: Ctx, d: DueRow) {
   const timestamp = Math.floor(Date.now() / 1000); // each attempt gets a fresh timestamp; the message id stays
-  const headers = {
+  let headers: Record<string, string> = {
     "content-type": "application/json",
     "user-agent": "Craton-Webhooks/1",
     "webhook-id": d.message_id,
@@ -303,9 +318,15 @@ async function attempt(ctx: Ctx, d: DueRow) {
     "webhook-signature": sign(d.secret, d.message_id, timestamp, d.payload),
     "x-craton-event": d.event,
   };
+  let body = d.payload;
+  if (d.format !== "json") {
+    // A chat room: the same event, written as a message in the shape that service reads. Nothing to sign.
+    headers = { "content-type": "application/json", "user-agent": "Craton-Webhooks/1", "x-craton-event": d.event };
+    body = JSON.stringify(chatBody(d.format, { owner: d.owner, name: d.repo_name }, d.event, (JSON.parse(d.payload) as { data?: Record<string, unknown> }).data ?? {}));
+  }
   let result: Sent;
   try {
-    result = await post(new URL(d.url), headers, d.payload);
+    result = await post(new URL(d.url), headers, body);
   } catch (err) {
     result = { ok: false, code: null, error: (err as Error).message };
   }
@@ -324,8 +345,8 @@ async function attempt(ctx: Ctx, d: DueRow) {
 export async function deliverDue(ctx: Ctx) {
   const due = ctx.db
     .prepare(
-      `SELECT d.id, d.webhook_id, d.event, d.message_id, d.payload, d.attempt, w.url, w.secret
-       FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id
+      `SELECT d.id, d.webhook_id, d.event, d.message_id, d.payload, d.attempt, w.url, w.secret, w.format, o.handle AS owner, r.name AS repo_name
+       FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id JOIN repos r ON r.id = w.repo_id JOIN owners o ON o.id = r.owner_id
        WHERE d.status = 'pending' AND d.next_attempt_at <= ? ORDER BY d.id LIMIT 25`,
     )
     .all(now()) as DueRow[];

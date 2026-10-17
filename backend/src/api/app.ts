@@ -1242,7 +1242,7 @@ export function createApp(ctx: Ctx) {
   v1.get("/repos/:owner/:repo/webhooks", (c) => c.json({ events: webhooks.EVENTS, webhooks: webhooks.listHooks(ctx, repoFor(c, "admin")) }));
   v1.post("/repos/:owner/:repo/webhooks", async (c) => {
     const repo = repoFor(c, "admin");
-    const b = await body<{ url: string; events: string[] }>(c);
+    const b = await body<{ url: string; events: string[]; format?: string }>(c);
     const hook = webhooks.createHook(ctx, repo, requireUser(c).id, b);
     webhooks.ping(ctx, repo, hook.id);
     return c.json(hook, 201);

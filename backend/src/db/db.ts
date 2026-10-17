@@ -567,6 +567,8 @@ const migrations: string[] = [
   );
   `,/* 27: a sign-in flow belongs to one identity provider (Google or GitHub), so one provider's state can never finish the other's. */ `
   ALTER TABLE oauth_flows ADD COLUMN provider TEXT NOT NULL DEFAULT 'google';
+  `,/* 28: a webhook can post into a chat room (Slack, Teams, Discord) instead of sending the signed JSON envelope. */ `
+  ALTER TABLE webhooks ADD COLUMN format TEXT NOT NULL DEFAULT 'json';
   `,
 ];
 

@@ -64,7 +64,8 @@ export type ApiRepo = {
 };
 export type ApiLicense = { id: string; name: string; url: string | null };
 export type ApiLock = { path: string; reason: string; holder: string; lockedAt: string; ageDays?: number; stale?: boolean };
-export type ApiWebhook = { id: number; url: string; events: string[]; active: boolean; pausedReason?: string | null; createdAt: string; lastDelivery: { status: string; responseCode: number | null; at: string } | null };
+export type WebhookFormat = "json" | "slack" | "teams" | "discord";
+export type ApiWebhook = { id: number; url: string; format: WebhookFormat; events: string[]; active: boolean; pausedReason?: string | null; createdAt: string; lastDelivery: { status: string; responseCode: number | null; at: string } | null };
 export type ApiDelivery = { id: number; event: string; messageId: string; attempts: number; status: "pending" | "succeeded" | "failed"; responseCode: number | null; error: string | null; nextAttemptAt: string | null; createdAt: string; deliveredAt: string | null };
 export type ApiTableDiff = {
   base: string;

@@ -250,6 +250,16 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 154 | **`npm run setup:oauth -- --google-id … --google-secret … [--github-id … --github-secret …] [--web-url …]`** writes the settings and prints the exact redirect addresses to register with Google and GitHub; refuses half a pair | Run it with the values from the provider consoles, restart the API |
 | 155 | Security-log wording is provider-neutral ("Sign-in provider connected"); the detail names which | Settings → Security → activity |
 
+### 16. Chat notifications
+
+| # | What it does | How to check |
+|---|---|---|
+| 156 | A webhook can post into **Slack, Microsoft Teams or Discord**: paste that service's incoming-webhook address and it is recognised (`hooks.slack.com`, `*.webhook.office.com` / `*.logic.azure.com`, `discord.com/api/webhooks`); or pick the format by hand (Mattermost and similar read Slack's) | Settings → Webhooks → Add, "Send as" |
+| 157 | Each event is one plain sentence with a link ("priyam pushed 2 commits to main in hydrolab/chalakudy-basin", pull request, release, issue, lock) in that service's shape: Slack blocks, a Teams Adaptive Card with an Open button, a Discord embed | Press Send test on a chat webhook |
+| 158 | **Nothing a person types can ping a room**: Slack `<!channel>` is made literal, Teams and Discord markdown and `@` are escaped, Discord is sent `allowed_mentions: none` | Backend tests in `chatwebhooks.test.ts` |
+| 159 | Chat webhooks have **no signature and no secret** (a chat room can't check one); plain JSON webhooks are unchanged: signed, with a secret shown once | Create one of each |
+| 160 | Same retries, pausing, delivery log and redelivery for chat webhooks; the format is detected again when the address is edited | Backend test "the format is detected from the address…" |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.
@@ -263,6 +273,6 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 
 - **Google sign-in has never talked to the real Google.** It is tested against a stand-in that signs tokens the way Google does (22 browser checks and 11 API tests), but I have no credentials, so the first real attempt may need a consent-screen tweak. GitHub sign-in has the same limit (tested against a stand-in for GitHub). Microsoft is not built.
 - Stars, followers, wiki, forks, teams and billing are demo.
-- Not built: SSO/SAML/SCIM, QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, light theme, comments pinned to a map location.
+- Not built: SSO/SAML/SCIM, a Slack app with slash commands (only incoming webhooks), QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, light theme, comments pinned to a map location.
 - Chunk packs for R2 and the R2 store itself have never run against live R2 (simulated with a 40 ms put).
 - Flood3D scenario import and the Studio menu bar belong to Nerolith, not Craton.

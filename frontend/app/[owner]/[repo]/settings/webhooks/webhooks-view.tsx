@@ -46,6 +46,7 @@ export function WebhooksView({ owner, repo, events, initial, recent = {} }: { ow
   const base = `/${owner}/${repo}`;
   const [url, setUrl] = React.useState("");
   const [chosen, setChosen] = React.useState<string[]>(["push"]);
+  const [format, setFormat] = React.useState("auto");
   const [pending, setPending] = React.useState(false);
   const [touched, setTouched] = React.useState(false);
   const [secret, setSecret] = React.useState<string | null>(null);
@@ -59,13 +60,13 @@ export function WebhooksView({ owner, repo, events, initial, recent = {} }: { ow
     setTouched(true);
     if (urlError || eventError || pending) return;
     setPending(true);
-    const r = await createWebhookAction(owner, repo, { url: url.trim(), events: chosen });
+    const r = await createWebhookAction(owner, repo, { url: url.trim(), events: chosen, format });
     setPending(false);
     if (!r.ok) {
       notify.error("Couldn’t add the webhook", { description: r.error });
       return;
     }
-    setSecret(r.data.secret);
+    setSecret(r.data.secret ?? null);
     setUrl("");
     setTouched(false);
     notify.success("Webhook added", { description: "A test event is on its way." });
@@ -77,7 +78,7 @@ export function WebhooksView({ owner, repo, events, initial, recent = {} }: { ow
       <div className="flex min-w-0 flex-col gap-8">
         <div className="pb-2">
           <h1 className="text-3xl font-semibold tracking-tight">Webhooks</h1>
-          <p className="mt-2 text-base text-muted-foreground">Craton sends a signed HTTPS POST to your server when something happens here, and retries if it can’t get through.</p>
+          <p className="mt-2 text-base text-muted-foreground">Craton sends a signed HTTPS POST to your server when something happens here, or posts a message into Slack, Microsoft Teams or Discord, and retries if it can’t get through.</p>
         </div>
 
         {secret && (
@@ -115,6 +116,17 @@ export function WebhooksView({ owner, repo, events, initial, recent = {} }: { ow
                   <FieldLabel htmlFor="hook-url">Payload URL</FieldLabel>
                   <Input id="hook-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.org/hooks/craton" autoComplete="off" spellCheck={false} aria-invalid={touched && !!urlError} />
                   {touched && urlError && <FieldError>{urlError}</FieldError>}
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="hook-format">Send as</FieldLabel>
+                  <select id="hook-format" value={format} onChange={(e) => setFormat(e.target.value)} className="h-9 w-full border border-border bg-background px-3 text-sm">
+                    <option value="auto">Detect from the address (recommended)</option>
+                    <option value="json">Signed JSON, for your own server</option>
+                    <option value="slack">A Slack message</option>
+                    <option value="teams">A Microsoft Teams card</option>
+                    <option value="discord">A Discord message</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground text-pretty">Paste a Slack, Teams or Discord incoming-webhook address and it is recognised. Chat rooms can’t check a signature, so those webhooks have no secret; treat the address itself as the secret.</p>
                 </Field>
                 <Field data-invalid={touched && eventError ? true : undefined}>
                   <FieldLabel>Events</FieldLabel>
@@ -240,6 +252,7 @@ function HookRow({ owner, repo, hook, recent }: { owner: string; repo: string; h
         <div className="min-w-0 flex-1">
           <p className="truncate font-mono text-sm">{hook.url}</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {hook.format !== "json" && <Badge variant="secondary">{{ slack: "Slack", teams: "Microsoft Teams", discord: "Discord" }[hook.format]}</Badge>}
             {hook.events.map((ev) => (
               <Badge key={ev} variant="outline" className="font-mono">
                 {ev}

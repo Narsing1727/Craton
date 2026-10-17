@@ -148,10 +148,10 @@ export async function pathsAction(owner: string, repo: string, ref: string): Pro
 const hooksPath = (owner: string, repo: string) => `${repoPath(owner, repo)}/webhooks`;
 const hooksPage = (owner: string, repo: string) => [`/${owner}/${repo}/settings/webhooks`];
 /** The signing secret is in the response of this call and nowhere else: show it once. */
-export async function createWebhookAction(owner: string, repo: string, input: { url: string; events: string[] }) {
-  return write<{ id: number; secret: string }>("POST", hooksPath(owner, repo), input, hooksPage(owner, repo));
+export async function createWebhookAction(owner: string, repo: string, input: { url: string; events: string[]; format?: string }) {
+  return write<{ id: number; secret?: string }>("POST", hooksPath(owner, repo), input, hooksPage(owner, repo));
 }
-export async function updateWebhookAction(owner: string, repo: string, id: number, patch: { active?: boolean; events?: string[]; url?: string }) {
+export async function updateWebhookAction(owner: string, repo: string, id: number, patch: { active?: boolean; events?: string[]; url?: string; format?: string }) {
   return write<{ id: number }>("PATCH", `${hooksPath(owner, repo)}/${id}`, patch, hooksPage(owner, repo));
 }
 export async function deleteWebhookAction(owner: string, repo: string, id: number) {

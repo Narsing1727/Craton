@@ -311,6 +311,9 @@ export default function DocsPage() {
 
           <DocSection title="Webhooks">
             <P>Get an HTTPS POST when something happens: a push, a pull request event, or a release. Payloads are signed with HMAC-SHA256; Settings → Webhooks shows each delivery and its response.</P>
+            <P>
+              To post into a chat room instead, paste a Slack, Microsoft Teams or Discord incoming-webhook address as the URL. Craton recognises it and sends a short message (who did what, where, with a link) in the shape that service reads, in place of the signed JSON. Names and titles are escaped so nothing a person types can ping the room, and the same events, retries and delivery log apply. A chat room cannot check a signature, so those webhooks have no secret: keep the address private.
+            </P>
           </DocSection>
 
           <DocSection title="Rate limits">

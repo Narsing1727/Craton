@@ -187,8 +187,8 @@ const groups: Group[] = [
     endpoints: [
       { method: "GET", path: "/webhook-events", note: "What each event carries in `data`, field by field." },
       { method: "GET", path: "/repos/{owner}/{repo}/webhooks", note: "Webhooks and the events you can subscribe to. Secrets are never listed.", auth: "admin" },
-      { method: "POST", path: "/repos/{owner}/{repo}/webhooks", note: "Add one: { url, events }. The signing secret is in this response only.", auth: "admin" },
-      { method: "PATCH", path: "/repos/{owner}/{repo}/webhooks/{id}", note: "Change the URL or events, or pause it with { active: false }. Resuming clears pausedReason; Craton itself pauses a webhook after ten failed deliveries in a row and emails the admins.", auth: "admin" },
+      { method: "POST", path: "/repos/{owner}/{repo}/webhooks", note: "Add one: { url, events, format? }. format is auto (the default: a Slack, Teams or Discord address is recognised), json, slack, teams or discord. The signing secret of a json webhook is in this response only; chat webhooks have none.", auth: "admin" },
+      { method: "PATCH", path: "/repos/{owner}/{repo}/webhooks/{id}", note: "Change the URL, events or format, or pause it with { active: false }. Resuming clears pausedReason; Craton itself pauses a webhook after ten failed deliveries in a row and emails the admins.", auth: "admin" },
       { method: "DELETE", path: "/repos/{owner}/{repo}/webhooks/{id}", note: "Remove it and its delivery log.", auth: "admin" },
       { method: "GET", path: "/repos/{owner}/{repo}/webhooks/{id}/deliveries", note: "The last 50 deliveries: status, attempts, response code, error.", auth: "admin" },
       { method: "POST", path: "/repos/{owner}/{repo}/webhooks/{id}/ping", note: "Send a test event.", auth: "admin" },
