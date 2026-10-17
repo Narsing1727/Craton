@@ -5,7 +5,8 @@
 import type { Ctx } from "../services/context.ts";
 import { notFound, badRequest } from "../services/context.ts";
 import type { RepoRow } from "../services/repos.ts";
-import { BlobReader } from "../services/chunks.ts";
+import { BlobReader, readChunk } from "../services/chunks.ts";
+import { readLasHeader } from "../checks/las.ts";
 import { getObject, resolveRef } from "../services/history.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { encodePng } from "./png.ts";
@@ -42,6 +43,7 @@ export function previewKey(ctx: Ctx, repo: RepoRow, ref: string, path: string, o
   const before = opts.base ? blobAt(ctx, repo, opts.base, path) : null;
   if (opts.base && !before) return null;
   if (/\.tiff?$/i.test(path)) return `v${RENDER_VERSION}:${before ? `diff:${before.id}:${head.id}` : `thumb:${head.id}`}:${opts.size}`;
+  if (/\.las$/i.test(path)) return `v${RENDER_VERSION}:cloud:${head.id}:${opts.size}`;
   if (/\.shp$/i.test(path)) {
     const dbf = path.replace(/\.shp$/i, ".dbf");
     const dbfIds = [ref, opts.base].map((r) => (r ? blobAt(ctx, repo, r, dbf)?.id ?? "" : "")).join(":");
@@ -61,11 +63,13 @@ export async function warmCommit(ctx: Ctx, repo: RepoRow, commitId: string) {
     const parent = commit.parents[0];
     const entriesOf = (c: CommitObject) => getObject<TreeObject>(ctx, repo, c.tree, "tree").entries;
     const before = new Map(parent ? entriesOf(getObject<CommitObject>(ctx, repo, parent, "commit")).map((e) => [e.path, e.blob] as const) : []);
-    const changed = entriesOf(commit).filter((e) => /\.(tiff?|shp)$/i.test(e.path) && before.get(e.path) !== e.blob).slice(0, 8);
+    const changed = entriesOf(commit).filter((e) => /\.(tiff?|shp|las)$/i.test(e.path) && before.get(e.path) !== e.blob).slice(0, 8);
     for (const e of changed) {
       const hadBefore = Boolean(parent) && before.has(e.path);
       try {
-        if (/\.shp$/i.test(e.path)) {
+        if (/\.las$/i.test(e.path)) {
+          await pointCloudPng(ctx, repo, commitId, e.path, 512);
+        } else if (/\.shp$/i.test(e.path)) {
           await vectorSvg(ctx, repo, commitId, e.path);
           if (hadBefore) await vectorSvg(ctx, repo, commitId, e.path, parent);
         } else {
@@ -453,4 +457,117 @@ export async function vectorSvg(ctx: Ctx, repo: RepoRow, ref: string, path: stri
 
 export function isUnsupported(err: unknown) {
   return err instanceof UnsupportedTiffError;
+}
+
+// ---- Point clouds -----------------------------------------------------------------------------------------------
+
+/** At most this many chunks (about 64 MB) are read to draw a point cloud; a larger file is sampled across its whole length. */
+export const cloudLimits = { chunks: 512 };
+
+/**
+ * An uncompressed LAS point cloud seen from above: every cell is coloured by the mean elevation of the points in it (the same
+ * blue ramp as the hillshades) and fades out where there are few points, so gaps and relative density show. Drawn from an evenly spaced
+ * sample of the file's chunks, so a multi-gigabyte cloud costs seconds, not minutes; `sampledShare` says how much of the file was read,
+ * and no absolute density is claimed (a sorted file's sample has full local density, a shuffled one's is thin everywhere).
+ */
+export async function pointCloudPng(ctx: Ctx, repo: RepoRow, ref: string, path: string, size: number) {
+  const head = blobAt(ctx, repo, ref, path);
+  if (!head) throw notFound(`File ${path}`);
+  return cached(`cloud:${head.id}:${size}`, async () => {
+    const blob = head.blob;
+    const info = await readLasHeader(async (o, l) => (await new BlobReader(ctx, { ...blob, chunks: blob.chunks.slice(0, 1) } as BlobObject).read(o, l)), blob.size).catch(() => {
+      throw new UnsupportedTiffError("This is not a LAS file this server can read.");
+    });
+    if (info.compressed) throw new UnsupportedTiffError("LAZ stores its points compressed; a preview is drawn for uncompressed LAS files.");
+    const record = info.pointRecordLength;
+    const available = Math.floor((blob.size - info.offsetToPoints) / record);
+    const points = Math.min(info.pointCount, available);
+    if (points < 1 || record < 12) throw new UnsupportedTiffError("This point cloud has no points to draw.");
+
+    // Which chunks to read: all of them when the file is small, else evenly spaced ones.
+    const starts: number[] = [];
+    let at = 0;
+    for (const c of blob.chunks) (starts.push(at), (at += c.size));
+    const first = blob.chunks.findIndex((_, i) => starts[i] + blob.chunks[i].size > info.offsetToPoints);
+    const usable = blob.chunks.length - first;
+    const step = Math.max(1, Math.ceil(usable / cloudLimits.chunks));
+    const picked: number[] = [];
+    for (let i = first; i < blob.chunks.length; i += step) picked.push(i);
+    const share = picked.length / usable;
+
+    const [minX, minY] = [info.min[0], info.min[1]];
+    const spanX = info.max[0] - minX || 1;
+    const spanY = info.max[1] - minY || 1;
+    const longest = Math.max(spanX, spanY);
+    const width = Math.max(2, Math.round((spanX / longest) * size));
+    const height = Math.max(2, Math.round((spanY / longest) * size));
+    const count = new Float32Array(width * height);
+    const sumZ = new Float64Array(width * height);
+    let seen = 0;
+    let zLow = Infinity;
+    let zHigh = -Infinity;
+
+    for (const i of picked) {
+      const data = await readChunk(ctx, blob.chunks[i].hash);
+      // Records start at offsetToPoints plus a whole number of records; this chunk starts at starts[i].
+      const lead = Math.max(0, info.offsetToPoints - starts[i]);
+      let pos = lead + ((record - ((starts[i] + lead - info.offsetToPoints) % record)) % record);
+      for (; pos + 12 <= data.length && pos + 12 <= data.length; pos += record) {
+        if (pos + record > data.length) break; // a record cut by the chunk edge is skipped
+        const x = data.readInt32LE(pos) * info.scale[0] + info.offset[0];
+        const y = data.readInt32LE(pos + 4) * info.scale[1] + info.offset[1];
+        const z = data.readInt32LE(pos + 8) * info.scale[2] + info.offset[2];
+        const cx = Math.floor(((x - minX) / spanX) * (width - 1e-9));
+        const cy = Math.floor(((y - minY) / spanY) * (height - 1e-9));
+        if (cx < 0 || cy < 0 || cx >= width || cy >= height) continue;
+        const cell = (height - 1 - cy) * width + cx;
+        count[cell]++;
+        sumZ[cell] += z;
+        seen++;
+        if (z < zLow) zLow = z;
+        if (z > zHigh) zHigh = z;
+      }
+    }
+    if (!seen) throw new UnsupportedTiffError("No points could be read from this file.");
+
+    // Colour by mean elevation between its 2nd and 98th percentile, and fade by how many points the cell holds.
+    const means: number[] = [];
+    let densest = 0;
+    for (let i = 0; i < count.length; i++) if (count[i] > 0) (means.push(sumZ[i] / count[i]), (densest = Math.max(densest, count[i])));
+    means.sort((a, b) => a - b);
+    const lo = means[Math.floor(means.length * 0.02)];
+    const hi = means[Math.max(0, Math.ceil(means.length * 0.98) - 1)];
+    // A file read in part (every nth chunk) leaves gaps between the stretches it read, as stripes if the points are sorted along a line.
+    // Cells within a few steps of a drawn one borrow its colour, faded, so the picture covers the extent; nothing is drawn far from data.
+    const reach = step <= 1 ? 0 : Math.min(12, Math.ceil(Math.sqrt(step)));
+    const level = new Float32Array(count.length);
+    const away = new Uint8Array(count.length).fill(255);
+    for (let i = 0; i < count.length; i++) if (count[i] > 0) (level[i] = sumZ[i] / count[i]), (away[i] = 0);
+    if (reach) {
+      const spread = (order: number[], back: number) => {
+        for (const i of order) {
+          if (away[i] === 0) continue;
+          const j = i - back;
+          if (j >= 0 && j < count.length && away[j] + 1 <= reach && away[j] + 1 < away[i]) (level[i] = level[j]), (away[i] = away[j] + 1);
+        }
+      };
+      const forward = Array.from({ length: count.length }, (_, i) => i);
+      const reverse = [...forward].reverse();
+      spread(forward, 1); // from the cell to the left
+      spread(reverse, -1); // from the cell to the right
+      spread(forward, width); // from the cell above
+      spread(reverse, -width); // from the cell below
+    }
+    const rgba = new Uint8Array(width * height * 4);
+    for (let i = 0; i < count.length; i++) {
+      if (away[i] === 255) continue;
+      const t = hi > lo ? Math.min(1, Math.max(0, (level[i] - lo) / (hi - lo))) : 0.5;
+      const alpha = away[i] > 0 ? 0.28 : 0.3 + 0.7 * (Math.log1p(count[i]) / Math.log1p(densest));
+      rgba[i * 4] = Math.round(LOW[0] + (HIGH[0] - LOW[0]) * t);
+      rgba[i * 4 + 1] = Math.round(LOW[1] + (HIGH[1] - LOW[1]) * t);
+      rgba[i * 4 + 2] = Math.round(LOW[2] + (HIGH[2] - LOW[2]) * t);
+      rgba[i * 4 + 3] = Math.round(alpha * 255);
+    }
+    return { png: encodePng(width, height, rgba), width, height, points, sampledShare: Math.round(share * 1000) / 1000, min: zLow, max: zHigh };
+  });
 }

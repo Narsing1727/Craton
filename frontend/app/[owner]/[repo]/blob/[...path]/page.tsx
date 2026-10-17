@@ -174,7 +174,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   const downloadable = file ? file.size <= RAW_LIMIT : false;
   const rawHref = `${base}/raw/${path.map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
 
-  const kind = file?.raster ? "raster" : file?.vector ? "vector" : file?.table ? "table" : file?.preview !== null && file ? "text" : file ? "binary" : "raster";
+  const kind = file?.raster ? "raster" : file?.vector ? "vector" : file?.table ? "table" : file?.pointCloud && !file.pointCloud.compressed ? "pointcloud" : file?.preview !== null && file ? "text" : file ? "binary" : "raster";
 
   // The map preview, drawn from this version's bytes; "change" compares it with the version
   // before the last commit that touched the file.
@@ -240,7 +240,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
       }
     }
   }
-  const rendered = file && (kind === "raster" || kind === "vector") ? await renderMeta(owner, repo, ref, filePath, { base: previewBase }) : null;
+  const rendered = file && (kind === "raster" || kind === "vector" || kind === "pointcloud") ? await renderMeta(owner, repo, ref, filePath, { base: previewBase }) : null;
   const tableDiff = file && kind === "table" && showChange && previous ? await api.tableDiff(owner, repo, ref, filePath, previous) : null;
   const lineDiff = file && kind === "text" && showChange && previous ? await api.textDiff(owner, repo, ref, filePath, previous) : null;
   const previewHref = (v?: string) => `${base}/blob/${path.map(encodeURIComponent).join("/")}?${new URLSearchParams({ ...(ref !== summary.repo.defaultBranch ? { ref } : {}), ...(v ? { view: v } : {}) })}`;
@@ -345,10 +345,18 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                 <span className="font-mono">{filename}</span>
                 {dataType && <DataTypeBadge type={dataType} />}
                 <Badge variant="outline" className="ml-auto">
-                  {kind === "raster" ? "Raster" : kind === "vector" ? "Vector" : kind === "table" ? "Table" : kind === "text" ? "Text" : "Binary"}
+                  {kind === "raster" ? "Raster" : kind === "vector" ? "Vector" : kind === "pointcloud" ? "Point cloud" : kind === "table" ? "Table" : kind === "text" ? "Text" : "Binary"}
                 </Badge>
               </div>
-              {kind === "raster" || kind === "vector" ? (
+              {kind === "pointcloud" && file ? (
+                <CardContent className="p-4">
+                  <DataPreview src={previewSrc(owner, repo, ref, filePath)} alt={`${filename} seen from above, coloured by elevation`} error={rendered?.error ?? null} className="aspect-16/10" />
+                  <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Ruler className="size-3.5" aria-hidden />
+                    {previewCaption(rendered?.meta ?? null, units) ?? "Seen from above, coloured by elevation"}
+                  </p>
+                </CardContent>
+              ) : kind === "raster" || kind === "vector" ? (
                 <CardContent className="p-4">
                   {file && previous && (
                     <div className="mb-3 flex flex-wrap gap-1 text-xs" role="group" aria-label="Preview mode">

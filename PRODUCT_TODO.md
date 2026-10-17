@@ -194,7 +194,7 @@ maintainer) can release, and a lock icon next to the file.
       identically. Up to 20 active per repository; each shows how often it was opened. The page is
       `noindex`, uncached, `Referrer-Policy: no-referrer`, and guessing tokens is throttled. Left: sharing one
       folder or file, "follow this branch" links, a password, and an email-it button.
-- [ ] **Sparse clone** `craton clone --only terrain/`; Kart's spatial-filter clone is the model (only the
+- [x] **Sparse clone** `craton clone --only terrain/`; Kart's spatial-filter clone is the model (only the
       features inside an area are fetched).
 - [ ] **Export a folder as GeoPackage / GeoParquet.** `M`
 - [x] **Public read-only tokens** scoped to one repository. · Access tokens can be limited to named repositories (checklist 6).
@@ -342,13 +342,13 @@ and shapefiles; tables and schemas are the gap.
 - [x] **Hydrograph / time-series viewer** for gauge CSVs, with a compare-two-versions overlay. `M` · "Plot over time" on any table with a time column: pick the time and value columns, optionally one line per station, and show the previous version dashed behind. Drawn as SVG on the server; up to six lines of 800 points; shareable as a link.
 - [~] **Calibration table**: observed vs modelled at gauges, per release. `L` · Done for a single table: on any CSV page, "Compare two columns" gives NSE, KGE, PBIAS, RMSE, MAE and r over the whole file (Nash and Sutcliffe 1970; Gupta et al. 2009; ratings from Moriasi et al. 2007), shareable as a link. Not yet: per gauge, and stored with a release.
 - [x] **Units setting** (metric / imperial) applied to metadata and diffs. `S` · Settings → Preferences.
-- [ ] **LiDAR point-density preview.** `M`
+- [x] **LiDAR point-density preview.** `M` · `/render` draws an uncompressed LAS seen from above: cells coloured by mean elevation and faded where points are few, from an evenly spaced sample of at most about 64 MB of a bigger file (the answer says how much was read); shown on the file page. LAZ has no preview (it is compressed with LASzip).
 - [ ] **MapLibre viewer** with the compare slider on PR diffs. `L`
 
 ## I. Field and offline
 
 - [x] **Cold tier for DEFLATE GeoTIFFs** (storage, not on the original list) · Old versions kept as pixels, 1.76x on four real DEM versions; `CRATON_RECODE=1`, `npm run recode`.
-- [ ] **Resumable uploads** that survive a dropped connection. `M`
+- [x] **Resumable uploads** that survive a dropped connection. `M` · Chunks are content-addressed, so a push or upload that is cut off continues from the chunks the server already has; the CLI also resumes clones.
 - [ ] **Offline commit queue** in the CLI. `L`
 
 ## Known limitations

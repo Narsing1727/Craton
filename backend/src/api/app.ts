@@ -1390,7 +1390,7 @@ export function createApp(ctx: Ctx) {
       if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
       throw err;
     }
-    throw new ApiError(415, "no_preview", "Previews are drawn for GeoTIFF rasters and shapefiles.");
+    throw new ApiError(415, "no_preview", "Previews are drawn for GeoTIFF rasters, shapefiles and uncompressed LAS point clouds.");
   });
 
   // ── Webhooks (repository admins only: they expose URLs and signing secrets) ──
@@ -1589,6 +1589,10 @@ export function createApp(ctx: Ctx) {
         const t = await previews.rasterThumbnail(ctx, repo, ref, path, size);
         return c.body(new Uint8Array(t.png), 200, { ...cache, "content-type": "image/png", "x-craton-render": JSON.stringify({ width: t.width, height: t.height, min: t.min, max: t.max, sourceWidth: t.sourceWidth, sourceHeight: t.sourceHeight }) });
       }
+      if (/\.las$/i.test(path)) {
+        const cloud = await previews.pointCloudPng(ctx, repo, ref, path, size);
+        return c.body(new Uint8Array(cloud.png), 200, { ...cache, "content-type": "image/png", "x-craton-render": JSON.stringify({ width: cloud.width, height: cloud.height, min: cloud.min, max: cloud.max, points: cloud.points, sampledShare: cloud.sampledShare }) });
+      }
       if (/\.shp$/i.test(path)) {
         const v = await previews.vectorSvg(ctx, repo, ref, path, base);
         return c.body(v.svg, 200, { ...cache, "content-type": "image/svg+xml", "x-craton-render": JSON.stringify({ features: v.features, diff: v.diff }) });
@@ -1597,7 +1601,7 @@ export function createApp(ctx: Ctx) {
       if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
       throw err;
     }
-    throw new ApiError(415, "no_preview", "Previews are drawn for GeoTIFF rasters and shapefiles.");
+    throw new ApiError(415, "no_preview", "Previews are drawn for GeoTIFF rasters, shapefiles and uncompressed LAS point clouds.");
   });
 
   // Numbers behind a raster change (?base=<ref>): summary of each version, a shared histogram and the

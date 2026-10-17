@@ -164,7 +164,7 @@ const groups: Group[] = [
     endpoints: [
       { method: "GET", path: "/repos/{owner}/{repo}/tree/{ref}", note: "A folder listing (?path=) with the last commit to touch each entry." },
       { method: "GET", path: "/repos/{owner}/{repo}/file/{ref}/{path}", note: "GeoTIFF tags, shapefile header, table shape, preview, chunks and history." },
-      { method: "GET", path: "/repos/{owner}/{repo}/render/{ref}/{path}", note: "A GeoTIFF as a hillshade PNG or a shapefile as SVG. ?base=<ref> draws the change from that version; ?size= is the longest side in pixels (64 to 1024). Cached by content." },
+      { method: "GET", path: "/repos/{owner}/{repo}/render/{ref}/{path}", note: "A GeoTIFF as a hillshade PNG, a shapefile as SVG, or an uncompressed LAS point cloud as a PNG seen from above (coloured by elevation, faded where points are few; drawn from an evenly spaced sample of at most about 64 MB of a larger file, and the answer says how much was read). ?base=<ref> draws the change from that version; ?size= is the longest side in pixels (64 to 1024). Cached by content." },
       { method: "POST", path: "/repos/{owner}/{repo}/restore", note: "Put one file back to an earlier version as a new commit: { path, from, branch?, message? }. History is never rewritten.", auth: "write" },
       { method: "GET", path: "/repos/{owner}/{repo}/raw/{ref}/{path}", note: "File bytes, streamed whatever the size. Supports a single Range: bytes=a-b request (206 with Content-Range; up to 64 MB per request), so a client can read part of a large raster." },
       { method: "GET", path: "/repos/{owner}/{repo}/table-diff/{ref}/{path}", note: "A CSV compared with another version (?base=): rows added, removed and changed cell by cell, matched by a key." },

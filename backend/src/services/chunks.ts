@@ -237,3 +237,46 @@ export class BlobReader {
     return this.read(0, this.blob.size);
   }
 }
+
+const WINDOW_CHUNKS = 6;
+
+/** Reads a stored file in pieces, keeping only the last few chunks in memory (BlobReader keeps every chunk it has read). */
+export class ChunkWindow {
+  private readonly cache = new Map<number, Buffer>();
+  private readonly starts: number[] = [];
+  private readonly ctx: Ctx;
+  private readonly blob: BlobObject;
+  constructor(ctx: Ctx, blob: BlobObject) {
+    this.ctx = ctx;
+    this.blob = blob;
+    let at = 0;
+    for (const c of blob.chunks) (this.starts.push(at), (at += c.size));
+  }
+  private async chunk(i: number) {
+    let b = this.cache.get(i);
+    if (!b) {
+      b = await readChunk(this.ctx, this.blob.chunks[i].hash);
+      this.cache.set(i, b);
+      if (this.cache.size > WINDOW_CHUNKS) this.cache.delete(this.cache.keys().next().value!);
+    }
+    return b;
+  }
+  async read(offset: number, length: number): Promise<Buffer> {
+    const end = Math.min(offset + length, this.blob.size);
+    if (offset >= end) return Buffer.alloc(0);
+    let lo = 0;
+    let hi = this.starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.starts[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    const parts: Buffer[] = [];
+    for (let i = lo; i < this.blob.chunks.length && this.starts[i] < end; i++) {
+      const b = await this.chunk(i);
+      parts.push(b.subarray(Math.max(offset, this.starts[i]) - this.starts[i], Math.min(end, this.starts[i] + b.length) - this.starts[i]));
+    }
+    return Buffer.concat(parts);
+  }
+}
+

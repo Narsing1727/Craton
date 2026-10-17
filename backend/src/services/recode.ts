@@ -14,7 +14,7 @@ import type { Ctx } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { branchMovedListeners, getObject } from "./history.ts";
 import { enqueue } from "./repack.ts";
-import { readChunk } from "./chunks.ts";
+import { readChunk, ChunkWindow as Window } from "./chunks.ts";
 import { saveTile, tileKeyOf, tilePixels } from "./tiles.ts";
 import { compressedSegments } from "../core/streams.ts";
 import type { Segment } from "../core/tiff.ts";
@@ -33,50 +33,9 @@ const CHUNK_WORTH = 0.9;
 const KEYFRAME_MAX = 1.15;
 const KEYFRAME_NEXT_SHARE = 0.15;
 const SMALLEST_FILE = 64 * 1024;
-const WINDOW = 6;
 
 export type RecodeResult = { tiles: number; reused: number; chunks: number; savedBytes: number; files: number };
 const none = (): RecodeResult => ({ tiles: 0, reused: 0, chunks: 0, savedBytes: 0, files: 0 });
-
-/** Reads a stored file in pieces, keeping the last few chunks. */
-class Window {
-  private readonly cache = new Map<number, Buffer>();
-  private readonly starts: number[] = [];
-  private readonly ctx: Ctx;
-  private readonly blob: BlobObject;
-  constructor(ctx: Ctx, blob: BlobObject) {
-    this.ctx = ctx;
-    this.blob = blob;
-    let at = 0;
-    for (const c of blob.chunks) (this.starts.push(at), (at += c.size));
-  }
-  private async chunk(i: number) {
-    let b = this.cache.get(i);
-    if (!b) {
-      b = await readChunk(this.ctx, this.blob.chunks[i].hash);
-      this.cache.set(i, b);
-      if (this.cache.size > WINDOW) this.cache.delete(this.cache.keys().next().value!);
-    }
-    return b;
-  }
-  async read(offset: number, length: number): Promise<Buffer> {
-    const end = Math.min(offset + length, this.blob.size);
-    if (offset >= end) return Buffer.alloc(0);
-    let lo = 0;
-    let hi = this.starts.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (this.starts[mid] <= offset) lo = mid;
-      else hi = mid - 1;
-    }
-    const parts: Buffer[] = [];
-    for (let i = lo; i < this.blob.chunks.length && this.starts[i] < end; i++) {
-      const b = await this.chunk(i);
-      parts.push(b.subarray(Math.max(offset, this.starts[i]) - this.starts[i], Math.min(end, this.starts[i] + b.length) - this.starts[i]));
-    }
-    return Buffer.concat(parts);
-  }
-}
 
 type TileState = { key: string; stream: Buffer; payloadSize: number; ok: boolean; keyframe?: boolean };
 

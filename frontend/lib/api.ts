@@ -387,6 +387,9 @@ export type RenderMeta = {
   minChange?: number;
   maxChange?: number;
   features?: number;
+  /** A point cloud: its point count, and the share of the file the picture was drawn from. */
+  points?: number;
+  sampledShare?: number;
   diff?: { added: number; removed: number; changed: number; same: number } | null;
 };
 

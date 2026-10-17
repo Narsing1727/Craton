@@ -91,6 +91,11 @@ export function PreviewDiffLegend({ meta }: { meta: RenderMeta | null }) {
 export function previewCaption(meta: RenderMeta | null, units: UnitSystem = "metric") {
   if (!meta) return null;
   if (meta.features !== undefined) return `${meta.features} feature${meta.features === 1 ? "" : "s"}`;
+  if (meta.points !== undefined) {
+    const read = meta.sampledShare !== undefined && meta.sampledShare < 1 ? ` · drawn from ${Math.round(meta.sampledShare * 100)}% of the file` : "";
+    const z = meta.min !== undefined && meta.max !== undefined ? ` · elevation ${Number(meta.min.toFixed(2)).toLocaleString("en-US")} to ${Number(meta.max.toFixed(2)).toLocaleString("en-US")}` : "";
+    return `${meta.points.toLocaleString("en-US")} points${z}${read}`;
+  }
   if (meta.min !== undefined && meta.max !== undefined) return `${formatLength(meta.min, units, { digits: 1 })} – ${formatLength(meta.max, units, { digits: 1 })} · ${meta.sourceWidth} × ${meta.sourceHeight} px`;
   return null;
 }
