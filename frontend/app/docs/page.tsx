@@ -21,7 +21,7 @@ const nav = [
   { heading: "Getting started", items: ["Introduction", "Install the CLI", "Your first repository", "Authentication"] },
   { heading: "By goal", items: ["Version a HEC-RAS project", "Share a DEM with a partner", "See what changed in a DEM", "Review a change as a team", "Work with part of a big repository"] },
   { heading: "Working with data", items: ["Supported formats", "Chunking & deduplication", "Large file workflow", "Map diffs", "Your own checks", "Secret scanning"] },
-  { heading: "Collaboration", items: ["Branches", "Pull requests", "Reviews", "Model review", "Code owners", "Provenance"] },
+  { heading: "Collaboration", items: ["Branches", "Pull requests", "Reviews", "Model review", "Organization domains", "Code owners", "Provenance"] },
   { heading: "Reference", items: ["CLI commands", "REST API", "Webhooks", "Rate limits", "For agents and AI tools"] },
 ];
 
@@ -278,6 +278,12 @@ export default function DocsPage() {
             </P>
             <P>
               The validation findings and each HEC-RAS plan&rsquo;s own run status are captured as evidence and shown beside the items they bear on. They are suggestions: a person marks every item. Approval needs every item decided and every failure explained. An author may approve their own review; the record then says it was not independent. The export is a Markdown document you can attach to a submission.
+            </P>
+          </DocSection>
+
+          <DocSection title="Organization domains">
+            <P>
+              In an organization&rsquo;s settings, owners can claim the domain their team&rsquo;s email addresses use (for example <code className="font-mono text-sm text-foreground">hydrolab.org</code>) and prove it with a DNS TXT record Craton shows. A verified domain is marked on the organization&rsquo;s page. Switch on <em>Let people with a hydrolab.org address join</em> and anyone whose confirmed address ends there becomes a Member without an invitation; an address nobody has confirmed never counts, and removing the domain never removes anyone.
             </P>
           </DocSection>
 

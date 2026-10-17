@@ -37,7 +37,7 @@ export default async function OrgPage({ params }: { params: Promise<{ org: strin
 
   return (
     <AppShell>
-      <OrgHeader org={org} />
+      <OrgHeader org={org} domains={owner?.verifiedDomains} />
       <div className="flex w-full flex-col gap-8 px-4 sm:px-6 lg:px-8 xl:px-10 py-6">
         <StatGrid>
           <StatTile label="Repositories" value={shown.length} hint={`${shown.filter((r) => r.visibility === "private").length} private`} icon={FolderGit2} />

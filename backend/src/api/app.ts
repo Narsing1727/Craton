@@ -43,6 +43,7 @@ import * as oauth from "../services/oauth.ts";
 import * as modelreview from "../services/modelreview.ts";
 import * as audit from "../services/audit.ts";
 import * as secretscan from "../services/secretscan.ts";
+import * as domains from "../services/domains.ts";
 import * as passkeys from "../services/passkeys.ts";
 import { buildStac } from "../services/stac.ts";
 import { checksBadge, licenseBadge, releaseBadge, sizeBadge } from "../services/badge.ts";
@@ -465,6 +466,7 @@ export function createApp(ctx: Ctx) {
         throw new ApiError(409, "email_unverified_account", `An account with this email exists but its address was never confirmed. Confirm it from the email we sent, or reset its password, then use ${label} again.`);
       }
       oauth.linkIdentity(ctx, byEmail.id, g.sub, g.email, provider);
+      domains.joinForUser(ctx, byEmail.id);
       securitylog.record(ctx, byEmail.id, "oauth_linked", { detail: `${label} ${g.email} (matched by verified email)`, ...info });
       return after(byEmail.id);
     }
@@ -486,6 +488,7 @@ export function createApp(ctx: Ctx) {
     const p = oauth.readPending(ctx, b.ticket ?? "", provider);
     const user = accounts.createOAuthUser(ctx, { handle: b.username ?? "", email: p.email, name: b.name || p.name });
     oauth.linkIdentity(ctx, user.id, p.subject, p.email, provider);
+    domains.joinForUser(ctx, user.id);
     oauth.dropPending(ctx, b.ticket ?? "");
     securitylog.record(ctx, user.id, "oauth_linked", { detail: `${oauth.providerName(provider)} ${p.email} (account created)`, ...clientInfo(c) });
     return signedIn(c, user.id, provider);
@@ -602,7 +605,9 @@ export function createApp(ctx: Ctx) {
   v1.post("/auth/verify", async (c) => {
     const b = await body<{ token: string }>(c);
     const u = accounts.verifyEmail(ctx, b.token);
-    return c.json({ handle: u.handle, emailVerified: true });
+    // An address that is now confirmed may belong to a domain an organization has verified and opened to its people.
+    const joined = domains.joinForUser(ctx, u.id);
+    return c.json({ handle: u.handle, emailVerified: true, ...(joined.length ? { joined } : {}) });
   });
   v1.post("/user/verify/resend", (c) => {
     const u = requireSession(c);
@@ -859,6 +864,29 @@ export function createApp(ctx: Ctx) {
   });
   v1.delete("/orgs/:org/members/:handle", (c) => (requireScope(c, "admin:org"), c.json(accounts.removeMember(ctx, c.req.param("org"), requireUser(c).id, c.req.param("handle")))));
 
+  // Organization domains (owners only): prove control with a DNS TXT record; optionally let people with a confirmed address there join.
+  v1.get("/orgs/:org/domains", (c) => (requireScope(c, "admin:org"), c.json({ domains: domains.listDomains(ctx, c.req.param("org"), requireUser(c).id) })));
+  v1.post("/orgs/:org/domains", async (c) => {
+    requireScope(c, "admin:org");
+    const b = await body<{ domain?: string }>(c);
+    return c.json(domains.addDomain(ctx, c.req.param("org"), requireUser(c).id, b.domain), 201);
+  });
+  v1.post("/orgs/:org/domains/:domain/verify", async (c) => {
+    requireScope(c, "admin:org");
+    limit(c, `domain-verify:${requireUser(c).id}`, { max: 30, windowMs: 10 * 60_000 }, "Too many checks. DNS changes take a few minutes: wait, then try again.");
+    return c.json(await domains.verifyDomain(ctx, c.req.param("org"), requireUser(c).id, c.req.param("domain")));
+  });
+  v1.patch("/orgs/:org/domains/:domain", async (c) => {
+    requireScope(c, "admin:org");
+    const b = await body<{ autoJoin?: boolean }>(c);
+    return c.json(domains.setAutoJoin(ctx, c.req.param("org"), requireUser(c).id, c.req.param("domain"), b.autoJoin));
+  });
+  v1.delete("/orgs/:org/domains/:domain", (c) => {
+    requireScope(c, "admin:org");
+    domains.removeDomain(ctx, c.req.param("org"), requireUser(c).id, c.req.param("domain"));
+    return c.body(null, 204);
+  });
+
   // Storage used by one account or org. Only the account itself and org members can see it.
   v1.get("/owners/:handle/usage", (c) => {
     const u = requireUser(c);
@@ -876,6 +904,7 @@ export function createApp(ctx: Ctx) {
       bio: o.bio,
       createdAt: o.created_at,
       members: o.kind === "org" ? accounts.listMembers(ctx, o.id) : undefined,
+      verifiedDomains: o.kind === "org" ? domains.verifiedDomains(ctx, o.id) : undefined,
       // For people: the orgs they belong to and how many commits they authored in repositories the viewer can see.
       orgs: o.kind === "user" ? (ctx.db.prepare("SELECT g.handle FROM memberships m JOIN owners g ON g.id = m.org_id WHERE m.user_id = ? ORDER BY g.handle").all(o.id) as { handle: string }[]).map((r) => r.handle) : undefined,
       commitCount:

@@ -569,6 +569,18 @@ const migrations: string[] = [
   ALTER TABLE oauth_flows ADD COLUMN provider TEXT NOT NULL DEFAULT 'google';
   `,/* 28: a webhook can post into a chat room (Slack, Teams, Discord) instead of sending the signed JSON envelope. */ `
   ALTER TABLE webhooks ADD COLUMN format TEXT NOT NULL DEFAULT 'json';
+  `,/* 29: organization domains: proved by a DNS TXT record, optionally letting people with a confirmed address there join as Members. */ `
+  CREATE TABLE org_domains (
+    id INTEGER PRIMARY KEY,
+    org_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+    domain TEXT NOT NULL,
+    token TEXT NOT NULL,
+    verified_at TEXT,
+    auto_join INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE (org_id, domain)
+  );
+  CREATE UNIQUE INDEX org_domains_verified ON org_domains (domain) WHERE verified_at IS NOT NULL;
   `,
 ];
 

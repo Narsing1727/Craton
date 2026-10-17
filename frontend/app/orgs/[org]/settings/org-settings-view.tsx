@@ -12,9 +12,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { TypeToConfirm } from "@/components/craton-actions";
 import { deleteOrgAction, updateOrgAction } from "@/app/actions";
 import { AuditLog } from "@/components/audit-log";
-import type { ApiAuditPage } from "@/lib/api";
+import { OrgDomains } from "@/components/org-domains";
+import type { ApiAuditPage, ApiOrgDomain } from "@/lib/api";
 
-export function OrgSettingsView({ org, name, bio, role, repositories, audit }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null }) {
+export function OrgSettingsView({ org, name, bio, role, repositories, audit, domains, verified }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null; domains: ApiOrgDomain[] | null; verified: string[] }) {
   const owner = role === "Owner";
   const [displayName, setDisplayName] = useState(name);
   const [description, setDescription] = useState(bio);
@@ -40,7 +41,7 @@ export function OrgSettingsView({ org, name, bio, role, repositories, audit }: {
 
   return (
     <AppShell>
-      <OrgHeader org={org} />
+      <OrgHeader org={org} domains={verified} />
       <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 lg:px-8 xl:px-10">
         <div className="flex flex-col gap-6">
           <div>
@@ -81,6 +82,18 @@ export function OrgSettingsView({ org, name, bio, role, repositories, audit }: {
               </CardContent>
             </Card>
           </form>
+
+          {owner && domains && (
+            <Card>
+              <CardHeader className="p-5 pb-2">
+                <CardTitle className="text-base font-semibold">Domains</CardTitle>
+                <CardDescription>Prove {org} controls a domain and it shows as verified on the organization’s page. Optionally, people with a confirmed address there join as Members, with no invitations to send.</CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                <OrgDomains org={org} initial={domains} />
+              </CardContent>
+            </Card>
+          )}
 
           {owner && audit && (
             <Card>

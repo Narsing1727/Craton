@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, FolderGit2, Settings, Users } from "lucide-react";
+import { BadgeCheck, Building2, FolderGit2, Settings, Users } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 
-export function OrgHeader({ org }: { org: string }) {
+export function OrgHeader({ org, domains = [] }: { org: string; domains?: string[] }) {
   const pathname = usePathname();
   const base = `/orgs/${org}`;
 
@@ -33,6 +33,17 @@ export function OrgHeader({ org }: { org: string }) {
               <p className="text-xs text-muted-foreground mt-0.5">
                 Organization · /orgs/{org}
               </p>
+              {domains.length > 0 && (
+                <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  {domains.map((d) => (
+                    <span key={d} className="inline-flex items-center gap-1" title={`${org} has proved it controls ${d}`}>
+                      <BadgeCheck className="size-3.5 text-accent" aria-hidden />
+                      <span className="font-mono">{d}</span>
+                      <span className="sr-only">(verified domain)</span>
+                    </span>
+                  ))}
+                </p>
+              )}
             </div>
           </div>
         </div>

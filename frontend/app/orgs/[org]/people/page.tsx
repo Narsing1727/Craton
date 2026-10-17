@@ -22,5 +22,5 @@ export default async function OrgPeoplePage({ params }: { params: Promise<{ org:
     role: m.role as Person["role"],
     repos: authors.filter((set) => set.has(m.handle)).length,
   }));
-  return <PeopleView org={org} initial={people} live />;
+  return <PeopleView org={org} initial={people} live domains={owner.verifiedDomains} />;
 }

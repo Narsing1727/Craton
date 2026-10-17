@@ -281,6 +281,9 @@ export type ApiCompare = {
   conflicts: string[];
 };
 export type ApiRepoDetail = ApiRepo & { access: "none" | "read" | "write" | "admin"; starred: boolean; branchCount: number; commitCount: number; head: ApiCommit | null; readme: string | null; openIssues: number; openPulls: number };
+/** One of an organization's domains, as its owners see it: the DNS record to publish until it is verified. */
+export type ApiOrgDomain = { domain: string; verified: boolean; verifiedAt: string | null; autoJoin: boolean; createdAt: string; record?: { type: string; name: string; value: string } };
+
 export type ApiOwner = {
   handle: string;
   kind: "user" | "org";
@@ -288,6 +291,8 @@ export type ApiOwner = {
   bio: string;
   createdAt: string;
   members?: { handle: string; name: string; role: string }[];
+  /** Domains an organization has proved it controls (public). */
+  verifiedDomains?: string[];
   orgs?: string[];
   commitCount?: number;
   repositories: ApiRepo[];
@@ -546,6 +551,7 @@ export const api = {
   releases: (owner: string, repo: string) => get<ApiRelease[]>(`${repoPath(owner, repo)}/releases`),
   search: (q: string) => get<{ repositories: ApiRepo[]; files: { repo: string; path: string; size: number }[]; people: { handle: string; name: string; bio: string }[]; organizations: { handle: string; name: string; bio: string }[] }>(`/search?q=${encodeURIComponent(q)}`),
   owner: (handle: string) => get<ApiOwner>(`/owners/${encodeURIComponent(handle)}`),
+  orgDomains: (org: string) => get<{ domains: ApiOrgDomain[] }>(`/orgs/${encodeURIComponent(org)}/domains`),
   starred: () => get<ApiRepo[]>("/user/starred"),
   trending: (period: "day" | "week" | "month") => get<(ApiRepo & { gained: number; starred: boolean })[]>(`/trending?period=${period}`),
   ownerStarred: (handle: string) => get<ApiRepo[]>(`/owners/${encodeURIComponent(handle)}/starred`),

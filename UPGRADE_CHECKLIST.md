@@ -260,6 +260,16 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 159 | Chat webhooks have **no signature and no secret** (a chat room can't check one); plain JSON webhooks are unchanged: signed, with a secret shown once | Create one of each |
 | 160 | Same retries, pausing, delivery log and redelivery for chat webhooks; the format is detected again when the address is edited | Backend test "the format is detected from the address…" |
 
+### 17. Organization domains
+
+| # | What it does | How to check |
+|---|---|---|
+| 161 | An organization owner **claims a domain and proves it with a DNS TXT record** (`_craton-challenge.<domain>` = `craton-verify=<token>`); the check says exactly what it found or did not find, and tells a DNS outage from a missing record | Organization → Settings → Domains → Add domain, then Check now |
+| 162 | **Verified domains show on the organization's public page** (header mark, and in the public profile API) | Open the org signed out |
+| 163 | **One organization per verified domain**; two may hold the same unverified claim and the first to prove it wins; free-mail domains (gmail.com…) and public suffixes (co.uk, ac.in) are refused | Backend tests |
+| 164 | Optional **"let people with a confirmed @domain address join as Members"**: existing people are added when it is switched on, new people when they confirm their address or sign in with Google/GitHub; an unconfirmed address never counts; sub-domains and look-alikes do not match; removing the domain or switching it off removes nobody | Organization → Settings → Domains → the switch |
+| 165 | Owners only (a maintainer is refused, a non-member sees nothing); the verify route is rate limited; every change is on the audit log | Backend tests, audit log |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

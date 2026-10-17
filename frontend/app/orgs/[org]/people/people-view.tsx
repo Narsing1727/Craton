@@ -43,7 +43,7 @@ function RoleSelect({ value, onChange, label }: { value: Member["role"]; onChang
   );
 }
 
-export function PeopleView({ org, initial, live }: { org: string; initial: Person[]; live: boolean }) {
+export function PeopleView({ org, initial, live, domains }: { org: string; initial: Person[]; live: boolean; domains?: string[] }) {
   const [people, setPeople] = useState<Person[]>(initial);
   const [pending, setPending] = useState(false);
   const [query, setQuery] = useState("");
@@ -119,7 +119,7 @@ export function PeopleView({ org, initial, live }: { org: string; initial: Perso
 
   return (
     <AppShell>
-      <OrgHeader org={org} />
+      <OrgHeader org={org} domains={domains} />
       <div className="flex w-full flex-col gap-6 px-4 sm:px-6 lg:px-8 xl:px-10 py-6">
         <div className="flex flex-col gap-4 border border-border bg-card p-4">
           <div>

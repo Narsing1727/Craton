@@ -98,6 +98,21 @@ export async function removeMemberAction(org: string, handle: string) {
 export async function updateOrgAction(org: string, patch: { name?: string; bio?: string }) {
   return write<{ handle: string; name: string; bio: string }>("PATCH", `/orgs/${encodeURIComponent(org)}`, patch, [`/orgs/${org}`]);
 }
+// ── Organization domains (owners) ──
+const domainPath = (org: string, domain?: string) => `/orgs/${encodeURIComponent(org)}/domains${domain ? `/${encodeURIComponent(domain)}` : ""}`;
+export async function addDomainAction(org: string, domain: string) {
+  return write<import("@/lib/api").ApiOrgDomain>("POST", domainPath(org), { domain }, [`/orgs/${org}`]);
+}
+export async function verifyDomainAction(org: string, domain: string) {
+  return write<import("@/lib/api").ApiOrgDomain & { joined: number }>("POST", `${domainPath(org, domain)}/verify`, undefined, [`/orgs/${org}`]);
+}
+export async function setDomainJoinAction(org: string, domain: string, autoJoin: boolean) {
+  return write<import("@/lib/api").ApiOrgDomain & { joined: number }>("PATCH", domainPath(org, domain), { autoJoin }, [`/orgs/${org}`]);
+}
+export async function removeDomainAction(org: string, domain: string) {
+  return write<null>("DELETE", domainPath(org, domain), undefined, [`/orgs/${org}`]);
+}
+
 export async function deleteOrgAction(org: string, confirm: string) {
   const result = await send<null>("DELETE", `/orgs/${encodeURIComponent(org)}`, { confirm });
   if (!result.ok) return result;
