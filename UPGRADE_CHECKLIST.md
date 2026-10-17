@@ -347,6 +347,13 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 | 197 | API: `PUT` and `DELETE /user/avatar`, `GET /avatars/{handle}`, `PATCH /user` takes `website`, `location`, `company`, `pronouns`; `/user` and `/owners/{handle}` return them and `hasAvatar`; migration 33; `avatar` is now a reserved handle | API reference; `backend/test/profile.test.ts` (4 tests) |
 | 198 | **Demo**: `@priyam` has a profile picture (a BMW M3, photo by Matti Blume, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:BMW_M3,_Auto_2024,_Zurich_(PANA0916).jpg), CC BY-SA 4.0, cropped to 256 px). Remove it from Settings → Profile any time | `/priyam` |
 
+### 26. A calmer "Create an organization" page
+
+| # | What it does | How to check |
+|---|---|---|
+| 199 | One centred panel with outlined fields whose labels float onto the border (the way Google's forms work), a short title and one line of explanation, the address filling itself from the name until you change it, and the Cancel / Create buttons at opposite ends | `/orgs/new`; `npm run e2e:org` in `frontend` (7 browser checks on a throwaway account) |
+| 200 | **Live address check**: "is available" with a tick, "That address is taken", or why it is badly formed, all before you press Create; a name the server refuses (reserved) is shown under the form | Type an existing organization's address |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

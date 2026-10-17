@@ -134,6 +134,12 @@ export async function createOrgAction(handle: string, name: string) {
   return write<{ handle: string; name: string }>("POST", "/orgs", { handle, name }, ["/dashboard"]);
 }
 
+/** Whether an address is already used by a person or organization (public information: their page exists). */
+export async function addressTakenAction(handle: string) {
+  if (!/^[a-z0-9][a-z0-9-]{0,37}[a-z0-9]$|^[a-z0-9]$/.test(handle)) return { taken: false };
+  return { taken: Boolean(await api.owner(handle)) };
+}
+
 // ── Command palette ──
 /** Repositories the signed-in person can see (or public ones), for jump-to in the palette. */
 export async function paletteReposAction() {
