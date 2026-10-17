@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { AUTH } from "@/components/auth-shell";
 import { unsubscribeDigestAction } from "@/app/auth-actions";
 
 export function UnsubscribeButton({ token }: { token: string }) {
@@ -10,9 +11,9 @@ export function UnsubscribeButton({ token }: { token: string }) {
   const [busy, start] = useTransition();
   if (state.done) {
     return (
-      <p role="status" className="text-center text-sm">
+      <p role="status" className="text-[14px] leading-relaxed text-white/70">
         Done. You won’t get the weekly email any more.{" "}
-        <Link href="/" className="underline underline-offset-2">
+        <Link href="/" className={AUTH.link}>
           Back to Craton
         </Link>
       </p>
@@ -21,12 +22,12 @@ export function UnsubscribeButton({ token }: { token: string }) {
   return (
     <div className="flex flex-col gap-3">
       {state.error && (
-        <p role="alert" className="border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive text-pretty">
+        <p role="alert" className={AUTH.error}>
           {state.error}
         </p>
       )}
       <Button
-        className="w-full"
+        className={AUTH.primary}
         loading={busy}
         disabled={busy}
         onClick={() =>

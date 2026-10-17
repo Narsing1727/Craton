@@ -3,14 +3,12 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Eye, EyeOff, Info, Building2, KeyRound, ShieldCheck } from "lucide-react";
-import { CratonLogo } from "@/components/craton-logo";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { AUTH, AuthDivider, AuthShell, AuthTitle } from "@/components/auth-shell";
 import { loginAction, loginMfaAction, passkeyLoginAction, passkeyLoginOptionsAction, signupAction, type FormResult } from "@/app/auth-actions";
 import { conditionalSupported, getPasskey, passkeyErrorMessage, passkeysSupported } from "@/lib/webauthn";
-import { DotPattern } from "@/components/ui/dot-pattern";
 import { cn } from "@/lib/utils";
 
 type AuthFormProps = {
@@ -131,108 +129,98 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
 
   const passkeyButton = isLogin && passkeys && canPasskey;
 
+  const social = [
+    google && { key: "google", href: `/auth/google${next ? `?next=${encodeURIComponent(next)}` : ""}`, label: "Google", mark: <GoogleMark /> },
+    github && { key: "github", href: `/auth/github${next ? `?next=${encodeURIComponent(next)}` : ""}`, label: "GitHub", mark: <GitHubMark /> },
+  ].filter(Boolean) as { key: string; href: string; label: string; mark: React.ReactNode }[];
+  const hasAlternatives = social.length > 0 || sso || passkeyButton;
+  const nextQuery = next ? `?next=${encodeURIComponent(next)}` : "";
+
   return (
-    <main id="main" className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-background px-4 py-12">
-      <DotPattern
-        className={cn("text-foreground/20 mask-[radial-gradient(480px_circle_at_center,white,transparent)]")}
-        width={24}
-        height={24}
+    <AuthShell action={isLogin ? { lead: "New to Craton?", label: "Create account", href: "/signup" } : { lead: "Already have an account?", label: "Sign in", href: `/login${nextQuery}` }}>
+      <AuthTitle
+        title={codeStep ? "Two-step verification" : isLogin ? "Sign in" : "Create your account"}
+        subtitle={codeStep ? "Enter the 6-digit code from your authenticator app." : isLogin ? "Continue to Craton." : "Free while in early access. No credit card."}
       />
-      <Link href="/" className="relative mb-8" aria-label="Craton home">
-        <CratonLogo className="text-xl" />
-      </Link>
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="font-serif text-2xl">
-            <h1>{codeStep ? "Two-step verification" : isLogin ? "Sign in to Craton" : "Create your account"}</h1>
-          </CardTitle>
-          <CardDescription>
-            {codeStep ? "Enter the 6-digit code from your authenticator app." : isLogin ? "Welcome back. Pick up where your basin left off." : "Free to start. No credit card needed."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {codeStep && ticket ? (
-            <CodeStep ticket={ticket} next={next} onBack={() => setLeftTicket(ticket)} />
-          ) : (
-          <>
+      {codeStep && ticket ? (
+        <CodeStep ticket={ticket} next={next} onBack={() => setLeftTicket(ticket)} />
+      ) : (
+        <>
           {notice && (
-            <p role="status" className="mb-4 flex items-start gap-2 border border-border bg-muted/30 p-3 text-xs text-muted-foreground text-pretty">
-              <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <p role="status" className={cn(AUTH.note, "mb-6")}>
               {notice}
             </p>
           )}
-          {(google || github || sso || passkeyButton) && (
+          {hasAlternatives && (
             <>
-              <div className="flex flex-col gap-2">
-                {passkeyButton && (
-                  <Button type="button" variant="outline" className="w-full gap-2" onClick={() => void signInWithPasskey()} loading={passkeyBusy} disabled={passkeyBusy}>
-                    <KeyRound className="size-4" aria-hidden />
-                    Sign in with a passkey
-                  </Button>
-                )}
-                {google && (
-                  /* A plain anchor on purpose: a Next <Link> would prefetch this route and start a sign-in nobody asked for. */
-                  <a href={`/auth/google${next ? `?next=${encodeURIComponent(next)}` : ""}`} className={cn(buttonVariants({ variant: "outline" }), "w-full gap-2")}>
-                    <GoogleMark />
-                    Continue with Google
-                  </a>
-                )}
-                {github && (
-                  <a href={`/auth/github${next ? `?next=${encodeURIComponent(next)}` : ""}`} className={cn(buttonVariants({ variant: "outline" }), "w-full gap-2")}>
-                    <GitHubMark />
-                    Continue with GitHub
-                  </a>
-                )}
-                {sso && (
-                  <a href={`/login/sso${next ? `?next=${encodeURIComponent(next)}` : ""}`} className={cn(buttonVariants({ variant: "outline" }), "w-full gap-2")}>
-                    <Building2 className="size-4" aria-hidden />
-                    Continue with single sign-on
-                  </a>
-                )}
-              </div>
-              {notSetUp && notSetUp.length > 0 && (
-                <p className="mt-2 text-center text-xs text-muted-foreground text-pretty" data-testid="providers-not-set-up">
-                  Development note: {notSetUp.join(" and ")} {notSetUp.length === 1 ? "is" : "are"} not set up on this server yet, so {notSetUp.length === 1 ? "its button" : "their buttons"} will say so. Add the credentials with <span className="font-mono">npm run setup:oauth</span>; visitors never see this note or an unconfigured button in production.
-                </p>
+              {social.length > 0 && (
+                <div className={cn("grid gap-2.5", social.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
+                  {social.map((p) => (
+                    /* A plain anchor on purpose: a Next <Link> would prefetch this route and start a sign-in nobody asked for. */
+                    <a key={p.key} href={p.href} className={cn(buttonVariants({ variant: "outline" }), AUTH.outline, "gap-2.5")}>
+                      {p.mark}
+                      {p.label}
+                    </a>
+                  ))}
+                </div>
               )}
-              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground" aria-hidden>
-                <span className="h-px flex-1 bg-border" />
-                or
-                <span className="h-px flex-1 bg-border" />
-              </div>
+              {(passkeyButton || sso) && (
+                <div className={cn("flex flex-col", social.length > 0 && "mt-1.5")}>
+                  {passkeyButton && (
+                    <Button type="button" variant="ghost" className={cn(AUTH.quiet, "gap-2")} onClick={() => void signInWithPasskey()} loading={passkeyBusy} disabled={passkeyBusy}>
+                      <KeyRound className="size-4" aria-hidden />
+                      Use a passkey
+                    </Button>
+                  )}
+                  {sso && (
+                    <a href={`/login/sso${nextQuery}`} className={cn(buttonVariants({ variant: "ghost" }), AUTH.quiet, "gap-2")}>
+                      <Building2 className="size-4" aria-hidden />
+                      Single sign-on
+                    </a>
+                  )}
+                </div>
+              )}
+              <AuthDivider />
             </>
           )}
           <form action={formAction} noValidate>
             {next && <input type="hidden" name="next" value={next} />}
-            <FieldGroup>
+            <div className="flex flex-col gap-5">
               {!isLogin && (
                 <Field data-invalid={usernameError ? true : undefined}>
-                  <FieldLabel htmlFor="username">Username</FieldLabel>
+                  <FieldLabel htmlFor="username" className={AUTH.label}>
+                    Username
+                  </FieldLabel>
                   <Input
                     id="username"
                     name="username"
                     autoComplete="username"
                     autoCapitalize="none"
                     spellCheck={false}
-                    placeholder="e.g. priya-menon"
+                    placeholder="priya-menon"
                     value={username}
                     onChange={(e) => setUsername(e.target.value.toLowerCase())}
                     aria-invalid={!!usernameError}
                     aria-describedby="username-help"
+                    className={AUTH.input}
                     required
                     autoFocus
                   />
                   {usernameError ? (
-                    <FieldError id="username-help">{usernameError}</FieldError>
+                    <FieldError id="username-help" className="text-[13px] text-red-400">
+                      {usernameError}
+                    </FieldError>
                   ) : (
-                    <FieldDescription id="username-help">
-                      Shown on your profile and commits as <span className="font-mono text-foreground">@{username || "username"}</span>
+                    <FieldDescription id="username-help" className="text-[13px] text-white/40">
+                      Shown on your profile and commits as <span className="font-mono text-white/70">@{username || "username"}</span>
                     </FieldDescription>
                   )}
                 </Field>
               )}
               <Field data-invalid={fieldError("email") ? true : undefined}>
-                <FieldLabel htmlFor="login">{isLogin ? "Email or username" : "Work email"}</FieldLabel>
+                <FieldLabel htmlFor="login" className={AUTH.label}>
+                  {isLogin ? "Email or username" : "Work email"}
+                </FieldLabel>
                 <Input
                   id="login"
                   name={isLogin ? "login" : "email"}
@@ -241,21 +229,28 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
                   autoComplete={isLogin ? "username webauthn" : "email"}
                   autoCapitalize="none"
                   spellCheck={false}
-                  placeholder="you@agency.org"
+                  placeholder="you@your-organization.org"
                   value={loginValue}
                   onChange={(e) => setLoginValue(e.target.value)}
                   aria-invalid={!!fieldError("email")}
                   aria-describedby={fieldError("email") ? "login-error" : undefined}
+                  className={AUTH.input}
                   required
                   autoFocus={isLogin}
                 />
-                {fieldError("email") && <FieldError id="login-error">{fieldError("email")}</FieldError>}
+                {fieldError("email") && (
+                  <FieldError id="login-error" className="text-[13px] text-red-400">
+                    {fieldError("email")}
+                  </FieldError>
+                )}
               </Field>
               <Field data-invalid={passwordError ? true : undefined}>
                 <div className="flex items-center justify-between">
-                  <FieldLabel htmlFor="password">Password</FieldLabel>
+                  <FieldLabel htmlFor="password" className={AUTH.label}>
+                    Password
+                  </FieldLabel>
                   {isLogin && (
-                    <Link href="/forgot-password" className="hit-area text-xs text-muted-foreground hover:text-foreground hover:underline">
+                    <Link href="/forgot-password" className={cn("hit-area text-[13px]", AUTH.link)}>
                       Forgot password?
                     </Link>
                   )}
@@ -272,7 +267,7 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
                     aria-invalid={!!passwordError}
                     aria-describedby={passwordError ? "password-error" : !isLogin ? "password-help" : undefined}
                     placeholder="••••••••••••"
-                    className="pr-9"
+                    className={cn(AUTH.input, "pr-11")}
                     required
                   />
                   <button
@@ -280,60 +275,63 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
                     onClick={() => setShowPassword((v) => !v)}
                     aria-label={showPassword ? "Hide password" : "Show password"}
                     aria-pressed={showPassword}
-                    className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer"
+                    className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded-[4px] text-white/40 transition-colors hover:text-white"
                   >
                     {showPassword ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
                   </button>
                 </div>
                 {passwordError ? (
-                  <FieldError id="password-error">{passwordError}</FieldError>
+                  <FieldError id="password-error" className="text-[13px] text-red-400">
+                    {passwordError}
+                  </FieldError>
                 ) : (
-                  !isLogin && <FieldDescription id="password-help">At least 12 characters. A passphrase works well.</FieldDescription>
+                  !isLogin && (
+                    <FieldDescription id="password-help" className="text-[13px] text-white/40">
+                      At least 12 characters. A passphrase works well.
+                    </FieldDescription>
+                  )
                 )}
               </Field>
               {formError && (
-                <p role="alert" className="border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive text-pretty">
+                <p role="alert" className={AUTH.error}>
                   {formError}
                 </p>
               )}
-              <Button type="submit" className="w-full" loading={pending} disabled={pending}>
+              <Button type="submit" className={cn(AUTH.primary, "mt-1")} loading={pending} disabled={pending}>
                 {pending ? (isLogin ? "Signing in…" : "Creating your account…") : isLogin ? "Sign in" : "Create account"}
               </Button>
               {!isLogin && (
-                <p className="text-center text-xs text-muted-foreground text-pretty">
-                  By creating an account you agree to the <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">Terms</Link> and{" "}
-                  <Link href="/privacy" className="underline underline-offset-2 hover:text-foreground">Privacy policy</Link>.
+                <p className="text-center text-[12px] leading-relaxed text-white/40 text-pretty">
+                  By creating an account you agree to the{" "}
+                  <Link href="/terms" className={AUTH.link}>
+                    Terms
+                  </Link>{" "}
+                  and{" "}
+                  <Link href="/privacy" className={AUTH.link}>
+                    Privacy policy
+                  </Link>
+                  .
                 </p>
               )}
-            </FieldGroup>
+            </div>
           </form>
-          {isLogin && demoHint && (
-            <p className="mt-4 border-t border-border pt-3 text-center text-[11px] text-muted-foreground">
-              Local demo: <span className="font-mono text-foreground">priyam</span> / <span className="font-mono text-foreground">craton-demo-2026</span>
-            </p>
+          {((notSetUp && notSetUp.length > 0) || (isLogin && demoHint)) && (
+            <div className="mt-10 flex flex-col gap-1.5 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-white/35">
+              {notSetUp && notSetUp.length > 0 && (
+                <p data-testid="providers-not-set-up" className="text-pretty">
+                  Development note: {notSetUp.join(" and ")} {notSetUp.length === 1 ? "is" : "are"} not set up on this server yet. Add the credentials with <span className="font-mono text-white/55">npm run setup:oauth</span>. Visitors never see this, or an unconfigured button, in production.
+                </p>
+              )}
+              {isLogin && demoHint && (
+                <p>
+                  Local demo: <span className="font-mono text-white/55">priyam</span> / <span className="font-mono text-white/55">craton-demo-2026</span>
+                </p>
+              )}
+            </div>
           )}
-          </>
-          )}
-        </CardContent>
-      </Card>
-      <p className="mt-6 text-sm text-muted-foreground">
-        {isLogin ? (
-          <>
-            New to Craton?{" "}
-            <Link href="/signup" className="text-accent underline underline-offset-2">
-              Create an account
-            </Link>
-          </>
-        ) : (
-          <>
-            Already have an account?{" "}
-            <Link href={next ? `/login?next=${encodeURIComponent(next)}` : "/login"} className="text-accent underline underline-offset-2">
-              Sign in
-            </Link>
-          </>
-        )}
-      </p>
-    </main>
+        </>
+      )}
+    </AuthShell>
   );
 }
 
@@ -348,9 +346,11 @@ function CodeStep({ ticket, next, onBack }: { ticket: string; next?: string; onB
     <form action={formAction} noValidate>
       <input type="hidden" name="ticket" value={ticket} />
       {next && <input type="hidden" name="next" value={next} />}
-      <FieldGroup>
+      <div className="flex flex-col gap-5">
         <Field data-invalid={error?.field === "code" ? true : undefined}>
-          <FieldLabel htmlFor="code">{recovery ? "Recovery code" : "Authentication code"}</FieldLabel>
+          <FieldLabel htmlFor="code" className={AUTH.label}>
+            {recovery ? "Recovery code" : "Authentication code"}
+          </FieldLabel>
           <Input
             id="code"
             name="code"
@@ -361,35 +361,42 @@ function CodeStep({ ticket, next, onBack }: { ticket: string; next?: string; onB
             autoCapitalize="none"
             spellCheck={false}
             placeholder={recovery ? "xxxxx-xxxxx" : "123456"}
-            className="font-mono tracking-widest"
+            className={cn(AUTH.input, "font-mono tracking-[0.3em]")}
             aria-invalid={error?.field === "code"}
             autoFocus
             required
           />
           {error?.field === "code" ? (
-            <FieldError>{error.error}</FieldError>
+            <FieldError className="text-[13px] text-red-400">{error.error}</FieldError>
           ) : (
-            <FieldDescription>{recovery ? "Each recovery code works once." : "The code changes every 30 seconds."}</FieldDescription>
+            <FieldDescription className="text-[13px] text-white/40">{recovery ? "Each recovery code works once." : "The code changes every 30 seconds."}</FieldDescription>
           )}
         </Field>
         {error && error.field !== "code" && (
-          <p role="alert" className="border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive text-pretty">
+          <p role="alert" className={AUTH.error}>
             {error.error}
           </p>
         )}
-        <Button type="submit" className="w-full" loading={pending} disabled={pending || !code}>
+        <Button type="submit" className={AUTH.primary} loading={pending} disabled={pending || !code}>
           <ShieldCheck data-icon="inline-start" />
           Verify and sign in
         </Button>
-        <div className="flex flex-col items-center gap-1.5 text-xs">
-          <button type="button" className="text-muted-foreground underline underline-offset-2 hover:text-foreground" onClick={() => { setRecovery((v) => !v); setCode(""); }}>
+        <div className="flex flex-col items-center gap-2 text-[13px]">
+          <button
+            type="button"
+            className={AUTH.link}
+            onClick={() => {
+              setRecovery((v) => !v);
+              setCode("");
+            }}
+          >
             {recovery ? "Use an authenticator code instead" : "Lost your phone? Use a recovery code"}
           </button>
-          <button type="button" className="text-muted-foreground underline underline-offset-2 hover:text-foreground" onClick={onBack}>
+          <button type="button" className={AUTH.link} onClick={onBack}>
             Back to password
           </button>
         </div>
-      </FieldGroup>
+      </div>
     </form>
   );
 }

@@ -515,3 +515,47 @@
     animation-timeline: scroll(self inline);
   }
 }
+
+/* ── Sign-in pages (components/auth-shell.tsx) ───────────────────────────────────────────────
+   Pure black and quiet. The tokens are re-pointed only inside this scope, so the shared inputs,
+   buttons and messages restyle themselves here and nowhere else. */
+@keyframes auth-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.auth-rise {
+  animation: auth-rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-rise {
+    animation: none;
+  }
+}
+.auth-surface {
+  --background: oklch(0 0 0);
+  --card: oklch(0 0 0);
+  --popover: oklch(0.1 0 0);
+  --border: oklch(1 0 0 / 0.1);
+  --input: oklch(1 0 0 / 0.12);
+  --muted: oklch(1 0 0 / 0.06);
+  --muted-foreground: oklch(1 0 0 / 0.5);
+  --ring: oklch(1 0 0 / 0.5);
+  color-scheme: dark;
+  background-color: #000;
+  -webkit-font-smoothing: antialiased;
+}
+/* The browser's own autofill colours (bright blue or yellow) would break the page. */
+.auth-surface input:-webkit-autofill,
+.auth-surface input:-webkit-autofill:hover,
+.auth-surface input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #fff;
+  caret-color: #fff;
+  -webkit-box-shadow: 0 0 0 100px #0b0b0b inset;
+  transition: background-color 9999s ease-out 0s;
+}

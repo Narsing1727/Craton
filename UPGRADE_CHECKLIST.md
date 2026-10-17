@@ -299,6 +299,15 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 178 | **One-click unsubscribe** in every message that works without signing in (a keyed signature of the account; forged or altered links change nothing); the page shows a button, so a mail scanner opening the link does not unsubscribe anyone | Follow the link at the bottom of a summary |
 | 179 | **Google and GitHub buttons are visible on a development server even before credentials exist**, with a note saying so; clicking says the provider is not set up. In production only configured providers are shown | `http://localhost:3100/login` |
 
+### 21. Sign-in pages redesign
+
+| # | What it does | How to check |
+|---|---|---|
+| 180 | **One quiet, pure-black frame for every sign-in page** (sign in, sign up, forgot and reset password, confirm email, single sign-on, choose a username, unsubscribe, loading): no pattern, no card, wordmark top left, the other way in top right, one centered column, legal links at the foot | `/login`, `/signup`, `/forgot-password` |
+| 181 | Google and GitHub side by side; passkey and single sign-on as quiet text actions; the form below a hairline; one white primary button; errors as a thin red rule, not a boxed alert; autofill colours neutralised; a short rise-in that respects reduced motion | `/login` |
+| 182 | Scoped re-pointing of tokens (`.auth-surface`) so nothing else in the app changed; sizes and radii stay on the app's scale | Open any other page |
+| 183 | All browser flows (Google, GitHub, single sign-on, passkeys) still pass on the new pages; the page sweep is clean | `npm run e2e:*`, `npm run sweep` |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { CircleCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AUTH } from "@/components/auth-shell";
 import { verifyEmailAction } from "@/app/auth-actions";
 
 export function VerifyButton({ token }: { token: string }) {
@@ -12,12 +13,12 @@ export function VerifyButton({ token }: { token: string }) {
 
   if (state.done) {
     return (
-      <div className="flex flex-col items-center gap-4 text-center">
-        <p role="status" className="flex items-center gap-2 text-sm">
-          <CircleCheck className="size-4 text-chart-2" aria-hidden />
+      <div className="flex flex-col gap-4">
+        <p role="status" className="flex items-center gap-2 text-[14px] text-white/80">
+          <CircleCheck className="size-4 text-emerald-400" aria-hidden />
           Email confirmed.
         </p>
-        <Button href="/dashboard" className="w-full">
+        <Button href="/dashboard" className={AUTH.primary}>
           Go to your dashboard
         </Button>
       </div>
@@ -27,7 +28,7 @@ export function VerifyButton({ token }: { token: string }) {
   return (
     <div className="flex flex-col gap-3">
       <Button
-        className="w-full"
+        className={AUTH.primary}
         loading={pending}
         disabled={pending}
         onClick={() =>
@@ -40,9 +41,9 @@ export function VerifyButton({ token }: { token: string }) {
         Confirm email address
       </Button>
       {state.error && (
-        <p role="alert" className="text-center text-sm text-destructive">
+        <p role="alert" className={AUTH.error}>
           {state.error}{" "}
-          <Link href="/settings/security" className="underline underline-offset-2">
+          <Link href="/settings/security" className="underline underline-offset-4">
             Send a new link
           </Link>
         </p>

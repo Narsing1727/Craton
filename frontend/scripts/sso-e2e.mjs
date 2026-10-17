@@ -70,7 +70,7 @@ const person = `pat${RUN}`;
   const page = await ctx.newPage();
   await who({ sub: `sso-${RUN}`, email: `${person}@${domain}`, name: "Pat Person" });
   await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
-  const link = page.getByRole("link", { name: /continue with single sign-on/i });
+  const link = page.getByRole("link", { name: /^single sign-on$/i });
   check("the sign-in page offers single sign-on once an organization has it", await link.isVisible());
   await page.screenshot({ path: `${SHOTS}/sso-2-login.png` });
   await link.click();

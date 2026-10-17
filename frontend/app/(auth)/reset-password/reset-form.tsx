@@ -3,7 +3,8 @@
 import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { AUTH } from "@/components/auth-shell";
 import { resetPasswordAction, type FormResult } from "@/app/auth-actions";
 
 export function ResetForm({ token }: { token: string }) {
@@ -16,26 +17,26 @@ export function ResetForm({ token }: { token: string }) {
   return (
     <form action={formAction} noValidate>
       <input type="hidden" name="token" value={token} />
-      <FieldGroup>
+      <div className="flex flex-col gap-5">
         <Field data-invalid={state && !state.ok && state.field === "password" ? true : undefined}>
-          <FieldLabel htmlFor="password">New password</FieldLabel>
-          <Input id="password" name="password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus />
-          <FieldDescription>At least 12 characters. Every other session will be signed out.</FieldDescription>
+          <FieldLabel htmlFor="password" className={AUTH.label}>New password</FieldLabel>
+          <Input id="password" name="password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className={AUTH.input} required autoFocus />
+          <FieldDescription className="text-[13px] text-white/40">At least 12 characters. Every other session will be signed out.</FieldDescription>
         </Field>
         <Field data-invalid={mismatch ? true : undefined}>
-          <FieldLabel htmlFor="confirm">Confirm password</FieldLabel>
-          <Input id="confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={mismatch} required />
-          {mismatch && <FieldError>The passwords don&apos;t match.</FieldError>}
+          <FieldLabel htmlFor="confirm" className={AUTH.label}>Confirm password</FieldLabel>
+          <Input id="confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={mismatch} className={AUTH.input} required />
+          {mismatch && <FieldError className="text-[13px] text-red-400">The passwords don&apos;t match.</FieldError>}
         </Field>
         {error && (
-          <p role="alert" className="border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive text-pretty">
+          <p role="alert" className={AUTH.error}>
             {error}
           </p>
         )}
-        <Button type="submit" className="w-full" loading={pending} disabled={pending || mismatch || password.length < 12}>
+        <Button type="submit" className={AUTH.primary} loading={pending} disabled={pending || mismatch || password.length < 12}>
           Set new password
         </Button>
-      </FieldGroup>
+      </div>
     </form>
   );
 }

@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { CratonLogo } from "@/components/craton-logo";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AuthShell, AuthTitle } from "@/components/auth-shell";
 import { UnsubscribeButton } from "./unsubscribe-button";
 
 export const metadata: Metadata = { title: "Stop the weekly email", robots: { index: false, follow: false } };
@@ -13,19 +11,9 @@ export const metadata: Metadata = { title: "Stop the weekly email", robots: { in
 export default async function UnsubscribePage({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
   const { token } = await searchParams;
   return (
-    <main id="main" className="flex min-h-dvh flex-col items-center justify-center bg-background px-4 py-12">
-      <Link href="/" className="mb-8" aria-label="Craton home">
-        <CratonLogo className="text-xl" />
-      </Link>
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="font-serif text-2xl">
-            <h1>Stop the weekly email?</h1>
-          </CardTitle>
-          <CardDescription>You can turn it back on any time in Settings → Profile.</CardDescription>
-        </CardHeader>
-        <CardContent>{token ? <UnsubscribeButton token={token} /> : <p className="text-sm text-muted-foreground">This link is incomplete. Turn the weekly email off in Settings → Profile.</p>}</CardContent>
-      </Card>
-    </main>
+    <AuthShell>
+      <AuthTitle title="Stop the weekly email?" subtitle="You can turn it back on any time in Settings → Profile." />
+      {token ? <UnsubscribeButton token={token} /> : <p className="text-[14px] text-white/50">This link is incomplete. Turn the weekly email off in Settings → Profile.</p>}
+    </AuthShell>
   );
 }
