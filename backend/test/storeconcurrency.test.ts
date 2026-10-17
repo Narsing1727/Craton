@@ -27,6 +27,9 @@ class SlowStore implements ChunkStore {
     this.map.set(hash, Buffer.from(stored));
     this.inFlight--;
   }
+  async replace(hash: string, stored: Buffer) {
+    this.map.set(hash, Buffer.from(stored));
+  }
   async get(hash: string) {
     return this.map.get(hash) ?? null;
   }

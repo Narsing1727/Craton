@@ -2,11 +2,14 @@
 // exactly the bytes that were uploaded; clients are never sent a form they cannot decode; garbage collection keeps what a
 // stored difference needs.
 
-import { test, before } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
 import { openDb } from "../src/db/db.ts";
-import { MemoryStore } from "../src/storage/chunk-store.ts";
+import { FsStore } from "../src/storage/fs-store.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Ctx } from "../src/services/context.ts";
 import { findRepo } from "../src/services/repos.ts";
 import { repackCommit, repackIdle, verifyDifferences } from "../src/services/repack.ts";
@@ -22,6 +25,7 @@ import type { BlobObject, CommitObject, TreeObject } from "../src/core/objects.t
 let ctx: Ctx;
 let app: ReturnType<typeof createApp>;
 let token = "";
+let dir = "";
 let repo: ReturnType<typeof findRepo>;
 
 const COUNT = 700_000; // 2.8 MB of float32: about twenty chunks
@@ -54,7 +58,9 @@ let c1 = "";
 let c2 = "";
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  // The real on-disk store: it keeps what is already there on `put`, which is what repacking must not trip over.
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "craton-repack-"));
+  ctx = { db: openDb(":memory:"), store: new FsStore(dir) };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "alice", email: "alice@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
@@ -122,9 +128,9 @@ test("a client cannot upload a difference, and a damaged one is never read as th
   await assert.rejects(putStored(ctx, repo, "f".repeat(64), stored), /could not be decoded|Unknown/);
   const broken = Buffer.from(stored);
   broken[stored.length - 3] ^= 0xff;
-  await ctx.store.put(hash, broken);
+  await ctx.store.replace(hash, broken);
   await assert.rejects(readChunk(ctx, hash));
-  await ctx.store.put(hash, stored);
+  await ctx.store.replace(hash, stored);
   assert.equal(sha256Hex(await readChunk(ctx, hash)), hash, "and the good bytes read again");
 });
 
@@ -179,3 +185,5 @@ test("with it switched on, a new version is stored as a difference by the push i
     config.repack.auto = false;
   }
 });
+
+after(() => fs.rmSync(dir, { recursive: true, force: true }));

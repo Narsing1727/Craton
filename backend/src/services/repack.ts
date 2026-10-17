@@ -122,7 +122,7 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
         touched = true;
         if (apply) {
           for (const r of refs) ctx.db.prepare("INSERT OR IGNORE INTO chunk_refs (chunk_hash, ref_hash) VALUES (?, ?)").run(c.hash, r.hash);
-          await ctx.store.put(c.hash, next);
+          await ctx.store.replace(c.hash, next);
           ctx.db.prepare("UPDATE chunks SET stored_size = ?, codec = 'ref-delta' WHERE hash = ?").run(next.length, c.hash);
         }
         break;

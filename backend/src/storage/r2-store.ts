@@ -42,6 +42,10 @@ export class R2Store implements ChunkStore {
     if (!res.ok) throw new Error(`R2 PUT ${hash} failed: ${res.status} ${await res.text()}`);
   }
 
+  async replace(hash: string, stored: Buffer) {
+    await this.put(hash, stored); // an object store's PUT replaces the object
+  }
+
   async get(hash: string) {
     const res = await this.request("GET", hash);
     if (res.status === 404) return null;
