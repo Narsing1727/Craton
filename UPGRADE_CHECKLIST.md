@@ -324,6 +324,19 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 188 | **"Recent security activity" is one row** (nothing unusual, or how many things to check, and the latest event) with a **View all activity** button; the dialog lists the latest 100 events by day with the time of each, and a filter for the ones that need a look (failed sign-ins, two-step turned off, password reset requested) | Settings → Security → View all activity |
 | 189 | The settings page no longer grows with every browser and sign-in | Scroll Settings → Security |
 
+### 24. More settings, and the activity dialogs fixed
+
+Compared with GitHub, GitLab, Google and Linear, Craton had no control over what it emails and nowhere for preferences. Not copied: SSH/GPG keys and authorized OAuth apps (Craton has neither), time zone and 12/24-hour time (would need every date on the site to follow it), changing a username.
+
+| # | What it does | How to check |
+|---|---|---|
+| 190 | **Settings → Notifications**: one switch for each email Craton sends (review requests, failed checks on your pushes, repositories shared with you, webhooks paused, storage nearly full), all on until switched off, saved the moment you flip one; the weekly summary moved here; the emails that protect the account (new sign-in, two-step changes, password reset, deletion) are listed as always sent | Settings → Notifications; turn one off and the email is not sent (test: a switched-off email is not sent, and the same email still reaches someone who kept it on) |
+| 191 | **Settings → Preferences**: theme and units (moved from Profile), **Reduce motion** (this browser; applied before the first paint), **Single-key shortcuts** on or off (this browser; Ctrl or ⌘ K always works), and **New repositories**: the visibility a repository starts with, saved on the account and also used by the API and CLI when a create request does not say | Settings → Preferences; `npm run e2e:settings` in `frontend` (13 browser checks on a throwaway account) |
+| 192 | `PATCH /user` takes `notify` (individual emails, unknown names and non-booleans refused) and `defaultVisibility`; `GET /user` returns both; migration 32 | API reference → PATCH /user; `backend/test/notifications.test.ts` (4 tests) |
+| 193 | The **activity dialogs no longer outgrow the window**: the height is set on the dialog itself, so the title and buttons stay in view and only the list scrolls (checked at 1918×920, 1280×640 and phone width) | Settings → Security → Manage devices / View all activity |
+
+Run the browser check against a throwaway API (start it with its own `CRATON_DATA_DIR`), not your demo account: every sign-in is written to that account's security log.
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.
@@ -337,6 +350,6 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 
 - **Google sign-in has never talked to the real Google.** It is tested against a stand-in that signs tokens the way Google does (22 browser checks and 11 API tests), but I have no credentials, so the first real attempt may need a consent-screen tweak. GitHub sign-in has the same limit (tested against a stand-in for GitHub). Microsoft is not built.
 - Stars, followers, wiki, forks, teams and billing are demo.
-- Not built: SAML and SCIM, writing through fsspec (reads only), a Slack app with slash commands (only incoming webhooks), QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, light theme, comments pinned to a map location.
+- Not built: SAML and SCIM, writing through fsspec (reads only), a Slack app with slash commands (only incoming webhooks), QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, comments pinned to a map location.
 - Chunk packs for R2 and the R2 store itself have never run against live R2 (simulated with a 40 ms put).
 - Flood3D scenario import and the Studio menu bar belong to Nerolith, not Craton.

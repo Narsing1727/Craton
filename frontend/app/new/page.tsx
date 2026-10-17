@@ -22,6 +22,7 @@ export default async function NewRepoPage({ searchParams }: { searchParams: Prom
       owners={owners}
       defaultOwner={defaultOwner}
       live={live}
+      defaultVisibility={user?.defaultVisibility ?? "public"}
       starters={starters ?? []}
       server={process.env.CRATON_API_URL ?? "http://localhost:4000"}
     />

@@ -6,6 +6,7 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
+import { shortcutsOn } from "@/lib/prefs";
 import { OPEN_GO_TO_FILE } from "@/lib/shortcuts";
 
 const loadDialog = () => import("@/components/go-to-file-dialog");
@@ -31,7 +32,7 @@ export function GoToFile({ owner, repo }: { owner: string; repo: string }) {
       setOpen(true);
     };
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key.toLowerCase() !== "t" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key.toLowerCase() !== "t" || e.metaKey || e.ctrlKey || e.altKey || !shortcutsOn()) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))) return;
       e.preventDefault();

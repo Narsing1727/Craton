@@ -55,6 +55,7 @@ import * as sharing from "../services/sharing.ts";
 import * as ingest from "../services/ingest.ts";
 import * as extent from "../services/extent.ts";
 import * as inbox from "../services/inbox.ts";
+import { notifyOf, wantsEmail } from "../services/notify.ts";
 import { parseLatLon, type BBox } from "../core/geo.ts";
 import { citationFor } from "../services/citation.ts";
 import { LICENSES } from "../services/licenses.ts";
@@ -657,6 +658,8 @@ export function createApp(ctx: Ctx) {
     emailVerified: Boolean(u.email_verified_at),
     twoFactor: Boolean(u.totp_enabled_at),
     digest: u.digest,
+    notify: notifyOf(u.notify),
+    defaultVisibility: u.default_visibility,
     createdAt: u.created_at,
     writableOwners: stats.writableOwners(ctx, u.id),
   });
@@ -686,7 +689,7 @@ export function createApp(ctx: Ctx) {
     return c.json({ handle: digest.unsubscribe(ctx, b.token), digest: "off" });
   });
   v1.patch("/user", async (c) => {
-    const b = await body<{ name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string }>(c);
+    const b = await body<{ name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string; notify?: Record<string, boolean>; defaultVisibility?: string }>(c);
     return c.json(userJson(accounts.updateProfile(ctx, requireUser(c).id, b)));
   });
   // Email confirmation.
@@ -1032,7 +1035,9 @@ export function createApp(ctx: Ctx) {
     if (b.card && !card) throw badRequest(`Unknown README template “${String(b.card).slice(0, 40)}”.`);
     const ownerHandle = b.owner ?? u.handle;
     const ownerRow = accounts.getOwner(ctx, ownerHandle);
-    if ((b.visibility ?? "public") === "public") accounts.requireVerified(u, "publish a public repository");
+    // A request that does not say starts with what the person chose in Settings → Preferences.
+    b.visibility ??= u.default_visibility;
+    if (b.visibility === "public") accounts.requireVerified(u, "publish a public repository");
     else plans.assertPrivateRepoAllowed(ctx, ownerRow.id);
     const repo = repos.createRepo(ctx, u.id, b);
     // { sample: true } fills it with the sample project (files, checks, a branch and a pull request).
@@ -1188,7 +1193,7 @@ export function createApp(ctx: Ctx) {
   function announceChecks(repo: repos.RepoRow, branch: string, commit: string, run: { status: string; steps: { name: string; status: string; detail: string }[] } | null, userId: number) {
     if (!run || run.status !== "failed") return;
     const to = ctx.db.prepare("SELECT email FROM users WHERE owner_id = ?").get(userId) as { email: string } | undefined;
-    if (!to) return;
+    if (!to || !wantsEmail(ctx, to.email, "checks_failed")) return;
     const failed = run.steps.filter((s) => s.status === "failed");
     void email.sendChecksFailedEmail(to.email, `${repo.owner}/${repo.name}`, branch, commit, failed, `${config.webUrl}/${repo.owner}/${repo.name}/checks`);
   }
@@ -1659,7 +1664,7 @@ export function createApp(ctx: Ctx) {
     const done = collaborators.setCollaborator(ctx, repo, { handle: c.req.param("handle"), role: b.role });
     if (done.added) {
       const to = ctx.db.prepare("SELECT u.email FROM users u JOIN owners o ON o.id = u.owner_id WHERE o.handle = ?").get(done.handle) as { email: string } | undefined;
-      if (to) void email.sendRepoAccessEmail(to.email, `${repo.owner}/${repo.name}`, me.name || me.handle, done.role, `${config.webUrl}/${repo.owner}/${repo.name}`);
+      if (to && wantsEmail(ctx, to.email, "repo_access")) void email.sendRepoAccessEmail(to.email, `${repo.owner}/${repo.name}`, me.name || me.handle, done.role, `${config.webUrl}/${repo.owner}/${repo.name}`);
     }
     return c.json(done.collaborators, done.added ? 201 : 200);
   });
@@ -1702,7 +1707,7 @@ export function createApp(ctx: Ctx) {
     const b = await body<{ handle?: string }>(c);
     const done = collab.requestReview(ctx, repo, Number(c.req.param("number")), me.id, b.handle);
     const to = ctx.db.prepare("SELECT u.email FROM users u WHERE u.owner_id = ?").get(done.id) as { email: string } | undefined;
-    if (to) void email.sendReviewRequestEmail(to.email, `${repo.owner}/${repo.name}`, Number(c.req.param("number")), done.pull.title, me.name || me.handle, `${config.webUrl}/${repo.owner}/${repo.name}/pull/${c.req.param("number")}`);
+    if (to && wantsEmail(ctx, to.email, "review_requests")) void email.sendReviewRequestEmail(to.email, `${repo.owner}/${repo.name}`, Number(c.req.param("number")), done.pull.title, me.name || me.handle, `${config.webUrl}/${repo.owner}/${repo.name}/pull/${c.req.param("number")}`);
     return c.json(done.pull, 201);
   });
   v1.delete("/repos/:owner/:repo/pulls/:number/review-requests/:handle", (c) =>
@@ -1813,7 +1818,7 @@ export function createApp(ctx: Ctx) {
     const asked = await codeOwners.requestOwnerReviews(ctx, repo, created.number, me.id);
     for (const handle of asked) {
       const to = ctx.db.prepare("SELECT u.email FROM users u JOIN owners o ON o.id = u.owner_id WHERE o.handle = ?").get(handle) as { email: string } | undefined;
-      if (to) void email.sendReviewRequestEmail(to.email, `${repo.owner}/${repo.name}`, created.number, created.title, me.name || me.handle, `${config.webUrl}/${repo.owner}/${repo.name}/pull/${created.number}`);
+      if (to && wantsEmail(ctx, to.email, "review_requests")) void email.sendReviewRequestEmail(to.email, `${repo.owner}/${repo.name}`, created.number, created.title, me.name || me.handle, `${config.webUrl}/${repo.owner}/${repo.name}/pull/${created.number}`);
     }
     return c.json({ ...collab.getPull(ctx, repo, created.number), ownersAsked: asked }, 201);
   });

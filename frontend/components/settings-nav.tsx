@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CreditCard, KeyRound, Shield, Terminal, User } from "lucide-react";
+import { Bell, CreditCard, KeyRound, Shield, SlidersHorizontal, Terminal, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const groups: { heading: string; items: { label: string; href: string; icon: typeof User }[] }[] = [
@@ -11,6 +11,8 @@ const groups: { heading: string; items: { label: string; href: string; icon: typ
     items: [
       { label: "Profile", href: "/settings", icon: User },
       { label: "Security", href: "/settings/security", icon: Shield },
+      { label: "Notifications", href: "/settings/notifications", icon: Bell },
+      { label: "Preferences", href: "/settings/preferences", icon: SlidersHorizontal },
     ],
   },
   { heading: "Billing", items: [{ label: "Plan and usage", href: "/settings/billing", icon: CreditCard }] },

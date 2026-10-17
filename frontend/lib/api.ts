@@ -235,6 +235,9 @@ export type ApiUser = {
   twoFactor?: boolean;
   /** The optional weekly summary email: off unless switched on in Settings. */
   digest?: "off" | "weekly";
+  /** Which emails are wanted (all on until switched off) and the visibility a new repository starts with. */
+  notify?: Record<"review_requests" | "checks_failed" | "repo_access" | "webhook_paused" | "storage", boolean>;
+  defaultVisibility?: "public" | "private";
   writableOwners: string[];
 };
 /** A signed-in browser (web session), for Settings → Security. */

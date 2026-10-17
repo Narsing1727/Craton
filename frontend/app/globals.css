@@ -434,6 +434,13 @@
     scroll-behavior: auto !important;
   }
 }
+/* The same, when this browser chose it in Settings → Preferences (the system setting above already applies on its own). */
+.reduce-motion *, .reduce-motion ::before, .reduce-motion ::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
 
 /* "Darker" theme (Settings → Appearance): the whole app on one near-black surface, as GitHub Primer
    and Vercel's Geist do. Only surfaces and lines change; the blue accent, square corners and fonts stay. */

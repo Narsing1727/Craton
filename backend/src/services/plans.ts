@@ -6,6 +6,7 @@ import { ApiError } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { config } from "../config.ts";
 import { sendStorageWarningEmail } from "./email.ts";
+import { wantsEmail } from "./notify.ts";
 
 type PlanId = keyof typeof config.plans;
 
@@ -80,7 +81,7 @@ export function noteStorageUse(ctx: Ctx, ownerId: number, plan: PlanId, used: nu
         : ctx.db.prepare("SELECT email FROM users WHERE owner_id = ?").all(ownerId)
     ) as { email: string }[];
     const gb = (n: number) => `${(n / 1024 ** 3).toFixed(1)} GB`;
-    for (const r of recipients) void sendStorageWarningEmail(r.email, `@${who.handle}`, t, gb(used), gb(limit), plan === "team" ? "Team" : "Free", `${config.webUrl}/settings/billing`);
+    for (const r of recipients) if (wantsEmail(ctx, r.email, "storage")) void sendStorageWarningEmail(r.email, `@${who.handle}`, t, gb(used), gb(limit), plan === "team" ? "Team" : "Free", `${config.webUrl}/settings/billing`);
   }
 }
 

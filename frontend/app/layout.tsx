@@ -9,6 +9,7 @@ import { getUnits } from "@/lib/units-server";
 import { SpeculationRules } from "@/components/speculation-rules";
 import { loadUser } from "@/lib/source";
 import { THEME_SCRIPT } from "@/lib/theme";
+import { PREFS_SCRIPT } from "@/lib/prefs";
 import "./globals.css";
 
 // The browser bar on a phone takes the page colour (the "darker" look by default; the other look updates it).
@@ -54,7 +55,7 @@ export default async function RootLayout({
     >
       <head>
         {/* Applies the saved theme before anything is drawn, so there is no flash of the other one. */}
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT + PREFS_SCRIPT }} />
       </head>
       <body className="antialiased">
         <SpeculationRules />

@@ -9,8 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { ThemeChoice } from "@/components/theme-choice";
-import { UnitsChoice } from "@/components/units-choice";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -57,9 +55,6 @@ export function SettingsView({
     <Tabs value={tab}>
       <TabsContent value="profile" className="flex flex-col gap-4">
         <ProfileCard me={me} live={Boolean(profile)} />
-        <DigestCard me={me} live={Boolean(profile)} />
-        <ThemeChoice />
-        <UnitsChoice />
       </TabsContent>
       <TabsContent value="security" className="flex flex-col gap-4">
         <EmailCard me={me} live={Boolean(profile)} />
@@ -127,38 +122,6 @@ function ProfileCard({ me, live }: { me: AccountProfile; live: boolean }) {
           Save changes
         </Button>
       </CardFooter>
-    </Card>
-  );
-}
-
-/** The weekly email summary: off unless switched on here; the first one comes a week later. */
-function DigestCard({ me, live }: { me: AccountProfile; live: boolean }) {
-  const [on, setOn] = useState(me.digest === "weekly");
-  const [saving, startSave] = useTransition();
-  function change(next: boolean) {
-    if (!live) return void notify.info("Demo mode: nothing is saved.");
-    startSave(async () => {
-      const result = await saveProfileAction({ digest: next ? "weekly" : "off" });
-      if (!result.ok) return void notify.error("Couldn’t change that", { description: result.error });
-      setOn(next);
-      notify.success(next ? "You’ll get a weekly summary" : "Weekly summary turned off");
-    });
-  }
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Weekly summary</CardTitle>
-        <CardDescription>One email a week with what is still unread in your inbox, and nothing when there is nothing. The first comes a week after you turn it on, and every message has a one-click unsubscribe.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <label className="flex cursor-pointer items-center justify-between gap-4">
-          <span className="text-sm">
-            Email {me.email} a weekly summary
-            {!me.emailVerified && <span className="mt-0.5 block text-xs text-muted-foreground">Only a confirmed address receives it. Confirm yours first.</span>}
-          </span>
-          <Switch checked={on} onCheckedChange={(v) => change(Boolean(v))} disabled={saving} aria-label="Email me a weekly summary" />
-        </label>
-      </CardContent>
     </Card>
   );
 }

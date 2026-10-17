@@ -18,6 +18,7 @@ import { badRequest, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { config } from "../config.ts";
 import { sendWebhookPausedEmail } from "./email.ts";
+import { wantsEmail } from "./notify.ts";
 import { FORMATS, chatBody, detectFormat, type Format } from "./chatformat.ts";
 
 export const EVENTS = ["push", "pull_request", "release", "issue", "lock"] as const;
@@ -305,7 +306,7 @@ function pauseIfDead(ctx: Ctx, webhookId: number, url: string, lastError: string
   if (hook.kind === "org") addEmail("SELECT u.email FROM memberships m JOIN users u ON u.owner_id = m.user_id WHERE m.org_id = ? AND m.role = 'Owner'", hook.owner_id);
   else addEmail("SELECT email FROM users WHERE owner_id = ?", hook.owner_id);
   addEmail("SELECT u.email FROM collaborators c JOIN users u ON u.owner_id = c.user_id WHERE c.repo_id = ? AND c.role = 'Admin'", hook.repo_id);
-  for (const to of admins) void sendWebhookPausedEmail(to, `${hook.owner}/${hook.name}`, url, lastError, `${config.webUrl}/${hook.owner}/${hook.name}/settings/webhooks`);
+  for (const to of admins) if (wantsEmail(ctx, to, "webhook_paused")) void sendWebhookPausedEmail(to, `${hook.owner}/${hook.name}`, url, lastError, `${config.webUrl}/${hook.owner}/${hook.name}/settings/webhooks`);
 }
 
 async function attempt(ctx: Ctx, d: DueRow) {

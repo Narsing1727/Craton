@@ -6,6 +6,7 @@
 import * as React from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
+import { shortcutsOn } from "@/lib/prefs";
 import { goShortcuts, INBOX_HREF, OPEN_COMMAND_MENU, OPEN_INBOX, OPEN_SHORTCUTS } from "@/lib/shortcuts";
 import { nextListItem } from "@/lib/list-nav";
 
@@ -49,7 +50,7 @@ export function CommandMenu() {
         setOpen((v) => !v);
         return;
       }
-      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target) || !shortcutsOn()) return;
 
       if (pendingG !== null) {
         window.clearTimeout(pendingG);

@@ -598,6 +598,9 @@ const migrations: string[] = [
   `,/* 31: an optional weekly email summary of what is unread in a person's inbox (off unless they turn it on). */ `
   ALTER TABLE users ADD COLUMN digest TEXT NOT NULL DEFAULT 'off';
   ALTER TABLE users ADD COLUMN digest_sent_at TEXT;
+  `,/* 32: which emails a person wants (JSON of the ones switched off) and the visibility a new repository starts with. */ `
+  ALTER TABLE users ADD COLUMN notify TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE users ADD COLUMN default_visibility TEXT NOT NULL DEFAULT 'public';
   `,
 ];
 

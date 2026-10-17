@@ -50,7 +50,7 @@ const groups: Group[] = [
       { method: "PATCH", path: "/user/passkeys/{id}", note: "Rename one: { name }.", auth: "token" },
       { method: "DELETE", path: "/user/passkeys/{id}", note: "Remove one. Refused while it is the only way into the account.", auth: "token" },
       { method: "DELETE", path: "/user/identities/{provider}", note: "Disconnect Google or GitHub. Refused while it is the only way in (no password, passkey or other provider): add a password first (\"Forgot password\" sets one by email)." },
-      { method: "PATCH", path: "/user", note: "Change your profile: { name?, bio?, role?, onboarded?, digest? }. digest is off or weekly (the optional weekly summary email)." },
+      { method: "PATCH", path: "/user", note: "Change your profile: { name?, bio?, role?, onboarded?, digest?, notify?, defaultVisibility? }. digest is off or weekly (the optional weekly summary email). notify switches individual emails on or off, e.g. { review_requests: false } (review_requests, checks_failed, repo_access, webhook_paused, storage; all on by default; account-security emails cannot be switched off). defaultVisibility is public or private: what POST /repos uses when the request does not say." },
       { method: "DELETE", path: "/user", note: "Delete your account: { handle, password }. Your conversations stay as @ghost; blocked while you are the only owner of an organization." },
       { method: "POST", path: "/user/verify/resend", note: "Send the verification email again." },
       { method: "POST", path: "/user/password", note: "Change your password: { current, next }. Other sessions are signed out." },

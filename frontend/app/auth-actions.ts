@@ -161,7 +161,7 @@ export async function resetPasswordAction(_: FormResult | null, form: FormData):
 
 // ── Onboarding ───────────────────────────────────────────────────────────
 
-export async function saveProfileAction(input: { name?: string; bio?: string; role?: string | null; digest?: "off" | "weekly" }) {
+export async function saveProfileAction(input: { name?: string; bio?: string; role?: string | null; digest?: "off" | "weekly"; notify?: Record<string, boolean>; defaultVisibility?: "public" | "private" }) {
   const result = await send<ApiUser>("PATCH", "/user", input);
   if (result.ok) revalidatePath("/", "layout");
   return result;

@@ -4,9 +4,10 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import type { Ctx } from "./context.ts";
 import { ApiError, badRequest, conflict, forbidden, notFound } from "./context.ts";
 import { makeToken } from "../core/tokens.ts";
+import { mergeNotify } from "./notify.ts";
 
 export type Owner = { id: number; handle: string; kind: "user" | "org"; name: string; bio: string; created_at: string };
-export type User = Owner & { email: string; plan: string; role: string | null; onboarded_at: string | null; email_verified_at: string | null; totp_enabled_at: string | null; digest: "off" | "weekly" };
+export type User = Owner & { email: string; plan: string; role: string | null; onboarded_at: string | null; email_verified_at: string | null; totp_enabled_at: string | null; digest: "off" | "weekly"; notify: string; default_visibility: "public" | "private" };
 export type Role = "Owner" | "Maintainer" | "Member";
 
 const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
@@ -106,7 +107,7 @@ export function addMember(ctx: Ctx, orgId: number, userId: number, role: Role) {
 }
 
 export function getUserById(ctx: Ctx, id: number): User {
-  const row = ctx.db.prepare("SELECT o.*, u.email, u.plan, u.role, u.onboarded_at, u.email_verified_at, u.totp_enabled_at, u.digest FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.id = ?").get(id) as User | undefined;
+  const row = ctx.db.prepare("SELECT o.*, u.email, u.plan, u.role, u.onboarded_at, u.email_verified_at, u.totp_enabled_at, u.digest, u.notify, u.default_visibility FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.id = ?").get(id) as User | undefined;
   if (!row) throw notFound("User");
   return row;
 }
@@ -313,7 +314,15 @@ export function deleteOrg(ctx: Ctx, orgHandle: string, actorId: number, confirm:
 
 export const PROFILE_ROLES = ["modeler", "gis", "utility", "research", "other"];
 
-export function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string }) {
+export function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string; notify?: unknown; defaultVisibility?: string }) {
+  if (patch.notify !== undefined) {
+    const current = ctx.db.prepare("SELECT notify FROM users WHERE owner_id = ?").get(userId) as { notify: string };
+    ctx.db.prepare("UPDATE users SET notify = ? WHERE owner_id = ?").run(mergeNotify(current.notify, patch.notify), userId);
+  }
+  if (patch.defaultVisibility !== undefined) {
+    if (patch.defaultVisibility !== "public" && patch.defaultVisibility !== "private") throw badRequest("defaultVisibility is public or private.");
+    ctx.db.prepare("UPDATE users SET default_visibility = ? WHERE owner_id = ?").run(patch.defaultVisibility, userId);
+  }
   if (patch.digest !== undefined) {
     if (patch.digest !== "off" && patch.digest !== "weekly") throw badRequest("digest is off or weekly.");
     ctx.db.prepare("UPDATE users SET digest = ?, digest_sent_at = CASE WHEN ? = 'weekly' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE digest_sent_at END WHERE owner_id = ?").run(patch.digest, patch.digest, userId);

@@ -67,6 +67,7 @@ export function NewRepoView({
   owners,
   defaultOwner,
   live,
+  defaultVisibility = "public",
   starters = [],
   server,
 }: {
@@ -75,6 +76,8 @@ export function NewRepoView({
   owners: string[];
   defaultOwner: string;
   live: boolean;
+  /** What the person chose in Settings → Preferences. */
+  defaultVisibility?: "public" | "private";
   /** README starters from the API (empty when it isn't reachable). */
   starters?: { id: string; name: string; about: string }[];
   server: string;
@@ -85,7 +88,7 @@ export function NewRepoView({
   const [description, setDescription] = useState("");
   const [name, setName] = useState("");
   const [touched, setTouched] = useState(false);
-  const [visibility, setVisibility] = useState("public");
+  const [visibility, setVisibility] = useState<string>(defaultVisibility);
   const [starter, setStarter] = useState("none");
   const [crs, setCrs] = useState("EPSG:32643");
   const [source, setSource] = useState("");

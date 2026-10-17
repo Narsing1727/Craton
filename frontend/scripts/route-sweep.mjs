@@ -24,7 +24,7 @@ const issues = await (await fetch(`${API}/repos/hydrolab/chalakudy-basin/issues`
 
 const routes = [
   "/", "/explore", "/trending", "/dashboard", "/pulls", "/issues", "/stars", "/search?q=dem",
-  "/settings", "/settings/security", "/settings/billing", "/settings/tokens", "/settings/developer", "/new", "/orgs/new",
+  "/settings", "/settings/security", "/settings/notifications", "/settings/preferences", "/settings/billing", "/settings/tokens", "/settings/developer", "/new", "/orgs/new",
   "/hydrolab", R, `${R}/issues`, `${R}/pulls`, `${R}/checks`, `${R}/branches`, `${R}/commits`, `${R}/releases`, `${R}/storage`, `${R}/insights`,
   `${R}/settings`, `${R}/settings/webhooks`, `${R}/settings/sharing`, `${R}/settings/collaborators`, `${R}/milestones`, `${R}/reviews`, `${R}/compare`, `${R}/releases/new`, `${R}/issues/new`, `${R}/pulls/new`, `${R}/tags`,
   `${R}/blob/terrain/basin_dem.tif`, `${R}/blob/gauges.csv`, `${R}/blob/README.md`, `${R}/blob/vectors/catchment.shp`, `${R}/tree/main/terrain`,
@@ -116,7 +116,7 @@ for (const route of routes) {
   const robotsTxt = await (await fetch(`${WEB}/robots.txt`)).text();
   const disallowed = robotsTxt.split(String.fromCharCode(10)).map((l) => l.trim()).filter((l) => /^disallow:/i.test(l)).map((l) => l.split(":")[1].trim()).filter(Boolean);
   const needsDescription = ["/", "/pricing", "/about", "/docs", "/help", "/terms", "/privacy", "/security", "/changelog", "/contact", "/cli", "/api-reference", "/explore", "/trending"];
-  const signedInOnly = ["/dashboard", "/issues", "/pulls", "/stars", "/settings", "/settings/security", "/settings/billing", "/settings/tokens", "/settings/developer", "/new", "/orgs/new"];
+  const signedInOnly = ["/dashboard", "/issues", "/pulls", "/stars", "/settings", "/settings/security", "/settings/notifications", "/settings/preferences", "/settings/billing", "/settings/tokens", "/settings/developer", "/new", "/orgs/new"];
   const byRoute = new Map(titles.map((t) => [t.route, t]));
   for (const r of needsDescription) {
     const t = byRoute.get(r);
