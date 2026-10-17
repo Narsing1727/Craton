@@ -316,6 +316,14 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 185 | **The Standard look is removed from Settings**; a browser that had saved it gets Darker | Settings → Appearance |
 | 186 | The sign-in pages follow the chosen look: pure black in Darker, soft white in Light | `/login` in each |
 
+### 23. A shorter Security page
+
+| # | What it does | How to check |
+|---|---|---|
+| 187 | **"Where you're signed in" is one row** (this browser, and how many others) with a **Manage devices** button; the full list opens in a dialog, grouped by day (Today, Yesterday, weekday and date), with a device icon, address, when it signed in and was last active, a Sign out for each, and **Sign out everywhere else** | Settings → Security → Manage devices |
+| 188 | **"Recent security activity" is one row** (nothing unusual, or how many things to check, and the latest event) with a **View all activity** button; the dialog lists the latest 100 events by day with the time of each, and a filter for the ones that need a look (failed sign-ins, two-step turned off, password reset requested) | Settings → Security → View all activity |
+| 189 | The settings page no longer grows with every browser and sign-in | Scroll Settings → Security |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

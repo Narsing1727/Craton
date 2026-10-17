@@ -510,7 +510,7 @@ export const api = {
   checklist: () => get<ApiChecklist>("/user/onboarding"),
   sessions: () => get<ApiSession[]>("/user/sessions"),
   savedFilters: (kind: "issues" | "pulls") => get<ApiSavedFilter[]>(`/user/filters?kind=${kind}`),
-  securityLog: () => get<ApiSecurityEvent[]>("/user/security-log?limit=30"),
+  securityLog: () => get<ApiSecurityEvent[]>("/user/security-log?limit=100"),
   plans: () => get<Record<"free" | "team", { storageBytes: number; privateRepos: number | null }>>("/plans"),
   usage: () => get<ApiUsage>("/user/usage"),
   ownerUsage: (handle: string) => get<ApiUsage>(`/owners/${encodeURIComponent(handle)}/usage`),

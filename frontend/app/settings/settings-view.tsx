@@ -21,20 +21,12 @@ import { createPasskey, passkeyErrorMessage, passkeysSupported } from "@/lib/web
 import type { ApiIdentities, ApiPasskey, ApiSecurityEvent, ApiSession, ApiTwoFactor } from "@/lib/api";
 import { TwoFactorCard } from "@/components/two-factor-card";
 import { timeAgo } from "@/lib/format";
+import { SecurityLogCard, SessionsCard, device } from "@/components/security-activity";
 import { PROVIDERS, PROVIDER_NAME, providerNotice, type OAuthProvider } from "@/lib/oauth-routes-shared";
 
 type Tab = "profile" | "security";
 
 export type AccountProfile = { handle: string; name: string; email: string; bio: string; emailVerified: boolean; digest?: "off" | "weekly" };
-
-/** "Chrome on Windows" from a user agent; the CLI and unknown clients get plain names. */
-function device(ua: string | null) {
-  if (!ua) return "Unknown device";
-  if (/craton-cli/i.test(ua)) return "Craton CLI";
-  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
-  const os = /Windows/.test(ua) ? "Windows" : /Mac OS X|Macintosh/.test(ua) ? "macOS" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Linux/.test(ua) ? "Linux" : "";
-  return os ? `${browser} on ${os}` : browser;
-}
 
 export function SettingsView({
   tab,
@@ -482,106 +474,6 @@ function PasswordCard({ live, hasPassword }: { live: boolean; hasPassword: boole
   );
 }
 
-const EVENT_LABEL: Record<string, string> = {
-  passkey_added: "Passkey added",
-  passkey_removed: "Passkey removed",
-  passkey_rollback: "Passkey refused (its counter went backwards)",
-  signed_in: "Signed in",
-  sign_in_failed: "Failed sign-in attempt",
-  password_changed: "Password changed",
-  password_reset_requested: "Password reset requested",
-  password_reset: "Password reset",
-  token_created: "Access token created",
-  token_revoked: "Access token revoked",
-  session_revoked: "Browser signed out",
-  two_factor_enabled: "Two-step verification turned on",
-  two_factor_disabled: "Two-step verification turned off",
-  recovery_codes_regenerated: "Recovery codes replaced",
-  oauth_linked: "Sign-in provider connected",
-  oauth_unlinked: "Sign-in provider disconnected",
-};
-const CONCERNING = new Set(["sign_in_failed", "password_reset_requested", "two_factor_disabled", "passkey_rollback"]);
-
-function SecurityLogCard({ events }: { events: ApiSecurityEvent[] }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Recent security activity</CardTitle>
-        <CardDescription>Sign-ins and changes to your password, tokens and two-step verification. If you don’t recognise something, change your password and sign out other browsers.</CardDescription>
-      </CardHeader>
-      <CardContent className="p-0">
-        {events.length === 0 ? (
-          <p className="px-6 py-4 text-sm text-muted-foreground">Nothing recorded yet.</p>
-        ) : (
-          <ul className="divide-y divide-border border-t border-border">
-            {events.map((e) => (
-              <li key={e.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-6 py-3 text-sm">
-                <div className="min-w-0">
-                  <p className={CONCERNING.has(e.type) ? "font-medium text-destructive" : "font-medium"}>{EVENT_LABEL[e.type] ?? e.type}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {[e.detail, e.userAgent ? device(e.userAgent) : null, e.ip].filter(Boolean).join(" · ")}
-                  </p>
-                </div>
-                <time dateTime={e.at} className="text-xs text-muted-foreground tabular-nums" suppressHydrationWarning>{timeAgo(e.at)}</time>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function SessionsCard({ sessions }: { sessions: ApiSession[] }) {
-  const [list, setList] = useState(sessions);
-  const [busy, setBusy] = useState<number | null>(null);
-
-  async function revoke(s: ApiSession) {
-    setBusy(s.id);
-    const result = await revokeSessionAction(s.id);
-    setBusy(null);
-    if (!result.ok) return void notify.error("Couldn’t sign that browser out", { description: result.error });
-    setList((l) => l.filter((x) => x.id !== s.id));
-    notify.success(`Signed out ${device(s.userAgent)}`);
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Where you’re signed in</CardTitle>
-        <CardDescription>Browsers with an active session. Sign out any you don’t recognise, then change your password.</CardDescription>
-      </CardHeader>
-      <CardContent className="p-0">
-        {list.length === 0 ? (
-          <p className="px-6 py-4 text-sm text-muted-foreground">No sessions to show.</p>
-        ) : (
-          <ul className="divide-y divide-border border-t border-border">
-            {list.map((s) => (
-              <li key={s.id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 text-sm">
-                <div className="min-w-0">
-                  <p className="flex items-center gap-2 font-medium">
-                    {device(s.userAgent)}
-                    {s.current && <Badge variant="secondary">This browser</Badge>}
-                  </p>
-                  <p className="text-xs text-muted-foreground" suppressHydrationWarning>
-                    {s.ip ?? "Unknown address"} · signed in {timeAgo(s.createdAt)}
-                    {s.lastUsedAt ? ` · last active ${timeAgo(s.lastUsedAt)}` : ""}
-                  </p>
-                </div>
-                {!s.current && (
-                  <Button variant="outline" size="sm" onClick={() => revoke(s)} loading={busy === s.id} disabled={busy === s.id}>
-                    <LogOut data-icon="inline-start" />
-                    {busy === s.id ? "Signing out…" : "Sign out"}
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
 
 function DataCard({ handle, live, hasPassword = true }: { handle: string; live: boolean; hasPassword?: boolean }) {
   const [open, setOpen] = useState(false);
