@@ -16,7 +16,8 @@ import { branchMovedListeners, getObject } from "./history.ts";
 import { enqueue } from "./repack.ts";
 import { readChunk } from "./chunks.ts";
 import { saveTile, tileKeyOf, tilePixels } from "./tiles.ts";
-import { deflateSegments, type Segment } from "../core/tiff.ts";
+import { compressedSegments } from "../core/streams.ts";
+import type { Segment } from "../core/tiff.ts";
 import { findParams, inflateExact, type DeflateParams } from "../core/rezip.ts";
 import { decodeTile, encodeDifference, encodeWhole, tileInfo, type TileWidth } from "../core/tilepayload.ts";
 import { decodePieces, encodePieces, type Piece } from "../core/pieces.ts";
@@ -28,6 +29,9 @@ import { config } from "../config.ts";
 const TILE_WORTH = 0.95;
 /** A chunk is rewritten only if it then takes at most this share of what it took (its own bytes plus its share of the tiles). */
 const CHUNK_WORTH = 0.9;
+/** Pixels alone may be a little bigger than the stream (noisy floating point); they are kept anyway when the next cold version's tile is a tiny difference from them, and the chunks they replace are rewritten for that reason. */
+const KEYFRAME_MAX = 1.15;
+const KEYFRAME_NEXT_SHARE = 0.15;
 const SMALLEST_FILE = 64 * 1024;
 const WINDOW = 6;
 
@@ -74,16 +78,16 @@ class Window {
   }
 }
 
-type TileState = { key: string; stream: Buffer; payloadSize: number; ok: boolean };
+type TileState = { key: string; stream: Buffer; payloadSize: number; ok: boolean; keyframe?: boolean };
 
-/** Keep the DEFLATE tiles of one stored file as pixels and rewrite the chunks that contain them. `priors` are earlier versions of the same file (nearest first) that may supply a base for a difference; `hotChunks` are chunks something still read often is made of (a branch tip, a tag), which stay exactly as they were uploaded. */
-export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: { apply?: boolean; priors?: string[]; hotChunks?: Set<string> } = {}): Promise<RecodeResult> {
+/** Keep the DEFLATE tiles of one stored file as pixels and rewrite the chunks that contain them. `priors` are earlier versions of the same file (nearest first) that may supply a base for a difference; `hotChunks` are chunks something still read often is made of (a branch tip, a tag), which stay exactly as they were uploaded. `next` is the next cold version of the same file: a tile that is not smaller as pixels is still kept when `next`'s tile is a tiny difference from it. */
+export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: { apply?: boolean; priors?: string[]; hotChunks?: Set<string>; next?: string } = {}): Promise<RecodeResult> {
   const apply = opts.apply ?? true;
   const result = none();
   const blob = getObject<BlobObject>(ctx, repo, blobId, "blob");
   if (blob.size < SMALLEST_FILE) return result;
   const reader = new Window(ctx, blob);
-  const segments = await deflateSegments((o, l) => reader.read(o, l), blob.size);
+  const segments = await compressedSegments((o, l) => reader.read(o, l), blob.size);
   if (!segments?.length) return result;
 
   const starts: number[] = [];
@@ -93,6 +97,28 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
   const isBase = ctx.db.prepare("SELECT 1 FROM chunk_refs WHERE ref_hash = ?");
   const baseRow = ctx.db.prepare("SELECT t.key AS key, t.raw_len AS raw_len FROM blob_tiles bt JOIN tiles t ON t.key = bt.tile_key WHERE bt.blob_id = ? AND bt.image = ? AND bt.idx = ? AND t.kind = 1");
   const known = ctx.db.prepare("SELECT stored_size FROM tiles WHERE key = ?");
+
+  // The next cold version of this file, read only as far as it takes to compare one tile with this version's.
+  let nextSegments: Segment[] | null | undefined;
+  let nextReader: Window | null = null;
+  const gainsForNext = async (seg: Segment, raw: Buffer, params: DeflateParams, width: TileWidth, shuffled: boolean): Promise<boolean> => {
+    if (!opts.next || width === 1) return false;
+    try {
+      if (nextSegments === undefined) {
+        nextReader = new Window(ctx, getObject<BlobObject>(ctx, repo, opts.next, "blob"));
+        nextSegments = await compressedSegments((o, l) => nextReader!.read(o, l), getObject<BlobObject>(ctx, repo, opts.next, "blob").size);
+      }
+      const other = nextSegments?.find((s) => s.image === seg.image && s.index === seg.index);
+      if (!other || !nextReader) return false;
+      const stream = await nextReader.read(other.offset, other.count);
+      const again = inflateExact(stream);
+      if (!again || again.length !== raw.length) return false;
+      const diff = encodeDifference(again, params, width, stream.length, { key: "0".repeat(64), raw }, stream.length * KEYFRAME_NEXT_SHARE, shuffled);
+      return diff !== null;
+    } catch {
+      return false;
+    }
+  };
 
   const states = new Map<number, TileState>();
   let preferred: DeflateParams | undefined;
@@ -109,22 +135,28 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
     if (!raw || !params) return remember(i, fail);
     preferred = params;
     const key = tileKeyOf(stream);
-    const width: TileWidth = seg.predictor === 1 && (seg.sampleBytes === 2 || seg.sampleBytes === 4 || seg.sampleBytes === 8) ? seg.sampleBytes : 1;
+    let keyframeFlag = false;
+    const sample = seg.sampleBytes === 2 || seg.sampleBytes === 4 || seg.sampleBytes === 8;
+    const width: TileWidth = (seg.shuffled || seg.predictor === 1) && sample ? (seg.sampleBytes as TileWidth) : 1;
+    const shuffled = Boolean(seg.shuffled) && width > 1;
     const existing = known.get(key) as { stored_size: number } | undefined;
     let payloadSize = existing?.stored_size ?? 0;
     if (existing) result.reused++;
     else {
-      let payload = encodeWhole(raw, params, width, stream.length);
+      let payload = encodeWhole(raw, params, width, stream.length, shuffled);
       for (const prior of opts.priors ?? []) {
         const base = baseRow.get(prior, seg.image, seg.index) as { key: string; raw_len: number } | undefined;
         if (!base || base.raw_len !== raw.length) continue;
-        const diff = encodeDifference(raw, params, width, stream.length, { key: base.key, raw: (await tilePixels(ctx, base.key)).raw }, payload.length * 0.9);
+        const diff = encodeDifference(raw, params, width, stream.length, { key: base.key, raw: (await tilePixels(ctx, base.key)).raw }, payload.length * 0.9, shuffled);
         if (diff) {
           payload = diff;
           break;
         }
       }
-      if (payload.length >= stream.length * TILE_WORTH) return remember(i, fail);
+      if (payload.length >= stream.length * TILE_WORTH) {
+        keyframeFlag = payload.length <= stream.length * KEYFRAME_MAX && (await gainsForNext(seg, raw, params, width, shuffled));
+        if (!keyframeFlag) return remember(i, fail);
+      }
       // The pixels must come back from what is about to be stored, or nothing is.
       const info = tileInfo(payload);
       const basePixels = info.baseKey ? (await tilePixels(ctx, info.baseKey)).raw : undefined;
@@ -134,7 +166,7 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
       result.tiles++;
     }
     if (apply) ctx.db.prepare("INSERT OR IGNORE INTO blob_tiles (blob_id, image, idx, tile_key) VALUES (?, ?, ?, ?)").run(blobId, seg.image, seg.index, key);
-    return remember(i, { key, stream, payloadSize, ok: true });
+    return remember(i, { key, stream, payloadSize, ok: true, keyframe: existing ? false : keyframeFlag });
   };
   const remember = (i: number, s: TileState) => (states.set(i, s), s);
 
@@ -202,7 +234,7 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
     const again = await decodePieces(stored, async (key) => streams.get(key)!);
     if (sha256Hex(again) !== c.hash) continue;
     const newSize = stored.length + share;
-    if (newSize >= row.stored_size * CHUNK_WORTH) continue;
+    if (newSize >= row.stored_size * (prepared.some((s) => s.keyframe) ? KEYFRAME_MAX : CHUNK_WORTH)) continue;
 
     result.chunks++;
     result.savedBytes += row.stored_size - newSize;
@@ -253,7 +285,7 @@ export async function recodeRepository(ctx: Ctx, repo: RepoRow, opts: { apply?: 
   for (const { id } of ids) {
     const tree = getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, id, "commit").tree, "tree");
     for (const e of tree.entries) {
-      if (!/\.tiff?$/i.test(e.path)) continue;
+      if (!/\.(tiff?|h5|hdf5?|he5|nc4?|nc)$/i.test(e.path)) continue;
       const list = versions.get(e.path) ?? [];
       if (!list.includes(e.blob)) list.push(e.blob);
       versions.set(e.path, list);
@@ -268,7 +300,8 @@ export async function recodeRepository(ctx: Ctx, repo: RepoRow, opts: { apply?: 
         if (seen) recoded.unshift(blobId);
         continue;
       }
-      const r = await recodeBlob(ctx, repo, blobId, { apply: opts.apply, priors: recoded.slice(), hotChunks: hot.chunks });
+      const later = list.slice(list.indexOf(blobId) + 1).find((b) => !hot.blobs.has(b));
+      const r = await recodeBlob(ctx, repo, blobId, { apply: opts.apply, priors: recoded.slice(), hotChunks: hot.chunks, next: later });
       add(total, r);
       // Remember that this version was looked at, so a push does not read it again to find the same nothing.
       if (opts.apply ?? true) {

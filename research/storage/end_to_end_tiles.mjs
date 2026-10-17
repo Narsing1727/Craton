@@ -4,7 +4,8 @@
 import { readFileSync, mkdtempSync, rmSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, extname } from "node:path";
+const NAME = "data" + extname(process.argv[2]).replace(".h5", ".hdf");
 process.env.CRATON_REPACK = "0";
 const { createApp } = await import("../../backend/src/api/app.ts");
 const { openDb } = await import("../../backend/src/db/db.ts");
@@ -32,8 +33,8 @@ const versions = [];
 for (const [i, file] of process.argv.slice(2).entries()) {
   const data = readFileSync(file);
   const form = new FormData();
-  form.append("file", new File([new Uint8Array(data)], "dem.tif"));
-  form.append("paths", JSON.stringify(["dem.tif"]));
+  form.append("file", new File([new Uint8Array(data)], NAME));
+  form.append("paths", JSON.stringify([NAME]));
   form.append("message", `v${i}`);
   const up = await app.request("/v1/repos/alice/dem/upload", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
   versions.push({ file, data, commit: (await up.json()).commit });
@@ -54,7 +55,7 @@ let ok = true;
 for (const [i, v] of versions.entries()) {
   forgetRebuiltTiles();
   const t = Date.now();
-  const back = Buffer.from(await (await app.request(`/v1/repos/alice/dem/raw/${v.commit}/dem.tif`, { headers: { authorization: `Bearer ${token}` } })).arrayBuffer());
+  const back = Buffer.from(await (await app.request(`/v1/repos/alice/dem/raw/${v.commit}/${NAME}`, { headers: { authorization: `Bearer ${token}` } })).arrayBuffer());
   const same = sha(back) === sha(v.data);
   ok &&= same;
   console.log(`v${i} ${v.file.split(/[\/]/).pop()}: download ${same ? "identical" : "DIFFERENT"} in ${((Date.now() - t) / 1000).toFixed(1)} s`);

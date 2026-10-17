@@ -17,6 +17,8 @@ export type Segment = {
   /** Bytes in one sample of the decompressed data, and whether a predictor was applied (2 horizontal difference, 3 floating point). */
   sampleBytes: number;
   predictor: number;
+  /** The bytes inside the stream are byte-shuffled by `sampleBytes` (HDF5's shuffle filter ran before DEFLATE). */
+  shuffled?: boolean;
 };
 
 const DEFLATE = [8, 32946];

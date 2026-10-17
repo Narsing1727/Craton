@@ -124,15 +124,15 @@ New commits are handled automatically after the push or upload is answered; `CRA
 already stored keep working). A chunk that is itself a difference is never used as a base, so a third version in a row is
 stored whole unless its previous version was not shrunk.
 
-## The cold tier for GeoTIFFs
+## The cold tier for GeoTIFFs and HDF5
 
-Most GeoTIFFs are compressed with DEFLATE, which makes every tile incompressible and different from the same tile in the next
+Most GeoTIFFs are compressed with DEFLATE (and so are the chunks of HEC-RAS results and NetCDF 4 files, which are HDF5: gzip alone, or the shuffle filter then gzip, in the usual chunked layout), which makes every tile incompressible and different from the same tile in the next
 version, however small the change. The cold tier keeps the tiles of **old versions** as their pixels (about 28% smaller) together
 with the exact zlib settings that wrote them, and a later version of a tile as its difference from an earlier one (a datum shift
 or a smooth recalibration costs a few percent). When anyone reads an old version, each tile is compressed again from its pixels
 (in worker threads) and **must come out as the same bytes**: a tile is only kept as pixels after it has been rebuilt and compared
 with the original, a chunk is only rewritten after it has been put back together and hashed to its own SHA-256, and a rebuilt
-tile that does not hash to its own name is refused at read time. Files written by a compressor that `pako` (a plain JavaScript
+tile that does not hash to its own name is refused at read time. For HDF5, the shuffle filter is undone before one version is compared with another, so a run that moved every value by a little costs a few percent. Files written by a compressor that `pako` (a plain JavaScript
 zlib, pinned at 2.1.0) does not match, such as libdeflate, are not recoded; nothing is lost, they are stored as uploaded.
 
 What stays exactly as it was uploaded: the newest version of every file (every branch tip), anything a tag points at, and every

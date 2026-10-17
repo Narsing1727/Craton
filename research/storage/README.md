@@ -93,6 +93,11 @@ compressed again in worker threads, the next few started ahead of the reader), t
 a tag, and off unless `CRATON_RECODE=1`. Chunks are cut over compressed bytes, so a chunk is a few tiles' worth of ends and middles:
 it is stored as pieces (literal bytes plus slices of tiles, encoding 11) and a tile as its pixels; chunks shared with the tip stay whole.
 
+Same method for HDF5 (HEC-RAS results, NetCDF 4): libhdf5's gzip chunks, with and without the shuffle filter, are made again exactly by pako
+at levels 1 to 9 (`hdf_probe.mjs`). For noisy floats the pixels alone are no smaller than the DEFLATE (15.2 MB against 14.5 MB), so the
+gain is all in versions: a +0.25 datum shift costs 0.40 MB as an XOR of the shuffled planes and 0.02 MB with the shuffle undone first, of
+14.5 MB. Built the same way: three runs of 40 to 60 MB (original, datum shift, unrelated tip) 134.5 MB stored today, 98.8 MB with the cold tier.
+
 ## 4. Recommendations, in order
 
 1. **Parent-chunk delta for numeric data** (new stored form: "difference from base chunk *H*"). Works today for uncompressed

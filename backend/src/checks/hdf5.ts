@@ -654,7 +654,7 @@ async function attributesOf(c: Ctx, cache: Map<number, Buffer | null>, messages:
 
 // ---- Walk -------------------------------------------------------------------------------------------------------
 
-export async function readHdf5(read: Read, size: number, options: { maxObjects?: number } = {}): Promise<Hdf5Info> {
+export async function readHdf5(read: Read, size: number, options: { maxObjects?: number; onDataset?: (path: string, messages: Message[], c: Ctx) => Promise<void> } = {}): Promise<Hdf5Info> {
   const limit = options.maxObjects ?? MAX_OBJECTS;
   const src = makeSource(read, size);
   // The superblock is at 0, or after a user block at 512, 1024, 2048 ...
@@ -712,6 +712,7 @@ export async function readHdf5(read: Read, size: number, options: { maxObjects?:
     const dtype = messages.find((m) => m.type === 0x03);
     const isGroup = messages.some((m) => m.type === 0x11 || m.type === 0x02 || m.type === 0x06);
     if (!isGroup && space && messages.some((m) => m.type === 0x08)) {
+      await options.onDataset?.(path, messages, c);
       objects.push({ path, kind: "dataset", shape: shapeOf(c, space), type: dtype ? typeOf(dtype) : null, links: null });
       return;
     }
@@ -768,4 +769,108 @@ export function hdf5Problems(info: Hdf5Info, size: number): string[] {
     problems.push(`truncated: the superblock puts the end of the file at byte ${info.declaredEnd.toLocaleString("en-US")} but the file has ${size.toLocaleString("en-US")}`);
   }
   return problems;
+}
+
+// ---- Where the compressed chunks of a dataset are ----------------------------------------------------------------
+//
+// For the cold storage tier (services/recode.ts): the stored chunks of every chunked dataset whose only filters are DEFLATE,
+// or the shuffle filter and then DEFLATE (what HEC-RAS and most NetCDF 4 writers use). Layout message version 3 with the
+// version 1 chunk B-tree (what libhdf5 writes unless asked for the newest format); anything else is left out, and said so.
+
+export type Hdf5Chunks = {
+  path: string;
+  /** Bytes in one element, and whether the shuffle filter was applied before DEFLATE. */
+  elementSize: number;
+  shuffled: boolean;
+  /** Each stored chunk's stream, in order of the chunk's position in the dataset. */
+  chunks: { offset: number; size: number }[];
+};
+
+const MAX_CHUNKS = 2_000_000;
+
+/** The filter ids of a filter pipeline message (versions 1 and 2), or null when it cannot be read. */
+function filterIds(d: Buffer): number[] | null {
+  const version = d[0];
+  if ((version !== 1 && version !== 2) || d.length < 2) return null;
+  const n = d[1];
+  let pos = version === 1 ? 8 : 2;
+  const ids: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (pos + 4 > d.length) return null;
+    const id = d.readUInt16LE(pos);
+    pos += 2;
+    let nameLength = 0;
+    if (version === 1 || id >= 256) {
+      nameLength = d.readUInt16LE(pos);
+      pos += 2;
+    }
+    pos += 2; // flags
+    if (pos + 2 > d.length) return null;
+    const clients = d.readUInt16LE(pos);
+    pos += 2;
+    pos += version === 1 ? Math.ceil(nameLength / 8) * 8 : nameLength;
+    pos += clients * 4;
+    if (version === 1 && clients % 2 === 1) pos += 4;
+    ids.push(id);
+  }
+  return ids;
+}
+
+export async function hdf5Chunks(read: Read, size: number): Promise<Hdf5Chunks[]> {
+  const found: Hdf5Chunks[] = [];
+  await readHdf5(read, size, {
+    maxObjects: MAX_OBJECTS,
+    onDataset: async (path, messages, c) => {
+      try {
+        const layout = messages.find((m) => m.type === 0x08);
+        const pipeline = messages.find((m) => m.type === 0x0b);
+        if (!layout || !pipeline || layout.data[0] !== 3 || layout.data[1] !== 2) return;
+        const ids = filterIds(pipeline.data);
+        const deflate = ids && ((ids.length === 1 && ids[0] === 1) || (ids.length === 2 && ids[0] === 2 && ids[1] === 1));
+        if (!ids || !deflate) return;
+        const d = layout.data;
+        const dimensionality = d[2];
+        if (dimensionality < 2 || dimensionality > 33) return;
+        const tree = uint(d, 3, c.O);
+        if (tree === UNDEF) return;
+        const elementSize = d.readUInt32LE(3 + c.O + 4 * (dimensionality - 1));
+        if (elementSize < 1 || elementSize > 8 || ![1, 2, 4, 8].includes(elementSize)) return;
+        const keySize = 8 + 8 * dimensionality;
+        const chunks: { offset: number; size: number; coords: number[] }[] = [];
+        const stack = [tree];
+        const seen = new Set<number>();
+        while (stack.length) {
+          const node = stack.pop()!;
+          if (seen.has(node) || seen.size > 200_000) return;
+          seen.add(node);
+          const head = await c.src.bytes(addr(c, node), 8 + 2 * c.O);
+          if (head.subarray(0, 4).toString("latin1") !== "TREE" || head[4] !== 1) return;
+          const level = head[5];
+          const used = head.readUInt16LE(6);
+          const body = await c.src.bytes(addr(c, node) + 8 + 2 * c.O, used * (keySize + c.O) + keySize);
+          for (let i = 0; i < used; i++) {
+            const at = i * (keySize + c.O);
+            const child = uint(body, at + keySize, c.O);
+            if (child === UNDEF) return;
+            if (level > 0) stack.push(child);
+            else {
+              const mask = body.readUInt32LE(at + 4);
+              const coords: number[] = [];
+              for (let k = 0; k < dimensionality; k++) coords.push(uint(body, at + 8 + 8 * k, 8));
+              if (mask === 0) chunks.push({ offset: addr(c, child), size: body.readUInt32LE(at), coords });
+              if (chunks.length > MAX_CHUNKS) return;
+            }
+          }
+        }
+        chunks.sort((a, b) => {
+          for (let k = 0; k < a.coords.length; k++) if (a.coords[k] !== b.coords[k]) return a.coords[k] - b.coords[k];
+          return 0;
+        });
+        if (chunks.length) found.push({ path, elementSize, shuffled: ids.length === 2, chunks: chunks.map((x) => ({ offset: x.offset, size: x.size })) });
+      } catch (err) {
+        if (!(err instanceof Hdf5Error)) throw err;
+      }
+    },
+  });
+  return found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
