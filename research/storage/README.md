@@ -75,6 +75,14 @@ the zlib settings, and an edited version stores each tile **against the same til
 Raw float32 grid (49.44 MB), +0.25 m datum shift: each 128 KB chunk stored alone (today's best codec) **30.82 MB**; stored
 against the parent's chunk at the same place **0.12 MB**.
 
+## 3.4 Built (2026-10-18): recommendation 1
+
+Parent-chunk delta is now in the server (`backend/src/core/refdelta.ts`, `services/repack.ts`, encoding 10, `npm run repack`). Three versions of a
+real 49 MB uncompressed Copernicus GeoTIFF (original, +0.25 m, smooth recalibration): **86.2 MB stored today, 35.3 MB with differences
+(2.44x)**, every download byte-identical, every chunk decodable by a client (`end_to_end.mjs`). Chunks are cut by content, so after a
+global change their boundaries move; the difference is therefore taken against the earlier version's bytes at the same *file offsets*
+(slices of up to four of its chunks), not against one chunk. Not yet built: recommendations 2 to 6.
+
 ## 4. Recommendations, in order
 
 1. **Parent-chunk delta for numeric data** (new stored form: "difference from base chunk *H*"). Works today for uncompressed

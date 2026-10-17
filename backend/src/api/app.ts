@@ -17,6 +17,7 @@ import * as repos from "../services/repos.ts";
 import { datasetJsonLd } from "../services/dataset.ts";
 import * as chunks from "../services/chunks.ts";
 import * as history from "../services/history.ts";
+import "../services/repack.ts";
 import * as collab from "../services/collab.ts";
 import * as releases from "../services/releases.ts";
 import * as stats from "../services/stats.ts";

@@ -15,6 +15,10 @@ export async function collectGarbage(ctx: Ctx, opts: { apply: boolean; graceDays
   const blobs = ctx.db.prepare("SELECT o.body FROM objects o WHERE o.type = 'blob' AND EXISTS (SELECT 1 FROM repo_objects ro WHERE ro.object_id = o.id)").all() as { body: string }[];
   for (const b of blobs) for (const c of (JSON.parse(b.body) as BlobObject).chunks) live.add(c.hash);
 
+  // A chunk stored as a difference needs the chunks it names: they stay as long as it does.
+  const needed = ctx.db.prepare("SELECT chunk_hash, ref_hash FROM chunk_refs").all() as { chunk_hash: string; ref_hash: string }[];
+  for (const r of needed) if (live.has(r.chunk_hash)) live.add(r.ref_hash);
+
   // Sweep candidates: unreferenced and past the grace period.
   const all = ctx.db.prepare("SELECT hash, size, stored_size, created_at FROM chunks").all() as { hash: string; size: number; stored_size: number; created_at: string }[];
   const dead = all.filter((c) => !live.has(c.hash));
@@ -27,6 +31,7 @@ export async function collectGarbage(ctx: Ctx, opts: { apply: boolean; graceDays
       await ctx.store.delete(c.hash);
       ctx.db.prepare("DELETE FROM chunk_scopes WHERE hash = ?").run(c.hash);
       ctx.db.prepare("DELETE FROM repo_chunks WHERE hash = ?").run(c.hash);
+      ctx.db.prepare("DELETE FROM chunk_refs WHERE chunk_hash = ?").run(c.hash);
       ctx.db.prepare("DELETE FROM chunks WHERE hash = ?").run(c.hash);
       removed++;
     }

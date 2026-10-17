@@ -180,6 +180,9 @@ function assertNoLockedChanges(ctx: Ctx, repo: RepoRow, actor: string, from: str
  * (fast-forward), and `expected` must match the tip the client last saw (compare-and-swap), so a
  * concurrent push is rejected instead of silently overwritten.
  */
+/** Things to do after a branch moved (storage tidying, for one); they must not throw and must not hold the request. */
+export const branchMovedListeners: ((ctx: Ctx, repo: RepoRow, commit: string) => void)[] = [];
+
 export function updateBranch(ctx: Ctx, repo: RepoRow, branch: string, next: string, expected: string | null, actor: string, via: "push" | "merge" | "branch" | "import" = "push") {
   if (!BRANCH.test(branch)) throw badRequest("Branch names use lowercase letters, numbers, dots, dashes and slashes.");
   if (!ctx.db.prepare("SELECT 1 FROM commits WHERE repo_id = ? AND id = ?").get(repo.id, next)) throw conflict("missing_objects", "Push the commit before updating the branch.");
@@ -207,6 +210,7 @@ export function updateBranch(ctx: Ctx, repo: RepoRow, branch: string, next: stri
   if (branch === repo.default_branch || !ctx.db.prepare("SELECT 1 FROM refs WHERE repo_id = ? AND kind = 'branch' AND name = ?").get(repo.id, repo.default_branch)) {
     refreshRepoSummary(ctx, repo, next);
   }
+  for (const listener of branchMovedListeners) listener(ctx, repo, next);
   return { updated: true, old: current?.commit_id ?? null, new: next };
 }
 

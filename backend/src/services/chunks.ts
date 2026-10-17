@@ -9,6 +9,7 @@ import { badRequest, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { repoScope } from "./repos.ts";
 import { codecOf, compressChunk, decompressChunk, type Hint } from "../core/compress.ts";
+import { decodeRefDelta, isRefDelta, refDeltaInfo } from "../core/refdelta.ts";
 import { sha256Hex } from "../core/fastcdc.ts";
 import type { BlobObject } from "../core/objects.ts";
 import { config } from "../config.ts";
@@ -135,16 +136,40 @@ export async function getStoredChunk(ctx: Ctx, repo: RepoRow, hash: string): Pro
   if (!allowed) throw notFound("Chunk");
   const stored = await ctx.store.get(hash);
   if (!stored) throw notFound("Chunk bytes");
+  // A chunk kept as a difference is only readable next to the chunks it is a difference from, which a client does not
+  // have: send it in an encoding that stands alone.
+  if (isRefDelta(stored)) {
+    const data = await decodeStored(ctx, hash, stored);
+    return compressChunk(data, hash, { kind: "numeric", width: refDeltaInfo(stored).width }).stored;
+  }
   return stored;
+}
+
+/** The chunk a stored difference stands for: the chunks it names are read (they are always whole chunks), then the difference is applied. */
+async function decodeStored(ctx: Ctx, hash: string, stored: Buffer): Promise<Buffer> {
+  const info = refDeltaInfo(stored);
+  const parts: Buffer[] = [];
+  for (const r of info.refs) {
+    const base = await ctx.store.get(r.hash);
+    if (!base) throw notFound(`Chunk bytes (a base of ${hash.slice(0, 12)})`);
+    if (isRefDelta(base)) throw new Error(`Stored chunk ${hash} is built on ${r.hash}, which is itself a difference`);
+    const whole = decompressChunk(base);
+    if (sha256Hex(whole) !== r.hash) throw new Error(`Stored chunk ${r.hash} is corrupt`);
+    parts.push(whole.subarray(r.from, r.to));
+  }
+  return decodeRefDelta(stored, Buffer.concat(parts));
 }
 
 export async function readChunk(ctx: Ctx, hash: string): Promise<Buffer> {
   const stored = await ctx.store.get(hash);
   if (!stored) throw notFound("Chunk bytes");
-  const data = decompressChunk(stored);
+  const data = isRefDelta(stored) ? await decodeStored(ctx, hash, stored) : decompressChunk(stored);
   if (sha256Hex(data) !== hash) throw new Error(`Stored chunk ${hash} is corrupt`);
   return data;
 }
+
+/** Re-export for the repack service: decode a stored difference. */
+export { decodeStored };
 
 /** Random access into a stored file without reassembling all of it (used by the checks runner). */
 export class BlobReader {

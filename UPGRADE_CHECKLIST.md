@@ -369,6 +369,17 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 | 204 | A release can say **which model run it came from**: software, version, plan or scenario, run time, when it finished, notes, and the commits of the inputs (`owner/name@commit`). Every field is optional and checked (unknown fields, bad times, a branch name where a commit id belongs, more than 50 inputs are all refused) | `POST /repos/{owner}/{repo}/releases` with `run`; `backend/test/releaserun.test.ts` (4 tests) |
 | 205 | The release form has an optional **Model run** section (software, version, plan, run time in minutes, notes); the releases page shows it under the notes; the STAC collection carries it as `craton:run` | Releases → New release; `npm run e2e:release-run` in `frontend` (needs `CRATON_E2E_DB`) |
 
+### 29. Changed rasters stored as differences (bit-for-bit exact)
+
+| # | What it does | How to check |
+|---|---|---|
+| 206 | When a new version of an **uncompressed numeric raster** (`.flt`, `.hgt`, `.f32`…, or a little-endian GeoTIFF without compression) is committed, each new chunk is compared with the bytes at the same place in the nearest earlier version that is whole (up to six commits back); if the difference is under 70% of the chunk's own stored size, the chunk is stored as that difference (encoding 10). A datum shift or smooth recalibration then costs a few percent of a new copy. **What people download never changes**: the new form is decoded and must hash to the chunk's own SHA-256 before it replaces anything | `npm run repack` (dry run), `npm run repack -- --apply`; `research/storage/end_to_end.mjs` |
+| 207 | Measured on three versions of a real Copernicus DEM tile (49 MB uncompressed GeoTIFF: original, +0.25 m datum shift, smooth recalibration): **86.2 MB stored today, 35.3 MB with differences (2.4x less)**; all three download byte-identical, every chunk decodable by a client, 665 stored differences verified | `CRATON_REPACK=0 node research/storage/end_to_end.mjs v0.tif v1.tif v2.tif` |
+| 208 | Clients are always sent a chunk in an encoding that stands alone (the server decodes the difference first), so the CLI, clone and pull are unchanged; a client cannot upload a difference; a damaged one is never read as the chunk; `npm run gc` keeps the chunks a difference is built on (new table `chunk_refs`, migration 36); a chunk that is itself a difference is never a base, so there are no chains | `backend/test/repack.test.ts` (10 tests), `backend/test/refdelta.test.ts` (4) |
+| 209 | On for new commits unless `CRATON_REPACK=0` (done after the push or upload is answered, one commit at a time; a failure leaves the chunk as it was); documented in OPERATING.md | OPERATING.md → Storing changes as differences |
+
+Not done: DEFLATE GeoTIFFs (needs the bit-exact re-deflate, research/storage/README.md recommendation 2), LAS, NetCDF, and big-endian rasters.
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

@@ -110,6 +110,13 @@ export const config = {
     apiUrl: (env.CRATON_GITHUB_API_URL ?? "https://api.github.com").replace(/\/+$/, ""),
   } as { clientId: string; clientSecret: string; authUrl: string; tokenUrl: string; apiUrl: string },
 
+  /**
+   * Storing a changed chunk of a numeric raster as its difference from the previous version (a datum shift or a smooth
+   * recalibration becomes a few percent of its size). On unless CRATON_REPACK=0; the stored bytes are verified to decode to
+   * the exact chunk first. Tests leave it off unless CRATON_REPACK=1.
+   */
+  repack: { auto: env.CRATON_REPACK === "1" || (env.CRATON_REPACK !== "0" && !process.env.NODE_TEST_CONTEXT) } as { auto: boolean },
+
   /** Content-defined chunking sizes (bytes). Average 128 KB, like the UI promises. */
   chunking: { min: 32 * 1024, avg: 128 * 1024, max: 512 * 1024 },
 

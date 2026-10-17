@@ -34,6 +34,7 @@ folder.
 | `EMAIL_FROM` | `Craton <no-reply@craton.local>` | The sender. Use an address on a domain you have set up SPF and DKIM for. |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | none | All four together store chunks in Cloudflare R2 instead of the data folder. |
 | `CRATON_ACCESS_LOG` | off | `1` writes one JSON line per API request to standard output: time, method, route pattern, status, milliseconds, request id and the signed-in handle. Never request bodies, query strings or tokens. |
+| `CRATON_REPACK` | on | Set to `0` to stop storing a changed numeric raster as its difference from the previous version (see below). It saves most of the space when every value moves by a little (a datum shift, a recalibration) and never changes what anyone downloads. |
 | `CRATON_STORE_CONCURRENCY` | automatic | How many chunks are stored at once during a push or an upload, 1 to 64. Automatic is 8 on the local disk (file creation is the limit) and 24 with R2 (each put is a round trip; at 40 ms a push of 10,000 chunks waits 50 s at 8 and about 17 s at 24). |
 | `CRATON_SECRET_SCAN` | `on` | Set to `off` to stop reading pushes and uploads for credentials (see “Secret scanning”). It is on for everyone by default; turn it off only on a server whose repositories are all scratch data. |
 | `CRATON_GOOGLE_CLIENT_ID`, `CRATON_GOOGLE_CLIENT_SECRET` | none | Both together turn on "Continue with Google" (OpenID Connect, authorization code with PKCE). In Google Cloud Console create an OAuth client of type *Web application* and add the authorized redirect URI `<CRATON_WEB_URL>/auth/google/callback` (for local use `http://localhost:3100/auth/google/callback`). The secret stays on the API; the browser never sees it. Without both, the button is not shown and the Google routes answer 404. |
@@ -100,6 +101,25 @@ npm run restore -- <file> --chunks data/backups/chunks    # also copy missing ch
 
 The database being replaced is kept next to it as `craton.db.before-restore-<time>`, so a mistaken restore can itself
 be undone. Practise it once on a copy before you need it.
+
+## Storing changes as differences
+
+When a new version of an uncompressed numeric raster (a `.flt`, `.hgt` or similar, or a GeoTIFF without compression, little
+endian) is committed, each new chunk is compared with the bytes at the same place in the previous version. If the
+difference is under 70% of what the chunk would take on its own, the chunk is stored as that difference. A datum shift or a
+smooth recalibration then costs a few percent of a new copy. Nothing about what people download changes: the stored form is
+decoded and must hash to the chunk's own SHA-256 before it replaces anything, a chunk is always sent to a client in a form it
+can decode alone, and the chunks a difference is built on are never removed by `npm run gc` while it exists.
+
+```sh
+npm run repack                    # how much history that is already stored would shrink (a dry run)
+npm run repack -- --apply         # do it
+npm run repack -- --repo owner/name
+```
+
+New commits are handled automatically after the push or upload is answered; `CRATON_REPACK=0` turns that off (differences
+already stored keep working). A chunk that is itself a difference is never used as a base, so a third version in a row is
+stored whole unless its previous version was not shrunk.
 
 ## Garbage collection
 

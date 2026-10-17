@@ -21,7 +21,8 @@
     "typecheck": "tsc --noEmit",
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup.ts",
     "restore": "node --disable-warning=ExperimentalWarning scripts/restore.ts",
-    "gc": "node --disable-warning=ExperimentalWarning scripts/gc.ts"
+    "gc": "node --disable-warning=ExperimentalWarning scripts/gc.ts",
+    "repack": "node --disable-warning=ExperimentalWarning scripts/repack.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

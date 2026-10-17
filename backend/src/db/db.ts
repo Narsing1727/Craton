@@ -623,6 +623,13 @@ const migrations: string[] = [
   );
   `,/* 35: a release can say which model run produced it (software, version, plan, run time, and the commits of the inputs), as JSON. */ `
   ALTER TABLE releases ADD COLUMN run TEXT;
+  `,/* 36: a chunk can be stored as its difference from chunks of the previous version of a file (encoding 10); the chunks it needs are listed so nothing can remove them while it is stored that way. */ `
+  CREATE TABLE chunk_refs (
+    chunk_hash TEXT NOT NULL,
+    ref_hash TEXT NOT NULL,
+    PRIMARY KEY (chunk_hash, ref_hash)
+  );
+  CREATE INDEX idx_chunk_refs_ref ON chunk_refs (ref_hash);
   `,
 ];
 
