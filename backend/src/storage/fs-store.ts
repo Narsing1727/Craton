@@ -9,6 +9,8 @@ import type { ChunkStore } from "./chunk-store.ts";
 export class FsStore implements ChunkStore {
   readonly kind = "local-disk";
   private readonly root: string;
+  /** Chunks being replaced right now: a read waits for the new file to be in place (on Windows a read can otherwise land in the gap and see nothing). */
+  private readonly replacing = new Map<string, Promise<void>>();
 
   constructor(root: string) {
     this.root = root;
@@ -36,10 +38,17 @@ export class FsStore implements ChunkStore {
     await fs.mkdir(path.dirname(file), { recursive: true });
     const tmp = `${file}.${randomUUID()}.tmp`;
     await fs.writeFile(tmp, stored);
-    await fs.rename(tmp, file); // replaces the old file in one step
+    const swap = fs.rename(tmp, file); // replaces the old file in one step
+    this.replacing.set(hash, swap.then(() => undefined, () => undefined));
+    try {
+      await swap;
+    } finally {
+      this.replacing.delete(hash);
+    }
   }
 
   async get(hash: string) {
+    await this.replacing.get(hash);
     try {
       return await fs.readFile(this.pathFor(hash));
     } catch {

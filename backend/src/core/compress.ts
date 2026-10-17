@@ -28,8 +28,9 @@
 import zlib from "node:zlib";
 import { sha256Hex } from "./fastcdc.ts";
 import { REF_DELTA } from "./refdelta.ts";
+import { PIECES } from "./pieces.ts";
 
-export type Codec = "ref-delta" | "none" | "zstd" | "records+zstd" | "shuffle2+zstd" | "shuffle4+zstd" | "shuffle8+zstd" | "delta2+shuffle2+zstd" | "delta4+shuffle4+zstd" | "delta2be+shuffle2+zstd" | "delta4be+shuffle4+zstd";
+export type Codec = "tiles" | "ref-delta" | "none" | "zstd" | "records+zstd" | "shuffle2+zstd" | "shuffle4+zstd" | "shuffle8+zstd" | "delta2+shuffle2+zstd" | "delta4+shuffle4+zstd" | "delta2be+shuffle2+zstd" | "delta4be+shuffle4+zstd";
 
 /** What the caller knows about the bytes, so the encoder can skip attempts that cannot help. */
 export type Hint =
@@ -56,6 +57,7 @@ const DELTA4_BE = 8;
 
 const CODEC_BY_KIND: Record<number, Codec> = {
   [REF_DELTA]: "ref-delta",
+  [PIECES]: "tiles",
   [RAW]: "none",
   [ZSTD]: "zstd",
   [SHUFFLE2]: "shuffle2+zstd",
@@ -198,6 +200,7 @@ export function decompressChunk(stored: Buffer, maxLength?: number): Buffer {
     if (maxLength !== undefined && body.length > maxLength) throw new Error("Chunk is larger than allowed.");
     return Buffer.from(body);
   }
+  if (kind === PIECES) throw new Error("This chunk is stored as the pieces of compressed tiles; the server reads it with them.");
   if (kind === REF_DELTA) throw new Error("This chunk is stored as a difference from other chunks; the server reads it with them.");
   if (kind === RECORDS) {
     if (body.length < 2) throw new Error("Truncated record-shuffled chunk");

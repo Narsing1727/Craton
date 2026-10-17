@@ -1,0 +1,98 @@
+// Tiles of the cold tier: each kept once as its pixels (core/tilepayload.ts), found by the hash of the compressed stream it
+// stands for, and made into that exact stream again when a chunk that contains part of it is read.
+//
+// The key is a hash of the stream with a fixed prefix, so a tile can never have the same name as a chunk (a chunk can be exactly
+// one tile's bytes). The key is also how a rebuilt stream is checked: rebuilt wrongly, it would not hash to its own name.
+
+import { createHash } from "node:crypto";
+import type { Ctx } from "./context.ts";
+import { notFound } from "./context.ts";
+import { deflateAsync } from "./deflatepool.ts";
+import { decodeTile, tileInfo, type TileInfo } from "../core/tilepayload.ts";
+import { config } from "../config.ts";
+
+export const tileKeyOf = (stream: Uint8Array) => createHash("sha256").update("craton-tile\0").update(stream).digest("hex");
+
+/** Recently rebuilt streams, newest last; the oldest go first when the total passes the limit. A big file is read tile after tile, so this is what makes reading it cost one rebuild per tile and not one per chunk. */
+class StreamCache {
+  private readonly map = new Map<string, Buffer>();
+  private bytes = 0;
+  get(key: string) {
+    const hit = this.map.get(key);
+    if (hit) {
+      this.map.delete(key);
+      this.map.set(key, hit);
+    }
+    return hit;
+  }
+  set(key: string, stream: Buffer) {
+    if (stream.length > config.recode.cacheBytes / 2 || this.map.has(key)) return;
+    this.map.set(key, stream);
+    this.bytes += stream.length;
+    for (const [k, v] of this.map) {
+      if (this.bytes <= config.recode.cacheBytes) break;
+      this.map.delete(k);
+      this.bytes -= v.length;
+    }
+  }
+  clear() {
+    this.map.clear();
+    this.bytes = 0;
+  }
+}
+const cache = new StreamCache();
+const inFlight = new Map<string, Promise<Buffer>>();
+
+export const forgetRebuiltTiles = () => cache.clear();
+
+/** A tile's pixels, and how it was stored. A difference is made from the whole tile it names; that one is never itself a difference. */
+export async function tilePixels(ctx: Ctx, key: string): Promise<{ raw: Buffer; info: TileInfo }> {
+  const payload = await ctx.store.get(key);
+  if (!payload) throw notFound(`Tile ${key.slice(0, 12)}`);
+  const info = tileInfo(payload);
+  if (info.kind === 1) return { raw: decodeTile(payload), info };
+  const base = await ctx.store.get(info.baseKey!);
+  if (!base) throw notFound(`Tile ${info.baseKey!.slice(0, 12)} (the base of ${key.slice(0, 12)})`);
+  if (tileInfo(base).kind !== 1) throw new Error(`Stored tile ${key} is built on ${info.baseKey}, which is itself a difference`);
+  return { raw: decodeTile(payload, decodeTile(base)), info };
+}
+
+/** The original compressed stream of a tile, made again from its pixels and checked against its own name. */
+export function tileStream(ctx: Ctx, key: string): Promise<Buffer> {
+  const hit = cache.get(key);
+  if (hit) return Promise.resolve(hit);
+  const running = inFlight.get(key);
+  if (running) return running;
+  const job = (async () => {
+    const { raw, info } = await tilePixels(ctx, key);
+    const stream = await deflateAsync(raw, info.params);
+    if (stream.length !== info.streamLength || tileKeyOf(stream) !== key) throw new Error(`Stored tile ${key} is corrupt: it does not make its original stream again`);
+    cache.set(key, stream);
+    return stream;
+  })().finally(() => inFlight.delete(key));
+  inFlight.set(key, job);
+  return job;
+}
+
+/** Keep a tile (idempotent: a tile already stored is left as it is). */
+export async function saveTile(ctx: Ctx, key: string, payload: Buffer, info: TileInfo) {
+  if (ctx.db.prepare("SELECT 1 FROM tiles WHERE key = ?").get(key)) return false;
+  await ctx.store.put(key, payload);
+  ctx.db.prepare("INSERT OR IGNORE INTO tiles (key, stream_len, raw_len, stored_size, kind, base_key) VALUES (?, ?, ?, ?, ?, ?)").run(key, info.streamLength, info.rawLength, payload.length, info.kind, info.baseKey);
+  return true;
+}
+
+/** Make every stored tile's stream again and check it (used by the operator command and tests). */
+export async function verifyTiles(ctx: Ctx): Promise<{ checked: number; bad: string[] }> {
+  const rows = ctx.db.prepare("SELECT key FROM tiles").all() as { key: string }[];
+  const bad: string[] = [];
+  for (const { key } of rows) {
+    try {
+      cache.clear();
+      await tileStream(ctx, key);
+    } catch {
+      bad.push(key);
+    }
+  }
+  return { checked: rows.length, bad };
+}

@@ -89,7 +89,7 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
       if (known.has(c.hash)) continue;
       const stored = row.get(c.hash) as { codec: string; stored_size: number } | undefined;
       // Only whole chunks become differences, and a chunk another difference is built on stays whole.
-      if (!stored || stored.codec === "ref-delta" || stored.codec === "none" || stored.stored_size < SMALLEST || isBase.get(c.hash)) continue;
+      if (!stored || stored.codec === "ref-delta" || stored.codec === "tiles" || stored.codec === "none" || stored.stored_size < SMALLEST || isBase.get(c.hash)) continue;
 
       let data: Buffer | null = null;
       for (const { blob: old, starts } of olders) {
@@ -103,7 +103,7 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
           const to = Math.min(end, starts[i] + old.chunks[i].size);
           if (to <= from) continue;
           const kind = (row.get(old.chunks[i].hash) as { codec: string } | undefined)?.codec;
-          if (!kind || kind === "ref-delta" || refs.length >= MAX_REFS) usable = false;
+          if (!kind || kind === "ref-delta" || kind === "tiles" || refs.length >= MAX_REFS) usable = false;
           else refs.push({ hash: old.chunks[i].hash, from: from - starts[i], to: to - starts[i] });
         }
         if (!usable || !refs.length) continue;
@@ -163,9 +163,14 @@ export async function verifyDifferences(ctx: Ctx): Promise<{ checked: number; ba
 
 // After a branch moves, tidy the new commit's chunks off the request, one commit at a time.
 let queue: Promise<unknown> = Promise.resolve();
+/** Storage tidying runs one job at a time (a chunk must not be rewritten while another job reads it as a base); a failed job leaves the chunks as they were. */
+export function enqueue(job: () => Promise<unknown>) {
+  queue = queue.then(job).catch(() => undefined);
+  return queue;
+}
 branchMovedListeners.push((ctx, repo, commit) => {
   if (!config.repack.auto) return;
-  queue = queue.then(() => repackCommit(ctx, repo, commit)).catch(() => undefined);
+  void enqueue(() => repackCommit(ctx, repo, commit));
 });
 
 /** Wait for the repacking already started (tests, shutdown). */

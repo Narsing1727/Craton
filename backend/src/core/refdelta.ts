@@ -153,3 +153,6 @@ export function decodeRefDelta(stored: Buffer, refBytes: Uint8Array, maxLength?:
   if (diff.length !== info.length) throw new Error("Damaged stored difference");
   return reconstruct(diff, fitted(refBytes, info.length), info);
 }
+
+/** The same difference and its inverse, for other formats that store one block as its difference from another (tile payloads). */
+export { difference as differenceBytes, reconstruct as reconstructBytes };

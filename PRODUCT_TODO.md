@@ -347,6 +347,7 @@ and shapefiles; tables and schemas are the gap.
 
 ## I. Field and offline
 
+- [x] **Cold tier for DEFLATE GeoTIFFs** (storage, not on the original list) · Old versions kept as pixels, 1.76x on four real DEM versions; `CRATON_RECODE=1`, `npm run recode`.
 - [ ] **Resumable uploads** that survive a dropped connection. `M`
 - [ ] **Offline commit queue** in the CLI. `L`
 

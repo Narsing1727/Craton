@@ -35,6 +35,8 @@ folder.
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | none | All four together store chunks in Cloudflare R2 instead of the data folder. |
 | `CRATON_ACCESS_LOG` | off | `1` writes one JSON line per API request to standard output: time, method, route pattern, status, milliseconds, request id and the signed-in handle. Never request bodies, query strings or tokens. |
 | `CRATON_SESSION_TOKEN` | none | Only for the scripts that check the web app (`npm run contrast`, `npm run focus`, `npm run audit` in `frontend`): a session token to use instead of signing in as the demo user, so the checks run on a throwaway account and write nothing to the demo user's security log. |
+| `CRATON_RECODE` | off | Set to `1` to keep the old versions of DEFLATE GeoTIFFs as their pixels (the cold tier, see below). About 28% smaller, and a later version of a tile as a difference from an earlier one; reading an old version then costs CPU. The newest version of each file is never touched. |
+| `CRATON_TILE_CACHE_MB` | 128 | How much recompressed tile data is kept in memory so that reading a cold file costs one rebuild per tile, not one per chunk (16 to 4096). |
 | `CRATON_REPACK` | on | Set to `0` to stop storing a changed numeric raster as its difference from the previous version (see below). It saves most of the space when every value moves by a little (a datum shift, a recalibration) and never changes what anyone downloads. |
 | `CRATON_STORE_CONCURRENCY` | automatic | How many chunks are stored at once during a push or an upload, 1 to 64. Automatic is 8 on the local disk (file creation is the limit) and 24 with R2 (each put is a round trip; at 40 ms a push of 10,000 chunks waits 50 s at 8 and about 17 s at 24). |
 | `CRATON_SECRET_SCAN` | `on` | Set to `off` to stop reading pushes and uploads for credentials (see “Secret scanning”). It is on for everyone by default; turn it off only on a server whose repositories are all scratch data. |
@@ -121,6 +123,31 @@ npm run repack -- --repo owner/name
 New commits are handled automatically after the push or upload is answered; `CRATON_REPACK=0` turns that off (differences
 already stored keep working). A chunk that is itself a difference is never used as a base, so a third version in a row is
 stored whole unless its previous version was not shrunk.
+
+## The cold tier for GeoTIFFs
+
+Most GeoTIFFs are compressed with DEFLATE, which makes every tile incompressible and different from the same tile in the next
+version, however small the change. The cold tier keeps the tiles of **old versions** as their pixels (about 28% smaller) together
+with the exact zlib settings that wrote them, and a later version of a tile as its difference from an earlier one (a datum shift
+or a smooth recalibration costs a few percent). When anyone reads an old version, each tile is compressed again from its pixels
+(in worker threads) and **must come out as the same bytes**: a tile is only kept as pixels after it has been rebuilt and compared
+with the original, a chunk is only rewritten after it has been put back together and hashed to its own SHA-256, and a rebuilt
+tile that does not hash to its own name is refused at read time. Files written by a compressor that `pako` (a plain JavaScript
+zlib, pinned at 2.1.0) does not match, such as libdeflate, are not recoded; nothing is lost, they are stored as uploaded.
+
+What stays exactly as it was uploaded: the newest version of every file (every branch tip), anything a tag points at, and every
+chunk those versions are made of, even when an old version shares it. Reading an old version costs about 5 seconds of CPU per
+40 MB file (measured), so this is a choice, not a default.
+
+```sh
+npm run recode                        # how much stored history would shrink (a dry run)
+npm run recode -- --apply             # do it
+npm run recode -- --repo owner/name
+npm run recode -- --verify            # make every stored tile's original stream again and check it
+```
+
+With `CRATON_RECODE=1` a push that moves a branch does this for that repository after the answer is sent. `npm run gc` keeps
+the tiles that chunks are made of and removes the rest after the grace period.
 
 ## Garbage collection
 

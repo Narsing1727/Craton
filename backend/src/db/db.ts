@@ -630,6 +630,29 @@ const migrations: string[] = [
     PRIMARY KEY (chunk_hash, ref_hash)
   );
   CREATE INDEX idx_chunk_refs_ref ON chunk_refs (ref_hash);
+  `,/* 37: the cold tier for DEFLATE GeoTIFFs: a tile kept as its pixels, which chunks are made of which tiles, and which tile of which version of a file is which. */ `
+  CREATE TABLE tiles (
+    key TEXT PRIMARY KEY,
+    stream_len INTEGER NOT NULL,
+    raw_len INTEGER NOT NULL,
+    stored_size INTEGER NOT NULL,
+    kind INTEGER NOT NULL,
+    base_key TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE TABLE chunk_tiles (
+    chunk_hash TEXT NOT NULL,
+    tile_key TEXT NOT NULL,
+    PRIMARY KEY (chunk_hash, tile_key)
+  );
+  CREATE INDEX idx_chunk_tiles_tile ON chunk_tiles (tile_key);
+  CREATE TABLE blob_tiles (
+    blob_id TEXT NOT NULL,
+    image INTEGER NOT NULL,
+    idx INTEGER NOT NULL,
+    tile_key TEXT NOT NULL,
+    PRIMARY KEY (blob_id, image, idx)
+  );
   `,
 ];
 

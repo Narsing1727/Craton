@@ -117,6 +117,17 @@ export const config = {
    */
   repack: { auto: env.CRATON_REPACK === "1" || (env.CRATON_REPACK !== "0" && !process.env.NODE_TEST_CONTEXT) } as { auto: boolean },
 
+  /**
+   * The cold tier: DEFLATE GeoTIFFs that are no longer the latest version are kept as their pixels (about 28% smaller, and a
+   * changed tile as its difference from an earlier one), and the original bytes are made again when they are read. Off unless
+   * CRATON_RECODE=1: reading an old version then costs CPU (tiles are compressed again), which is a choice for the operator.
+   * `cacheBytes` is how much recompressed tile data is kept in memory for the reads that follow.
+   */
+  recode: {
+    auto: env.CRATON_RECODE === "1",
+    cacheBytes: Math.max(16, Math.min(4096, Math.floor(Number(env.CRATON_TILE_CACHE_MB ?? 128)) || 128)) * 1024 * 1024,
+  } as { auto: boolean; cacheBytes: number },
+
   /** Content-defined chunking sizes (bytes). Average 128 KB, like the UI promises. */
   chunking: { min: 32 * 1024, avg: 128 * 1024, max: 512 * 1024 },
 

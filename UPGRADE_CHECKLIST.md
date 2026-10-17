@@ -380,7 +380,19 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 
 | 210 | **Light theme contrast**: blue links and the Open badge were 3.3 to 3.7:1 on the light page (AA needs 4.5:1); they are darker in Light only. The contrast scan and keyboard walk now run on a throwaway account (`CRATON_SESSION_TOKEN`), so they no longer write to the demo user's security log; `npm run audit` builds a repository with an issue, a comment and a release and scans 14 pages in both themes | `CRATON_E2E_DB=<throwaway craton.db> npm run audit` |
 
-Not done: DEFLATE GeoTIFFs (needs the bit-exact re-deflate, research/storage/README.md recommendation 2), LAS, NetCDF, and big-endian rasters.
+### 30. The cold tier: old versions of DEFLATE GeoTIFFs kept as pixels (bit-for-bit exact, off by default)
+
+98% of the data on this machine by volume is DEFLATE float32 GeoTIFF, which today is stored as uploaded: incompressible, and
+sharing nothing with a slightly different version of itself.
+
+| # | What it does | How to check |
+|---|---|---|
+| 211 | With `CRATON_RECODE=1` (or `npm run recode -- --apply`), the **old versions** of DEFLATE GeoTIFFs are kept as their pixels (shuffled, zstd) with the exact zlib settings that wrote them, and a later version of a tile as its **difference** from an earlier whole one. The **newest version of every file, anything a tag points at, and every chunk they are made of stay exactly as uploaded** | `npm run recode` (dry run); OPERATING.md → The cold tier for GeoTIFFs |
+| 212 | **Exact by construction:** a tile is kept only after it has been compressed again with pinned `pako` 2.1.0 and compared byte for byte with the original; a chunk is rewritten only after being put back together from its pieces and hashed to its own SHA-256; a rebuilt tile that does not hash to its own name is refused when read. A tile the compressor cannot reproduce (libdeflate, damage) is stored as uploaded and the rest of the file is still recoded | `backend/test/recode.test.ts` (11 tests on GDAL-written files incl. strips and predictor 3), `rezip.test.ts` (5); `npm run recode -- --verify` |
+| 213 | Measured on four real versions of a Copernicus DEM (original, levee, +0.25 m datum shift, recalibration; tip left whole): **122.2 MB stored today, 69.6 MB with the cold tier (1.76x)**, and the database's accounting matches the bytes on disk. Cold tiles: 16 whole (29 MB) and 17 as differences (0.08 MB). Every version downloads byte-identical; a cold 40 MB version reads in about 4.7 s (the tip in 0.3 s) | `node research/storage/end_to_end_tiles.mjs v0.tif v1.tif v2.tif v3.tif` |
+| 214 | Clients are always sent a chunk that stands alone (CLI, clone and pull are unchanged) and cannot upload the cold form; `npm run gc` keeps tiles that chunks are made of and removes the rest after the grace period; rebuilding runs in worker threads with a memory cache (`CRATON_TILE_CACHE_MB`); stores gained an atomic `replace` (the disk store kept the old bytes on `put`, so repacking silently did nothing there; fixed, and reads wait for a replace in progress) | `backend/test/repack.test.ts` runs on the disk store |
+
+Not done: LAS, NetCDF and HDF5 (HEC-RAS results are DEFLATE chunks too, same method, untested), big-endian rasters, GeoTIFFs written with libdeflate (needs a pinned libdeflate in WebAssembly), reading a cold file ahead of the reader (a 40 MB cold file costs about 5 s).
 
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
