@@ -46,6 +46,12 @@ export const EVENT_LABEL: Record<string, string> = {
 /** Events worth a second look: someone failing to get in, or a protection being switched off. */
 export const CONCERNING = new Set(["sign_in_failed", "password_reset_requested", "two_factor_disabled", "passkey_rollback"]);
 
+/**
+ * The dialog never grows past the screen: its height is capped here, as a style on the element, so it holds whatever the
+ * stylesheet has loaded, and the list inside scrolls while the title and the actions stay put.
+ */
+const DIALOG_BOUNDS = { maxHeight: "min(85dvh, 760px)", width: "min(calc(100vw - 2rem), 36rem)" } as const;
+
 const DeviceIcon = ({ ua, className }: { ua: string | null; className?: string }) => {
   const Icon = ua && /craton-cli/i.test(ua) ? Terminal : ua && /Android|iPhone|iPad/.test(ua) ? Smartphone : Laptop;
   return <Icon className={className} aria-hidden />;
@@ -137,14 +143,14 @@ export function SessionsCard({ sessions }: { sessions: ApiSession[] }) {
       </CardContent>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-xl">
+        <DialogContent className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-xl" style={DIALOG_BOUNDS}>
           <DialogHeader className="border-b border-border p-5 pb-4">
             <DialogTitle>Where you’re signed in</DialogTitle>
             <DialogDescription>
               {list.length} {list.length === 1 ? "browser" : "browsers"} with an active session, most recently used first. Sign out any you don’t recognise, then change your password.
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-2 pt-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-2 pt-4" style={{ overflowY: "auto", overscrollBehavior: "contain" }}>
             {groups.map((g) => (
               <section key={g.label}>
                 <DayHeading>{g.label}</DayHeading>
@@ -228,7 +234,7 @@ export function SecurityLogCard({ events }: { events: ApiSecurityEvent[] }) {
       </CardContent>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-xl">
+        <DialogContent className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-xl" style={DIALOG_BOUNDS}>
           <DialogHeader className="border-b border-border p-5 pb-4">
             <DialogTitle>Recent security activity</DialogTitle>
             <DialogDescription>The latest {events.length} events on your account, newest first. If you don’t recognise something, change your password and sign out other browsers.</DialogDescription>
@@ -249,7 +255,7 @@ export function SecurityLogCard({ events }: { events: ApiSecurityEvent[] }) {
               ))}
             </div>
           </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3 pt-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3 pt-4" style={{ overflowY: "auto", overscrollBehavior: "contain" }}>
             {groups.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">Nothing to look at. Failed sign-ins and protections switched off would show here.</p>
             ) : (
