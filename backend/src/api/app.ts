@@ -44,6 +44,7 @@ import * as modelreview from "../services/modelreview.ts";
 import * as audit from "../services/audit.ts";
 import * as secretscan from "../services/secretscan.ts";
 import * as domains from "../services/domains.ts";
+import * as sso from "../services/sso.ts";
 import { parseRange } from "../core/range.ts";
 import * as passkeys from "../services/passkeys.ts";
 import { buildStac } from "../services/stac.ts";
@@ -388,6 +389,7 @@ export function createApp(ctx: Ctx) {
       throw err;
     }
     limits.clear(`fail:${login}`);
+    sso.assertMethodAllowed(ctx, id, "password");
     // With two-step verification on, the password only earns a short-lived ticket; the session
     // comes after the code (POST /auth/login/2fa).
     if (twofactor.isEnabled(ctx, id)) return c.json({ mfaRequired: true, ...twofactor.startLogin(ctx, id) });
@@ -395,13 +397,13 @@ export function createApp(ctx: Ctx) {
   });
 
   /** A new session for a user who has proved who they are, plus the new-device notice. */
-  function signedIn(c: Context<Env>, id: number, via: "password" | "google" | "github" | "passkey" = "password") {
+  function signedIn(c: Context<Env>, id: number, via: "password" | "google" | "github" | "sso" | "passkey" = "password") {
     const session = accounts.startSession(ctx, id);
     const user = accounts.authenticate(ctx, session.token)!;
     // Tell the owner about sign-ins from a device we haven't seen for them.
     const info = clientInfo(c);
     // After the two-step code the first factor is no longer known here; an account with no password can only have used a provider.
-    const how = via === "passkey" ? "passkey" : via === "google" ? "Google" : via === "github" ? "GitHub" : !accounts.hasPassword(ctx, user.id) ? "Google or GitHub" : "password";
+    const how = via === "passkey" ? "passkey" : via === "google" ? "Google" : via === "github" ? "GitHub" : via === "sso" ? "single sign-on" : !accounts.hasPassword(ctx, user.id) ? "Google or GitHub" : "password";
     securitylog.record(ctx, user.id, "signed_in", { detail: twofactor.isEnabled(ctx, user.id) ? `${how} and two-step code` : how, ...info });
     const known = ctx.db.prepare("SELECT 1 FROM tokens WHERE user_id = ? AND kind = 'session' AND id <> ? AND ip IS ? AND user_agent IS ? LIMIT 1").get(user.id, user.tokenId, info.ip, info.userAgent);
     ctx.db.prepare("UPDATE tokens SET ip = ?, user_agent = ? WHERE id = ?").run(info.ip, info.userAgent?.slice(0, 300) ?? null, user.tokenId);
@@ -430,7 +432,7 @@ export function createApp(ctx: Ctx) {
   });
   // ── Sign in with Google or GitHub ───────────────────────────────────────
   // Which providers this server offers, so the sign-in page shows only buttons that work.
-  v1.get("/auth/providers", (c) => c.json({ google: oauth.enabled("google"), github: oauth.enabled("github"), passkeys: true }));
+  v1.get("/auth/providers", (c) => c.json({ google: oauth.enabled("google"), github: oauth.enabled("github"), sso: Boolean(ctx.db.prepare("SELECT 1 FROM org_sso LIMIT 1").get()), passkeys: true }));
   const providerOf = (c: Context<Env>) => c.req.param("provider") as oauth.Provider;
   // Step 1: a one-time state and PKCE challenge are stored, and the web app sends the browser to `url`.
   // With a signed-in session and { link: true } the result is added to that account instead of signing anyone in.
@@ -459,7 +461,10 @@ export function createApp(ctx: Ctx) {
       securitylog.record(ctx, me.id, "oauth_linked", { detail: `${label} ${g.email}`, ...info });
       return c.json({ linked: true, email: g.email });
     }
-    const after = (id: number) => (twofactor.isEnabled(ctx, id) ? c.json({ mfaRequired: true, ...twofactor.startLogin(ctx, id), next: done.next }) : signedIn(c, id, provider));
+    const after = (id: number) => {
+      sso.assertMethodAllowed(ctx, id, provider);
+      return twofactor.isEnabled(ctx, id) ? c.json({ mfaRequired: true, ...twofactor.startLogin(ctx, id), next: done.next }) : signedIn(c, id, provider);
+    };
     const known = oauth.identityOwner(ctx, g.sub, provider);
     if (known !== null) return after(known);
     const byEmail = oauth.userByEmail(ctx, g.email);
@@ -497,6 +502,76 @@ export function createApp(ctx: Ctx) {
     securitylog.record(ctx, user.id, "oauth_linked", { detail: `${oauth.providerName(provider)} ${p.email} (account created)`, ...clientInfo(c) });
     return signedIn(c, user.id, provider);
   });
+  // ── Single sign-on through an organization's own identity provider ─────────
+  // The person types their work email; if an organization has verified that domain and set up SSO, the web app is sent to
+  // that organization's provider. The answer comes back to the one callback address every organization registers.
+  v1.post("/auth/sso/start", async (c) => {
+    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    const b = await body<{ email?: string; next?: string }>(c);
+    return c.json(sso.start(ctx, b));
+  });
+  v1.post("/auth/sso/callback", async (c) => {
+    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    const b = await body<{ code?: string; state?: string }>(c);
+    const done = await sso.finish(ctx, { code: b.code ?? "", state: b.state ?? "" });
+    const g = done.claims;
+    const info = clientInfo(c);
+    const arrive = (id: number) => {
+      // Signing in through the organization's provider makes the person one of its members, and proves the setup works.
+      sso.joinOrg(ctx, done.orgId, id);
+      sso.markTested(ctx, done.orgId);
+      return twofactor.isEnabled(ctx, id) ? c.json({ mfaRequired: true, ...twofactor.startLogin(ctx, id), next: done.next }) : signedIn(c, id, "sso");
+    };
+    const known = oauth.identityOwner(ctx, g.sub, done.provider);
+    if (known !== null) return arrive(known);
+    const byEmail = oauth.userByEmail(ctx, g.email);
+    if (byEmail) {
+      if (!byEmail.verified) {
+        throw new ApiError(409, "email_unverified_account", "An account with this email exists but its address was never confirmed. Confirm it from the email we sent, or reset its password, then use single sign-on again.");
+      }
+      oauth.linkIdentity(ctx, byEmail.id, g.sub, g.email, done.provider);
+      securitylog.record(ctx, byEmail.id, "oauth_linked", { detail: `Single sign-on (${done.orgHandle}) ${g.email} (matched by verified email)`, ...info });
+      return arrive(byEmail.id);
+    }
+    const ticket = oauth.createPending(ctx, { subject: g.sub, email: g.email, name: g.name }, done.provider);
+    return c.json({ needsUsername: true, ticket, email: g.email, name: g.name, suggestion: oauth.suggestHandle(ctx, g.email, g.name), next: done.next });
+  });
+  v1.post("/auth/sso/pending", async (c) => {
+    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
+    const b = await body<{ ticket?: string }>(c);
+    const p = oauth.readPending(ctx, b.ticket ?? "", "sso");
+    return c.json({ email: p.email, name: p.name, suggestion: oauth.suggestHandle(ctx, p.email, p.name) });
+  });
+  v1.post("/auth/sso/complete", async (c) => {
+    limit(c, `signup:${clientIp(c)}`, config.limits.signup, "Too many new accounts from this network. Try again in an hour.");
+    const b = await body<{ ticket?: string; username?: string; name?: string }>(c);
+    const p = oauth.readPending(ctx, b.ticket ?? "", "sso");
+    const user = accounts.createOAuthUser(ctx, { handle: b.username ?? "", email: p.email, name: b.name || p.name });
+    oauth.linkIdentity(ctx, user.id, p.subject, p.email, p.provider);
+    oauth.dropPending(ctx, b.ticket ?? "");
+    const orgId = Number(p.provider.slice(sso.SSO_PREFIX.length));
+    sso.joinOrg(ctx, orgId, user.id);
+    sso.markTested(ctx, orgId);
+    securitylog.record(ctx, user.id, "oauth_linked", { detail: `Single sign-on ${p.email} (account created)`, ...clientInfo(c) });
+    return signedIn(c, user.id, "sso");
+  });
+  // Setting it up (owners): the provider's address, and the client id and secret made there.
+  v1.get("/orgs/:org/sso", (c) => (requireScope(c, "admin:org"), c.json(sso.getConfig(ctx, c.req.param("org"), requireUser(c).id))));
+  v1.put("/orgs/:org/sso", async (c) => {
+    requireScope(c, "admin:org");
+    limit(c, `sso-config:${requireUser(c).id}`, { max: 20, windowMs: 10 * 60_000 }, "Too many changes. Wait a few minutes.");
+    return c.json(await sso.configure(ctx, c.req.param("org"), requireUser(c).id, await body(c)));
+  });
+  v1.patch("/orgs/:org/sso", async (c) => {
+    requireScope(c, "admin:org");
+    const b = await body<{ enforced?: boolean }>(c);
+    return c.json(sso.setEnforced(ctx, c.req.param("org"), requireUser(c).id, b.enforced));
+  });
+  v1.delete("/orgs/:org/sso", (c) => {
+    requireScope(c, "admin:org");
+    sso.remove(ctx, c.req.param("org"), requireUser(c).id);
+    return c.body(null, 204);
+  });
   // ── Passkeys ───────────────────────────────────────────────────────────
   // Sign in: the browser asks the device for any passkey it holds for this site; no username is needed first.
   v1.post("/auth/passkey/options", (c) => {
@@ -510,6 +585,7 @@ export function createApp(ctx: Ctx) {
       securitylog.record(ctx, proof.userId, "passkey_rollback", { detail: "signature counter went backwards", ...clientInfo(c) });
       throw new ApiError(401, "passkey_cloned", "This passkey’s counter went backwards, which can mean it was copied, so it wasn’t accepted. Sign in another way, and remove the passkey if you don’t recognise this.");
     }
+    sso.assertMethodAllowed(ctx, proof.userId, "passkey");
     // A passkey the device unlocked with a PIN, fingerprint or face is two factors in one. One that was only touched is one
     // factor, so an account with two-step verification still asks for its code.
     if (!proof.userVerified && twofactor.isEnabled(ctx, proof.userId)) return c.json({ mfaRequired: true, ...twofactor.startLogin(ctx, proof.userId) });

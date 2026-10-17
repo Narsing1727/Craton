@@ -319,7 +319,7 @@ function SignInMethodsCard({ identities }: { identities: ApiIdentities }) {
   })).filter((r) => r.linked || r.available);
   const note = PROVIDERS.map((p) => providerNotice(p, search.get(p) ?? undefined, "settings")).find(Boolean);
 
-  function disconnect(provider: OAuthProvider, name: string) {
+  function disconnect(provider: "google" | "github", name: string) {
     startRemove(async () => {
       const result = await disconnectIdentityAction(provider);
       if (!result.ok) return void notify.error(`Couldn’t disconnect ${name}`, { description: result.error });
@@ -353,7 +353,7 @@ function SignInMethodsCard({ identities }: { identities: ApiIdentities }) {
                   <p className="truncate text-xs text-muted-foreground">{r.linked ? `Connected as ${r.linked.email}` : "Not connected"}</p>
                 </div>
                 {r.linked ? (
-                  <Button variant="outline" size="sm" onClick={() => disconnect(r.provider, r.name)} loading={removing} disabled={removing || !canRemove}>
+                  <Button variant="outline" size="sm" onClick={() => disconnect(r.provider as "google" | "github", r.name)} loading={removing} disabled={removing || !canRemove}>
                     Disconnect
                   </Button>
                 ) : (

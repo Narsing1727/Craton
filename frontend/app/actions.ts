@@ -98,6 +98,17 @@ export async function removeMemberAction(org: string, handle: string) {
 export async function updateOrgAction(org: string, patch: { name?: string; bio?: string }) {
   return write<{ handle: string; name: string; bio: string }>("PATCH", `/orgs/${encodeURIComponent(org)}`, patch, [`/orgs/${org}`]);
 }
+// ── Organization single sign-on (owners) ──
+export async function saveSsoAction(org: string, input: { issuer: string; clientId: string; clientSecret?: string }) {
+  return write<import("@/lib/api").ApiOrgSso>("PUT", `/orgs/${encodeURIComponent(org)}/sso`, input, [`/orgs/${org}`]);
+}
+export async function setSsoEnforcedAction(org: string, enforced: boolean) {
+  return write<import("@/lib/api").ApiOrgSso>("PATCH", `/orgs/${encodeURIComponent(org)}/sso`, { enforced }, [`/orgs/${org}`]);
+}
+export async function removeSsoAction(org: string) {
+  return write<null>("DELETE", `/orgs/${encodeURIComponent(org)}/sso`, undefined, [`/orgs/${org}`]);
+}
+
 // ── Organization domains (owners) ──
 const domainPath = (org: string, domain?: string) => `/orgs/${encodeURIComponent(org)}/domains${domain ? `/${encodeURIComponent(domain)}` : ""}`;
 export async function addDomainAction(org: string, domain: string) {

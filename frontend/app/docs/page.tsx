@@ -21,7 +21,7 @@ const nav = [
   { heading: "Getting started", items: ["Introduction", "Install the CLI", "Your first repository", "Authentication"] },
   { heading: "By goal", items: ["Version a HEC-RAS project", "Share a DEM with a partner", "See what changed in a DEM", "Review a change as a team", "Work with part of a big repository"] },
   { heading: "Working with data", items: ["Supported formats", "Chunking & deduplication", "Large file workflow", "Map diffs", "Python and notebooks", "Your own checks", "Secret scanning"] },
-  { heading: "Collaboration", items: ["Branches", "Pull requests", "Reviews", "Model review", "Organization domains", "Code owners", "Provenance"] },
+  { heading: "Collaboration", items: ["Branches", "Pull requests", "Reviews", "Model review", "Organization domains", "Single sign-on", "Code owners", "Provenance"] },
   { heading: "Reference", items: ["CLI commands", "REST API", "Webhooks", "Rate limits", "For agents and AI tools"] },
 ];
 
@@ -290,6 +290,15 @@ export default function DocsPage() {
           <DocSection title="Organization domains">
             <P>
               In an organization&rsquo;s settings, owners can claim the domain their team&rsquo;s email addresses use (for example <code className="font-mono text-sm text-foreground">hydrolab.org</code>) and prove it with a DNS TXT record Craton shows. A verified domain is marked on the organization&rsquo;s page. Switch on <em>Let people with a hydrolab.org address join</em> and anyone whose confirmed address ends there becomes a Member without an invitation; an address nobody has confirmed never counts, and removing the domain never removes anyone.
+            </P>
+          </DocSection>
+
+          <DocSection title="Single sign-on">
+            <P>
+              An organization that has verified its domain can let its people sign in with its own identity provider (Microsoft Entra ID, Okta, Keycloak, Google Workspace, any OpenID Connect provider). In the organization&rsquo;s settings an owner pastes the provider&rsquo;s issuer, client id and secret, and registers the redirect address Craton shows. People then choose <em>Continue with single sign-on</em> on the sign-in page and enter their work email; they join the organization on their first visit. The provider can only vouch for addresses at the organization&rsquo;s verified domains.
+            </P>
+            <P>
+              After one successful test an owner can require it: members with an address at those domains can then only sign in through the provider. Owners are exempt, so a provider outage can&rsquo;t lock the organization out, and personal access tokens for the CLI and scripts keep working.
             </P>
           </DocSection>
 

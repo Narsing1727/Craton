@@ -280,6 +280,17 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 169 | Versions are part of the address: a branch, tag or commit, so a notebook result names the exact data it used | `craton://hydrolab/chalakudy-basin@v1.0.0/…` |
 | 170 | Tested against the real server over real HTTP (`cli.test.ts`), including negative offsets, head/tail seeks and 404s | Backend tests |
 
+### 19. Single sign-on for organizations
+
+| # | What it does | How to check |
+|---|---|---|
+| 171 | **Per-organization OpenID Connect SSO** (Entra ID, Okta, Keycloak, Google Workspace…): the owner pastes issuer, client id and secret; Craton reads the provider's discovery document (public https only, no redirects, size-limited), stores the secret **encrypted**, and shows the one redirect address to register | Organization → Settings → Single sign-on |
+| 172 | **"Continue with single sign-on"** on the sign-in page: a work email picks the organization that verified that domain; state, PKCE and nonce as for Google; RS256 signature, issuer, audience, authorized party, expiry and nonce all checked | `/login/sso` |
+| 173 | The provider **can only vouch for addresses at the organization's verified domains** (not gmail.com, not another organization's domain, not a look-alike); `preferred_username`/`upn` are used when there is no `email` claim; an address the provider marks unverified is refused | Backend tests |
+| 174 | First sign-in picks a username, creates a verified account and **adds the person to the organization**; an existing confirmed account is linked; an unconfirmed one is refused, never merged | Sign in through it |
+| 175 | **Require SSO** (after one successful test): members with an address at the verified domains are refused passwords, Google, GitHub and passkeys; **owners are exempt** (the way back in), personal access tokens keep working; a different provider or client resets "tested" and "required" | The switch under the SSO card |
+| 176 | Setup, change and removal are on the audit log; removing it deletes the links, not the accounts; providers wanting client_secret_basic are supported | Backend tests |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.
@@ -293,6 +304,6 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 
 - **Google sign-in has never talked to the real Google.** It is tested against a stand-in that signs tokens the way Google does (22 browser checks and 11 API tests), but I have no credentials, so the first real attempt may need a consent-screen tweak. GitHub sign-in has the same limit (tested against a stand-in for GitHub). Microsoft is not built.
 - Stars, followers, wiki, forks, teams and billing are demo.
-- Not built: SSO/SAML/SCIM, writing through fsspec (reads only), a Slack app with slash commands (only incoming webhooks), QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, light theme, comments pinned to a map location.
+- Not built: SAML and SCIM, writing through fsspec (reads only), a Slack app with slash commands (only incoming webhooks), QGIS plugin, MapLibre compare viewer, DOI minting, checks-as-code, Slack/Teams, offline commit queue, light theme, comments pinned to a map location.
 - Chunk packs for R2 and the R2 store itself have never run against live R2 (simulated with a 40 ms put).
 - Flood3D scenario import and the Studio menu bar belong to Nerolith, not Craton.

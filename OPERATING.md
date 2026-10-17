@@ -27,7 +27,7 @@ folder.
 | `CRATON_UPLOAD_MAX_MB` | `100` | Largest total size of one upload from the browser; bigger goes through the CLI. |
 | `CRATON_PREWARM_PREVIEWS` | on | `off` stops drawing map previews in the background after a push. |
 | `CRATON_LOCK_STALE_DAYS` | `7` | After this many days a held file lock is reminded about and listed as old. |
-| `CRATON_WEBHOOKS_ALLOW_PRIVATE` | off | `1` lets webhooks call private and loopback addresses. Development only: webhook URLs are typed by users. |
+| `CRATON_WEBHOOKS_ALLOW_PRIVATE` | off | `1` lets webhooks and single sign-on discovery call private and loopback addresses and plain http. Development only: those addresses are typed by users. |
 | `CRATON_SECRET_KEY` | a key file in the data folder | 32 bytes as 64 hex characters or base64. Encrypts the stored two-step verification secrets. Set it in production and keep it; losing it makes those secrets unreadable and people would have to set two-step verification up again. |
 | `EMAIL_API_KEY` | none | A Resend or Postmark key. Without one, mail is written to the data folder and, outside production, listed at `/v1/dev/outbox`. |
 | `EMAIL_PROVIDER` | `resend` | `resend` or `postmark`. |
@@ -145,6 +145,10 @@ Every successful change under `/repos/...` and `/orgs/...` made by someone signe
 ## Secret scanning
 
 Before a branch moves, the commits a push would add are read for credentials: each file they add or change, if it is text and no larger than 2 MB (at most 2,000 files and 256 MB read per push). Browser uploads are read the same way before anything is stored. The patterns are fixed prefixes with a checksum or length (Craton tokens, GitHub tokens, AWS access key ids, Google API keys and client secrets, Slack tokens and webhooks, Stripe live keys, Anthropic and OpenAI keys, PEM private keys, database addresses with a real password); a Craton token only counts while it still works. A finding is a 422 `secret_detected` naming the file, line and kind, and the first few characters at most. The refusal, and any push an administrator lets through with a reason (`allowSecrets` on the API, `craton push --allow-secrets`), are entries in the audit log (never the secret). A live Craton token let into a *public* repository this way is revoked. A line holding `craton:allow-secret` is skipped. Tokens issued before the `crt_` format (`bcn_…`) still sign in and are still recognised by the scan.
+
+## Organization single sign-on
+
+An organization that has verified a domain can connect its own OpenID Connect provider (Settings → Single sign-on: issuer, client id, client secret). Register `<CRATON_WEB_URL>/auth/sso/callback` as the redirect URI there; every organization uses that one address. On the sign-in page, “Continue with single sign-on” asks for a work email and sends the person to the provider of the organization that verified that email's domain. The provider can only vouch for addresses at that organization's verified domains. Craton reads the provider's `/.well-known/openid-configuration` when the setup is saved (and the signing keys when someone signs in) over https to public addresses only; set `CRATON_WEBHOOKS_ALLOW_PRIVATE=1` on a development machine to allow a provider on a private address or plain http. The client secret is stored encrypted with the server's secret key (`CRATON_SECRET_KEY`, or the key file in the data folder: keep it out of backups of the database). People who sign in through it join the organization as Members. Once someone has signed in through it, owners can require it: members with an address at the organization's domains are then refused passwords, Google, GitHub and passkeys, while owners are exempt (the way back in if the provider breaks) and personal access tokens keep working. Removing the setup removes the links, not the accounts. Only RS256-signed ID tokens are accepted.
 
 ## Organization domains
 

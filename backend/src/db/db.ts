@@ -581,6 +581,20 @@ const migrations: string[] = [
     UNIQUE (org_id, domain)
   );
   CREATE UNIQUE INDEX org_domains_verified ON org_domains (domain) WHERE verified_at IS NOT NULL;
+  `,/* 30: single sign-on per organization (OpenID Connect against the organization's own identity provider). The client secret is stored encrypted. */ `
+  CREATE TABLE org_sso (
+    org_id INTEGER PRIMARY KEY REFERENCES owners(id) ON DELETE CASCADE,
+    issuer TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_secret TEXT NOT NULL,
+    auth_url TEXT NOT NULL,
+    token_url TEXT NOT NULL,
+    jwks_url TEXT NOT NULL,
+    auth_method TEXT NOT NULL DEFAULT 'post',
+    enforced INTEGER NOT NULL DEFAULT 0,
+    tested_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
   `,
 ];
 

@@ -58,7 +58,7 @@ export async function callbackRoute(request: Request, provider: OAuthProvider) {
 
   const result = await send<Answer>("POST", `/auth/${provider}/callback`, { code, state }, mode === "link" ? await getSessionToken() : null);
   if (!result.ok) {
-    const why = result.code === "email_unverified_account" ? "unverified" : result.code === "identity_taken" ? "taken" : result.code === "email_not_verified" ? "noemail" : result.offline ? "offline" : "error";
+    const why = result.code === "email_unverified_account" ? "unverified" : result.code === "identity_taken" ? "taken" : result.code === "email_not_verified" || result.code === "no_email" ? "noemail" : result.code === "domain_not_verified" ? "domain" : result.offline ? "offline" : "error";
     return to(`${back}?${provider}=${why}`);
   }
   const a = result.data;

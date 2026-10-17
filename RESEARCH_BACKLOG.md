@@ -21,7 +21,7 @@ Ranked by (value to a first-time visitor and to a paying hydro team) ÷ effort, 
 3. **HEC-RAS model QA checklist + modelling log** as a first-class release artifact (TUFLOW, FEMA, state reviewers all require one). ⬜
 4. **Declarative data checks in the repo** (`.craton-checks.json`, Great Expectations "expectation suites" style) with results page. ✅ built 2026-10-15 (results show on the Checks tab; no editor UI yet)
 5. **Audit log for organisations** (who did what, exportable) and per-token request log. ✅ built 2026-10-15
-6. **SSO (OIDC/SAML) + SCIM + domain verification** for the first institutional buyer. 🟡 domain verification + join-by-address built; Google and GitHub sign-in; SSO/SCIM ⬜
+6. **SSO (OIDC/SAML) + SCIM + domain verification** for the first institutional buyer. 🟡 domain verification, join-by-address, Google/GitHub sign-in and per-organization OIDC SSO with enforcement built; SAML and SCIM ⬜
 7. **Passkeys** (phishing-resistant, simplest strong sign-in). ✅ built 2026-10-16
 8. **Secret scanning on push** with token prefixes + checksums so leaked tokens are recognised. ✅ built (checklist 138–144)
 9. **Sandbox/test mode and a request-log page** (Stripe's best developer feature). ⬜

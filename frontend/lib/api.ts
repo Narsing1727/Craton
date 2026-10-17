@@ -284,6 +284,9 @@ export type ApiRepoDetail = ApiRepo & { access: "none" | "read" | "write" | "adm
 /** One of an organization's domains, as its owners see it: the DNS record to publish until it is verified. */
 export type ApiOrgDomain = { domain: string; verified: boolean; verifiedAt: string | null; autoJoin: boolean; createdAt: string; record?: { type: string; name: string; value: string } };
 
+/** An organization's single sign-on setup, as its owners see it (the client secret is never sent back). */
+export type ApiOrgSso = { configured: boolean; issuer?: string; clientId?: string; hasSecret?: boolean; enforced?: boolean; testedAt?: string | null; redirectUri: string; domains: string[] };
+
 export type ApiOwner = {
   handle: string;
   kind: "user" | "org";
@@ -488,7 +491,7 @@ export const api = {
   identities: () => get<ApiIdentities>("/user/identities"),
   passkeys: () => get<ApiPasskey[]>("/user/passkeys"),
   /** Which sign-in buttons this server can honour (a visitor, so no session is needed). */
-  providers: () => get<{ google: boolean; github: boolean; passkeys: boolean }>("/auth/providers", 2500),
+  providers: () => get<{ google: boolean; github: boolean; sso?: boolean; passkeys: boolean }>("/auth/providers", 2500),
   shared: () => get<{ owner: string; name: string; role: "Read" | "Write" | "Admin" }[]>("/user/shared"),
   invites: (owner: string, repo: string) => get<ApiInvite[]>(`${repoPath(owner, repo)}/invites`),
   invitePreview: (token: string) => get<ApiInvitePreview>(`/invites/${encodeURIComponent(token)}`),
@@ -551,6 +554,7 @@ export const api = {
   releases: (owner: string, repo: string) => get<ApiRelease[]>(`${repoPath(owner, repo)}/releases`),
   search: (q: string) => get<{ repositories: ApiRepo[]; files: { repo: string; path: string; size: number }[]; people: { handle: string; name: string; bio: string }[]; organizations: { handle: string; name: string; bio: string }[] }>(`/search?q=${encodeURIComponent(q)}`),
   owner: (handle: string) => get<ApiOwner>(`/owners/${encodeURIComponent(handle)}`),
+  orgSso: (org: string) => get<ApiOrgSso>(`/orgs/${encodeURIComponent(org)}/sso`),
   orgDomains: (org: string) => get<{ domains: ApiOrgDomain[] }>(`/orgs/${encodeURIComponent(org)}/domains`),
   starred: () => get<ApiRepo[]>("/user/starred"),
   trending: (period: "day" | "week" | "month") => get<(ApiRepo & { gained: number; starred: boolean })[]>(`/trending?period=${period}`),

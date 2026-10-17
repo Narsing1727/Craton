@@ -13,9 +13,10 @@ import { TypeToConfirm } from "@/components/craton-actions";
 import { deleteOrgAction, updateOrgAction } from "@/app/actions";
 import { AuditLog } from "@/components/audit-log";
 import { OrgDomains } from "@/components/org-domains";
-import type { ApiAuditPage, ApiOrgDomain } from "@/lib/api";
+import { OrgSso } from "@/components/org-sso";
+import type { ApiAuditPage, ApiOrgDomain, ApiOrgSso } from "@/lib/api";
 
-export function OrgSettingsView({ org, name, bio, role, repositories, audit, domains, verified }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null; domains: ApiOrgDomain[] | null; verified: string[] }) {
+export function OrgSettingsView({ org, name, bio, role, repositories, audit, domains, sso, verified }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null; domains: ApiOrgDomain[] | null; sso: ApiOrgSso | null; verified: string[] }) {
   const owner = role === "Owner";
   const [displayName, setDisplayName] = useState(name);
   const [description, setDescription] = useState(bio);
@@ -91,6 +92,18 @@ export function OrgSettingsView({ org, name, bio, role, repositories, audit, dom
               </CardHeader>
               <CardContent className="p-5">
                 <OrgDomains org={org} initial={domains} />
+              </CardContent>
+            </Card>
+          )}
+
+          {owner && sso && (
+            <Card>
+              <CardHeader className="p-5 pb-2">
+                <CardTitle className="text-base font-semibold">Single sign-on</CardTitle>
+                <CardDescription>Let {org}’s people sign in with the organization’s own identity provider (OpenID Connect). People who sign in this way join {org} automatically.</CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                <OrgSso org={org} initial={sso} />
               </CardContent>
             </Card>
           )}

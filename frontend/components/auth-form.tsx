@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Eye, EyeOff, Info, KeyRound, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff, Info, Building2, KeyRound, ShieldCheck } from "lucide-react";
 import { CratonLogo } from "@/components/craton-logo";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,8 @@ type AuthFormProps = {
   google?: boolean;
   /** This server offers "Continue with GitHub". */
   github?: boolean;
+  /** At least one organization on this server has set up single sign-on. */
+  sso?: boolean;
   /** This server accepts passkeys (the API says so). The button also needs a browser that can use them. */
   passkeys?: boolean;
   /** A two-step ticket from a Google sign-in on an account with two-step verification: go straight to the code. */
@@ -52,7 +54,7 @@ function GoogleMark() {
 
 const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 
-export function AuthForm({ mode, next, notice, demoHint, google, github, passkeys, initialMfaTicket }: AuthFormProps) {
+export function AuthForm({ mode, next, notice, demoHint, google, github, sso, passkeys, initialMfaTicket }: AuthFormProps) {
   const isLogin = mode === "login";
   const [state, formAction, pending] = useActionState<FormResult | null, FormData>(isLogin ? loginAction : signupAction, null);
   const [showPassword, setShowPassword] = useState(false);
@@ -157,7 +159,7 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, passkey
               {notice}
             </p>
           )}
-          {(google || github || passkeyButton) && (
+          {(google || github || sso || passkeyButton) && (
             <>
               <div className="flex flex-col gap-2">
                 {passkeyButton && (
@@ -177,6 +179,12 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, passkey
                   <a href={`/auth/github${next ? `?next=${encodeURIComponent(next)}` : ""}`} className={cn(buttonVariants({ variant: "outline" }), "w-full gap-2")}>
                     <GitHubMark />
                     Continue with GitHub
+                  </a>
+                )}
+                {sso && (
+                  <a href={`/login/sso${next ? `?next=${encodeURIComponent(next)}` : ""}`} className={cn(buttonVariants({ variant: "outline" }), "w-full gap-2")}>
+                    <Building2 className="size-4" aria-hidden />
+                    Continue with single sign-on
                   </a>
                 )}
               </div>

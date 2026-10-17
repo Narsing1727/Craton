@@ -107,7 +107,7 @@ export function validateUrl(raw: string): URL {
 }
 
 /** A DNS lookup that refuses to return a blocked address, so the connection can only go where we checked. */
-function safeLookup(hostname: string, options: dns.LookupOptions, callback: (err: NodeJS.ErrnoException | null, address?: string | dns.LookupAddress[], family?: number) => void) {
+export function safeLookup(hostname: string, options: dns.LookupOptions, callback: (err: NodeJS.ErrnoException | null, address?: string | dns.LookupAddress[], family?: number) => void) {
   dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
     if (err) return callback(err);
     const list = addresses as dns.LookupAddress[];

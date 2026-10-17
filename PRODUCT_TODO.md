@@ -294,7 +294,7 @@ and shapefiles; tables and schemas are the gap.
       dashboard. (The access model already supported collaborators; nothing could add one.)
 - [x] **Invite by email** for people without an account. `S` · Collaborators page: type an email address instead of a username. An address that already has an account is added at once; otherwise a one-time link (14 days, only its hash stored) is emailed and listed as "Waiting for a reply", with Withdraw. Accepting needs a signed-in account whose confirmed address is the invited one (migration 18, 4 tests).
       account; this would send a signup link that grants access on first sign-in.
-- [ ] **SSO (OIDC/SAML) and SCIM.** `L`
+- [~] **SSO (OIDC/SAML) and SCIM.** `L` · OIDC per organization with domain verification and enforcement is built (checklist 171-176); SAML and SCIM are not.
 
 ## G. Day-to-day polish
 

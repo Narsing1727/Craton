@@ -7,11 +7,12 @@ import { providerNotice } from "@/lib/oauth-routes-shared";
 
 export const metadata: Metadata = { title: "Sign in", description: "Sign in to Craton." };
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; expired?: string; reset?: string; google?: string; github?: string; mfa?: string }> }) {
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; expired?: string; reset?: string; google?: string; github?: string; sso?: string; mfa?: string }> }) {
   const params = await searchParams;
   const notice =
     providerNotice("google", params.google, "signin") ??
     providerNotice("github", params.github, "signin") ??
+    providerNotice("sso", params.sso, "signin") ??
     (params.reset
       ? "Your password was changed. Sign in with the new one."
       : params.expired
@@ -22,5 +23,5 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const [providers, jar] = await Promise.all([api.providers(), cookies()]);
   // Google said who it is and the account has two-step verification: the code is the only step left.
   const initialMfaTicket = params.mfa ? jar.get(MFA_COOKIE)?.value : undefined;
-  return <AuthForm mode="login" next={params.next} notice={notice} demoHint={process.env.NODE_ENV !== "production"} google={Boolean(providers?.google)} github={Boolean(providers?.github)} passkeys={Boolean(providers?.passkeys)} initialMfaTicket={initialMfaTicket} />;
+  return <AuthForm mode="login" next={params.next} notice={notice} demoHint={process.env.NODE_ENV !== "production"} google={Boolean(providers?.google)} github={Boolean(providers?.github)} sso={Boolean(providers?.sso)} passkeys={Boolean(providers?.passkeys)} initialMfaTicket={initialMfaTicket} />;
 }

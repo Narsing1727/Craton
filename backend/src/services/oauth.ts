@@ -193,12 +193,12 @@ export const finishGoogle = (ctx: Ctx, input: { code: string; state: string }) =
 
 // ── Who is linked to whom ────────────────────────────────────────────────────
 
-export function identityOwner(ctx: Ctx, subject: string, provider: Provider = "google"): number | null {
+export function identityOwner(ctx: Ctx, subject: string, provider: string = "google"): number | null {
   const row = ctx.db.prepare("SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ?").get(provider, subject) as { user_id: number } | undefined;
   return row?.user_id ?? null;
 }
 
-export function linkIdentity(ctx: Ctx, userId: number, subject: string, email: string, provider: Provider = "google") {
+export function linkIdentity(ctx: Ctx, userId: number, subject: string, email: string, provider: string = "google") {
   ctx.db.prepare("INSERT OR REPLACE INTO oauth_identities (provider, subject, user_id, email) VALUES (?, ?, ?, ?)").run(provider, subject, userId, email);
 }
 
@@ -206,7 +206,7 @@ export function listIdentities(ctx: Ctx, userId: number) {
   return ctx.db.prepare("SELECT provider, email, created_at AS since FROM oauth_identities WHERE user_id = ? ORDER BY created_at").all(userId) as { provider: string; email: string; since: string }[];
 }
 
-export function unlinkIdentity(ctx: Ctx, userId: number, provider: Provider = "google") {
+export function unlinkIdentity(ctx: Ctx, userId: number, provider: string = "google") {
   return Number(ctx.db.prepare("DELETE FROM oauth_identities WHERE provider = ? AND user_id = ?").run(provider, userId).changes) > 0;
 }
 
@@ -218,7 +218,7 @@ export function userByEmail(ctx: Ctx, email: string): { id: number; verified: bo
 
 // ── First sign-in: the person still has to pick a username ───────────────────
 
-export function createPending(ctx: Ctx, input: { subject: string; email: string; name: string }, provider: Provider = "google") {
+export function createPending(ctx: Ctx, input: { subject: string; email: string; name: string }, provider: string = "google") {
   ctx.db.prepare("DELETE FROM oauth_pending WHERE expires_at < ?").run(nowIso());
   const ticket = random(32);
   ctx.db
@@ -227,11 +227,13 @@ export function createPending(ctx: Ctx, input: { subject: string; email: string;
   return ticket;
 }
 
-export function readPending(ctx: Ctx, ticket: string, provider: Provider = "google") {
+/** `provider` "sso" matches a ticket from any organization's single sign-on ("sso:<id>"). */
+export function readPending(ctx: Ctx, ticket: string, provider: Provider | "sso" = "google") {
   const row = ctx.db.prepare("SELECT subject, email, name, expires_at, provider FROM oauth_pending WHERE ticket_hash = ?").get(sha(ticket ?? "")) as
     | { subject: string; email: string; name: string; expires_at: string; provider: string }
     | undefined;
-  if (!row || row.expires_at < nowIso() || row.provider !== provider) throw new ApiError(400, "invalid_ticket", `This step expired. Sign in with ${providerName(provider)} again.`);
+  const matches = row && (provider === "sso" ? row.provider.startsWith("sso:") : row.provider === provider);
+  if (!row || row.expires_at < nowIso() || !matches) throw new ApiError(400, "invalid_ticket", `This step expired. Sign in with ${provider === "sso" ? "single sign-on" : providerName(provider)} again.`);
   return row;
 }
 

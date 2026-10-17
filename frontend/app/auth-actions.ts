@@ -23,7 +23,7 @@ export async function loginAction(_: FormResult | null, form: FormData): Promise
   const password = String(form.get("password") ?? "");
   if (!login || !password) return { ok: false, error: "Enter your username or email and your password." };
   const result = await send<{ token?: string; mfaRequired?: boolean; ticket?: string }>("POST", "/auth/login", { login, password }, null);
-  if (!result.ok) return { ok: false, error: result.offline ? result.error : result.code === "account_locked" || result.code === "rate_limited" ? result.error : "That username or password isn’t right." };
+  if (!result.ok) return { ok: false, error: result.offline ? result.error : result.code === "account_locked" || result.code === "rate_limited" || result.code === "sso_required" ? result.error : "That username or password isn’t right." };
   if (result.data.mfaRequired && result.data.ticket) return { ok: true, mfaTicket: result.data.ticket };
   return finishSignIn(result.data.token!, String(form.get("next") ?? ""));
 }
@@ -79,8 +79,9 @@ export async function signupAction(_: FormResult | null, form: FormData): Promis
 
 /** First sign-in with Google or GitHub: the person picks a username (permanent, it is in every URL), then the account exists. */
 export async function completeOAuthSignupAction(_: FormResult | null, form: FormData): Promise<FormResult> {
-  const provider = String(form.get("provider")) === "github" ? "github" : "google";
-  const label = provider === "github" ? "GitHub" : "Google";
+  const asked = String(form.get("provider"));
+  const provider = asked === "github" || asked === "sso" ? asked : "google";
+  const label = provider === "github" ? "GitHub" : provider === "sso" ? "single sign-on" : "Google";
   const username = String(form.get("username") ?? "").trim().toLowerCase();
   const name = String(form.get("name") ?? "").trim();
   if (!/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(username)) return { ok: false, field: "username", error: "Use lowercase letters, numbers and single dashes (up to 39)." };

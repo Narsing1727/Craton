@@ -15,6 +15,6 @@ export default async function OrgSettingsPage({ params }: { params: Promise<{ or
   if (!owner) await noData();
   if (!owner || owner.kind !== "org") notFound();
   const role = owner.members?.find((m) => m.handle === user?.handle)?.role ?? null;
-  const [audit, domains] = role === "Owner" ? await Promise.all([api.auditLog({ kind: "org", org: owner.handle }), api.orgDomains(owner.handle)]) : [null, null];
-  return <OrgSettingsView org={owner.handle} name={owner.name} bio={owner.bio} role={role} repositories={owner.repositories.length} audit={audit} domains={domains?.domains ?? null} verified={owner.verifiedDomains ?? []} />;
+  const [audit, domains, sso] = role === "Owner" ? await Promise.all([api.auditLog({ kind: "org", org: owner.handle }), api.orgDomains(owner.handle), api.orgSso(owner.handle)]) : [null, null, null];
+  return <OrgSettingsView org={owner.handle} name={owner.name} bio={owner.bio} role={role} repositories={owner.repositories.length} audit={audit} domains={domains?.domains ?? null} sso={sso} verified={owner.verifiedDomains ?? []} />;
 }
