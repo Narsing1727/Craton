@@ -405,6 +405,12 @@ Not done: NetCDF 4 / HDF5 written with the newest layout (version 4 chunk indexe
 | 217 | An uncompressed **LAS** file's page now shows the cloud **seen from above**: cells coloured by mean elevation (the same blue ramp as hillshades), faded where points are few, in the shape of the cloud's bounds, with the point count, elevation range and (when the file is big) the share of it that was read. A big file is read across its whole length (every nth chunk, at most about 64 MB) and gaps between the sampled stretches are filled with faded cells; no absolute density is claimed. LAZ says why it has no preview | A `.las` file's page; `backend/test/cloudpreview.test.ts` (4), `npm`-less browser check `scripts/cloud-e2e.mjs` |
 | 218 | The Storage row on a file page says how it is kept in words ("point records regrouped and compressed, exact") | File page → Stored |
 
+### 32. Checking the whole store
+
+| # | What it does | How to check |
+|---|---|---|
+| 219 | `npm run fsck` (and `-- --quick`) verifies the entire store in one go: every chunk decodes (also when kept as a difference or as pieces of tiles) and hashes to its name, stored differences' bases and cold tiles are present and rebuild exactly, each file's chunks are all there and add up, each commit's Merkle root matches its tree, and the database's idea of each chunk's form matches its bytes. Changes nothing; exit code 1 on any problem; names what is wrong. Run on the real data here: 158 chunks, 61 files, 47 commits, all fine | OPERATING.md → Checking the whole store; `backend/test/fsck.test.ts` (5: a clean store with every form, then each kind of damage) |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

@@ -151,6 +151,19 @@ npm run recode -- --verify            # make every stored tile's original stream
 With `CRATON_RECODE=1` a push that moves a branch does this for that repository after the answer is sent. `npm run gc` keeps
 the tiles that chunks are made of and removes the rest after the grace period.
 
+## Checking the whole store
+
+```sh
+npm run fsck               # read and verify every chunk, stored difference and tile
+npm run fsck -- --quick    # structure only: nothing is read
+```
+
+It changes nothing and exits 1 when something is wrong. Every chunk is read and decoded and must hash to its own name (a chunk kept
+as a difference, or as pieces of tiles, is rebuilt first); every tile must make its original stream again; every file's chunks must
+all be stored and add up to its size; every commit's Merkle root must match its tree; and the form the database says a chunk is kept
+in must be the form its bytes are in. Run it after a restore, after a disk problem, and before and after turning on `CRATON_RECODE`.
+On this machine's store (158 chunks) it takes under a second; a store of many gigabytes is read once, four chunks at a time.
+
 ## Garbage collection
 
 ```sh
