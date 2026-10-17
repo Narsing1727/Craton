@@ -6,7 +6,7 @@ import { ApiError, badRequest, conflict, forbidden, notFound } from "./context.t
 import { makeToken } from "../core/tokens.ts";
 
 export type Owner = { id: number; handle: string; kind: "user" | "org"; name: string; bio: string; created_at: string };
-export type User = Owner & { email: string; plan: string; role: string | null; onboarded_at: string | null; email_verified_at: string | null; totp_enabled_at: string | null };
+export type User = Owner & { email: string; plan: string; role: string | null; onboarded_at: string | null; email_verified_at: string | null; totp_enabled_at: string | null; digest: "off" | "weekly" };
 export type Role = "Owner" | "Maintainer" | "Member";
 
 const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
@@ -18,7 +18,7 @@ const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
  */
 export const RESERVED_HANDLES = new Set([
   // pages and routes of the web app
-  "about", "api", "api-reference", "auth", "changelog", "cli", "contact", "dashboard", "dev", "docs", "explore", "forgot-password", "help", "invite",
+  "about", "api", "api-reference", "auth", "changelog", "cli", "contact", "dashboard", "dev", "digest", "docs", "explore", "forgot-password", "help", "invite",
   "issues", "login", "new", "onboarding", "orgs", "pricing", "privacy", "pulls", "reset-password", "s", "search", "security", "settings", "shared",
   "signup", "stars", "support", "terms", "trending", "verify-email",
   // files and framework paths
@@ -106,7 +106,7 @@ export function addMember(ctx: Ctx, orgId: number, userId: number, role: Role) {
 }
 
 export function getUserById(ctx: Ctx, id: number): User {
-  const row = ctx.db.prepare("SELECT o.*, u.email, u.plan, u.role, u.onboarded_at, u.email_verified_at, u.totp_enabled_at FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.id = ?").get(id) as User | undefined;
+  const row = ctx.db.prepare("SELECT o.*, u.email, u.plan, u.role, u.onboarded_at, u.email_verified_at, u.totp_enabled_at, u.digest FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.id = ?").get(id) as User | undefined;
   if (!row) throw notFound("User");
   return row;
 }
@@ -313,7 +313,11 @@ export function deleteOrg(ctx: Ctx, orgHandle: string, actorId: number, confirm:
 
 export const PROFILE_ROLES = ["modeler", "gis", "utility", "research", "other"];
 
-export function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; bio?: string; role?: string | null; onboarded?: boolean }) {
+export function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string }) {
+  if (patch.digest !== undefined) {
+    if (patch.digest !== "off" && patch.digest !== "weekly") throw badRequest("digest is off or weekly.");
+    ctx.db.prepare("UPDATE users SET digest = ?, digest_sent_at = CASE WHEN ? = 'weekly' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE digest_sent_at END WHERE owner_id = ?").run(patch.digest, patch.digest, userId);
+  }
   if (patch.name !== undefined) {
     const name = patch.name.trim();
     if (!name || name.length > 80) throw badRequest("Enter a name up to 80 characters.");

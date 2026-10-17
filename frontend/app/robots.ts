@@ -4,5 +4,5 @@ import type { MetadataRoute } from "next";
 export default function robots(): MetadataRoute.Robots {
   // The sitemap is listed when the public address is known (crawlers need an absolute one).
   const site = process.env.CRATON_SITE_URL?.replace(/\/+$/, "");
-  return { ...(site ? { sitemap: `${site}/sitemap.xml` } : {}), rules: [{ userAgent: "*", allow: "/", disallow: ["/s/", "/settings", "/dashboard", "/onboarding", "/login", "/signup", "/new", "/orgs/new", "/issues", "/pulls", "/stars", "/invite", "/verify-email", "/reset-password", "/forgot-password", "/search"] }] };
+  return { ...(site ? { sitemap: `${site}/sitemap.xml` } : {}), rules: [{ userAgent: "*", allow: "/", disallow: ["/s/", "/settings", "/dashboard", "/onboarding", "/login", "/signup", "/new", "/orgs/new", "/issues", "/pulls", "/stars", "/invite", "/digest", "/verify-email", "/reset-password", "/forgot-password", "/search"] }] };
 }

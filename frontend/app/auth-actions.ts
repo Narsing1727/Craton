@@ -161,7 +161,7 @@ export async function resetPasswordAction(_: FormResult | null, form: FormData):
 
 // ── Onboarding ───────────────────────────────────────────────────────────
 
-export async function saveProfileAction(input: { name?: string; bio?: string; role?: string | null }) {
+export async function saveProfileAction(input: { name?: string; bio?: string; role?: string | null; digest?: "off" | "weekly" }) {
   const result = await send<ApiUser>("PATCH", "/user", input);
   if (result.ok) revalidatePath("/", "layout");
   return result;
@@ -229,4 +229,9 @@ export async function twoFactorRecoveryAction(password: string, code: string) {
   const r = await send<{ recoveryCodes: string[] }>("POST", "/user/2fa/recovery-codes", { password, code });
   if (r.ok) revalidatePath("/settings");
   return r;
+}
+
+/** The weekly email's one-click unsubscribe: the signed token in the link is the only credential. */
+export async function unsubscribeDigestAction(token: string) {
+  return send<{ handle: string; digest: "off" }>("POST", "/auth/digest/unsubscribe", { token }, null);
 }

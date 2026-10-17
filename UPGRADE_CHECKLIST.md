@@ -291,6 +291,14 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 175 | **Require SSO** (after one successful test): members with an address at the verified domains are refused passwords, Google, GitHub and passkeys; **owners are exempt** (the way back in), personal access tokens keep working; a different provider or client resets "tested" and "required" | The switch under the SSO card |
 | 176 | Setup, change and removal are on the audit log; removing it deletes the links, not the accounts; providers wanting client_secret_basic are supported | Backend tests |
 
+### 20. Weekly summary and the sign-in page
+
+| # | What it does | How to check |
+|---|---|---|
+| 177 | **Optional weekly summary email** of what is unread in your inbox since the last one; off by default, confirmed addresses only, nothing sent when there is nothing, first one a week after switching it on, no tracking pixel | Settings → Profile → Weekly summary |
+| 178 | **One-click unsubscribe** in every message that works without signing in (a keyed signature of the account; forged or altered links change nothing); the page shows a button, so a mail scanner opening the link does not unsubscribe anyone | Follow the link at the bottom of a summary |
+| 179 | **Google and GitHub buttons are visible on a development server even before credentials exist**, with a note saying so; clicking says the provider is not set up. In production only configured providers are shown | `http://localhost:3100/login` |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

@@ -27,6 +27,8 @@ type AuthFormProps = {
   github?: boolean;
   /** At least one organization on this server has set up single sign-on. */
   sso?: boolean;
+  /** Development only: providers whose buttons are shown although the server has no credentials for them yet, so they can be seen and tried. */
+  notSetUp?: string[];
   /** This server accepts passkeys (the API says so). The button also needs a browser that can use them. */
   passkeys?: boolean;
   /** A two-step ticket from a Google sign-in on an account with two-step verification: go straight to the code. */
@@ -54,7 +56,7 @@ function GoogleMark() {
 
 const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 
-export function AuthForm({ mode, next, notice, demoHint, google, github, sso, passkeys, initialMfaTicket }: AuthFormProps) {
+export function AuthForm({ mode, next, notice, demoHint, google, github, sso, notSetUp, passkeys, initialMfaTicket }: AuthFormProps) {
   const isLogin = mode === "login";
   const [state, formAction, pending] = useActionState<FormResult | null, FormData>(isLogin ? loginAction : signupAction, null);
   const [showPassword, setShowPassword] = useState(false);
@@ -188,6 +190,11 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, pa
                   </a>
                 )}
               </div>
+              {notSetUp && notSetUp.length > 0 && (
+                <p className="mt-2 text-center text-xs text-muted-foreground text-pretty" data-testid="providers-not-set-up">
+                  Development note: {notSetUp.join(" and ")} {notSetUp.length === 1 ? "is" : "are"} not set up on this server yet, so {notSetUp.length === 1 ? "its button" : "their buttons"} will say so. Add the credentials with <span className="font-mono">npm run setup:oauth</span>; visitors never see this note or an unconfigured button in production.
+                </p>
+              )}
               <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground" aria-hidden>
                 <span className="h-px flex-1 bg-border" />
                 or

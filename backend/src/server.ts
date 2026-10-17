@@ -5,6 +5,7 @@ import { createApp } from "./api/app.ts";
 import { createContext } from "./services/context.ts";
 import { config } from "./config.ts";
 import { startRetryLoop } from "./services/webhooks.ts";
+import { startDigestLoop } from "./services/digest.ts";
 import { backfillFootprints } from "./services/extent.ts";
 
 const ctx = createContext();
@@ -20,6 +21,7 @@ void backfillFootprints(ctx).then((n) => n && console.log(`Located ${n} reposito
 
 // Retry webhook deliveries that failed and are due again.
 startRetryLoop(ctx);
+startDigestLoop(ctx);
 
 // Keep idle connections open longer than clients keep them pooled. With Node's 5 s default, a
 // client that was busy (or blocked) can reuse a socket the server just closed and get ECONNRESET.

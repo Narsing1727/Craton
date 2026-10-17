@@ -45,6 +45,7 @@ import * as audit from "../services/audit.ts";
 import * as secretscan from "../services/secretscan.ts";
 import * as domains from "../services/domains.ts";
 import * as sso from "../services/sso.ts";
+import * as digest from "../services/digest.ts";
 import { parseRange } from "../core/range.ts";
 import * as passkeys from "../services/passkeys.ts";
 import { buildStac } from "../services/stac.ts";
@@ -655,6 +656,7 @@ export function createApp(ctx: Ctx) {
     onboardedAt: u.onboarded_at,
     emailVerified: Boolean(u.email_verified_at),
     twoFactor: Boolean(u.totp_enabled_at),
+    digest: u.digest,
     createdAt: u.created_at,
     writableOwners: stats.writableOwners(ctx, u.id),
   });
@@ -677,8 +679,14 @@ export function createApp(ctx: Ctx) {
     securitylog.record(ctx, u.id, "oauth_unlinked", { detail: label, ...clientInfo(c) });
     return c.body(null, 204);
   });
+  // The weekly email's one-click unsubscribe: no sign-in, the link itself is the proof (a keyed signature of the account).
+  v1.post("/auth/digest/unsubscribe", async (c) => {
+    limit(c, `unsub:${clientIp(c)}`, { max: 30, windowMs: 15 * 60_000 }, "Too many attempts. Try again in a few minutes.");
+    const b = await body<{ token?: string }>(c);
+    return c.json({ handle: digest.unsubscribe(ctx, b.token), digest: "off" });
+  });
   v1.patch("/user", async (c) => {
-    const b = await body<{ name?: string; bio?: string; role?: string | null; onboarded?: boolean }>(c);
+    const b = await body<{ name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string }>(c);
     return c.json(userJson(accounts.updateProfile(ctx, requireUser(c).id, b)));
   });
   // Email confirmation.

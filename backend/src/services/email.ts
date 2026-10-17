@@ -179,3 +179,14 @@ export function sendNewSignInEmail(to: string, handle: string, device: string, u
   );
   return deliver({ to, subject: "New sign-in to Craton", text, html, kind: "signin" });
 }
+
+export function sendDigestEmail(to: string, handle: string, items: { repo: string; text: string; href: string }[], total: number, mentions: number, url: string, unsubscribeUrl: string) {
+  const lines = items.map((i) => `• ${i.repo}: ${i.text}\n  ${i.href}`);
+  const { text, html } = layout(
+    total === 1 ? "1 thing is waiting for you on Craton" : `${total} things are waiting for you on Craton`,
+    [`Hi ${handle}, here is what you haven't looked at yet${mentions ? `, including ${mentions === 1 ? "1 mention" : `${mentions} mentions`} of you` : ""}.`, ...lines, ...(total > items.length ? [`…and ${total - items.length} more.`] : [])],
+    { label: "Open your inbox", url },
+    `You get this weekly because you turned it on in Settings. Stop it with one click, no sign-in needed: ${unsubscribeUrl}`,
+  );
+  return deliver({ to, subject: total === 1 ? "1 thing is waiting for you on Craton" : `${total} things are waiting for you on Craton`, text, html, kind: "digest" });
+}

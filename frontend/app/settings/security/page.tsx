@@ -11,7 +11,7 @@ export default async function SecuritySettingsPage() {
   return (
     <SettingsView
       tab="security"
-      profile={user ? { handle: user.handle, name: user.name, email: user.email, bio: user.bio, emailVerified: user.emailVerified } : null}
+      profile={user ? { handle: user.handle, name: user.name, email: user.email, bio: user.bio, emailVerified: user.emailVerified, digest: user.digest ?? "off" } : null}
       sessions={sessions ?? []}
       twoFactor={twoFactor}
       events={events ?? []}

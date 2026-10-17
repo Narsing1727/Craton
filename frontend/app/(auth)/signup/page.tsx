@@ -6,5 +6,7 @@ export const metadata: Metadata = { title: "Create your account", description: "
 
 export default async function SignupPage() {
   const providers = await api.providers();
-  return <AuthForm mode="signup" google={Boolean(providers?.google)} github={Boolean(providers?.github)} sso={Boolean(providers?.sso)} />;
+  const dev = process.env.NODE_ENV !== "production";
+  const notSetUp = dev && providers ? [...(providers.google ? [] : ["Google"]), ...(providers.github ? [] : ["GitHub"])] : [];
+  return <AuthForm mode="signup" google={Boolean(providers?.google) || dev} github={Boolean(providers?.github) || dev} notSetUp={notSetUp} sso={Boolean(providers?.sso)} />;
 }

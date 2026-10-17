@@ -595,6 +595,9 @@ const migrations: string[] = [
     tested_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   );
+  `,/* 31: an optional weekly email summary of what is unread in a person's inbox (off unless they turn it on). */ `
+  ALTER TABLE users ADD COLUMN digest TEXT NOT NULL DEFAULT 'off';
+  ALTER TABLE users ADD COLUMN digest_sent_at TEXT;
   `,
 ];
 

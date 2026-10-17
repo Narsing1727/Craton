@@ -4,7 +4,7 @@
 // next to the database. Keep the key out of backups of the database: a copy of both is enough to
 // read every secret.
 
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.ts";
@@ -33,6 +33,11 @@ function key(): Buffer {
   const fresh = randomBytes(32);
   fs.writeFileSync(file, fresh.toString("base64"), { mode: 0o600, flag: "wx" });
   return (cached = fresh);
+}
+
+/** A keyed signature of `value` for one purpose (unsubscribe links and the like): unguessable without the server's key. */
+export function signValue(purpose: string, value: string): string {
+  return createHmac("sha256", key()).update(`${purpose}\n${value}`).digest("base64url");
 }
 
 export function encryptSecret(plain: string): string {

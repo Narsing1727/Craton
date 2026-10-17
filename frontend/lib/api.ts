@@ -233,6 +233,8 @@ export type ApiUser = {
   createdAt: string;
   emailVerified: boolean;
   twoFactor?: boolean;
+  /** The optional weekly summary email: off unless switched on in Settings. */
+  digest?: "off" | "weekly";
   writableOwners: string[];
 };
 /** A signed-in browser (web session), for Settings → Security. */
