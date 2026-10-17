@@ -12,6 +12,24 @@ export function formatBytes(n: number): string {
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+/**
+ * How a stored chunk is kept, in words. Every form is exact: the bytes anyone downloads are the bytes that were uploaded
+ * (the server checks this before it keeps any of them), so the labels say what was done, never that something was lost.
+ */
+export function codecLabel(codec: string): string {
+  if (codec === "none") return "kept as uploaded";
+  if (codec === "zstd") return "compressed, exact";
+  if (codec === "tiles") return "old version kept as pixels, exact";
+  if (codec === "ref-delta") return "kept as the difference from an earlier version, exact";
+  if (codec === "records+zstd") return "point records regrouped and compressed, exact";
+  if (/shuffle/.test(codec)) return codec.includes("delta") ? "numbers regrouped, differenced and compressed, exact" : "numbers regrouped and compressed, exact";
+  return `${codec}, exact`;
+}
+
+export function codecLabels(codecs: string[]): string {
+  return [...new Set(codecs.map(codecLabel))].join(" · ");
+}
+
 export function timeAgo(iso: string, now = Date.now()): string {
   const seconds = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
   const units: [number, string][] = [

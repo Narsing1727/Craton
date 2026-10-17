@@ -33,7 +33,7 @@ import { matchesAny } from "@/lib/globs";
 import { CompareSlider, CompareSliderAfter, CompareSliderBefore, CompareSliderHandle } from "@/components/ui/compare-slider";
 import { TransitionPanel } from "@/components/ui/transition-panel";
 import type { DataType } from "@/lib/data";
-import { formatBytes, timeAgo } from "@/lib/format";
+import { codecLabels, formatBytes, timeAgo } from "@/lib/format";
 import { dataTypeOf, loadFile, loadRepo } from "@/lib/source";
 
 // Shown when the API isn't running.
@@ -125,7 +125,7 @@ function metadataFor(f: ApiFile) {
     rows.push({ label: "Format", value: ext ? `.${ext}` : "File" });
   }
   rows.push({ label: "Size", value: formatBytes(f.size) });
-  rows.push({ label: "Stored", value: `${formatBytes(f.storedBytes)} · ${f.codecs.join(", ") || "none"}` });
+  rows.push({ label: "Stored", value: `${formatBytes(f.storedBytes)} · ${codecLabels(f.codecs) || "kept as uploaded"}` });
   rows.push({ label: "Chunks", value: f.uniqueChunks === f.chunkCount ? n(f.chunkCount) : `${n(f.chunkCount)} (${n(f.uniqueChunks)} unique)` });
   return rows;
 }

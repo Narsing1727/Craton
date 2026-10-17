@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api } from "@/lib/api";
 import { commits as demoCommits } from "@/lib/data";
 import { mockSha256 } from "@/lib/download";
-import { formatBytes } from "@/lib/format";
+import { codecLabels, formatBytes } from "@/lib/format";
 import { loadRepo, loadStorage } from "@/lib/source";
 
 type Folder = { path: string; logical: string; stored: string; saved: number; codec: string };
@@ -66,7 +66,7 @@ export default async function StoragePage({ params }: { params: Promise<{ owner:
       logical: formatBytes(f.logicalBytes),
       stored: formatBytes(f.storedBytes),
       saved: pct(f.logicalBytes - f.storedBytes, f.logicalBytes),
-      codec: f.codecs.map((c) => (c === "none" ? "stored as is" : `${c}, lossless`)).join(" · "),
+      codec: codecLabels(f.codecs),
     }));
     const compressionSaved = stats.uniqueBytes - stats.storedBytes;
     sources = [
