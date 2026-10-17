@@ -651,6 +651,11 @@ export function createApp(ctx: Ctx) {
     handle: u.handle,
     name: u.name,
     bio: u.bio,
+    website: u.website,
+    location: u.location,
+    company: u.company,
+    pronouns: u.pronouns,
+    hasAvatar: accounts.hasAvatar(ctx, u.id),
     email: u.email,
     plan: u.plan,
     role: u.role,
@@ -689,8 +694,32 @@ export function createApp(ctx: Ctx) {
     return c.json({ handle: digest.unsubscribe(ctx, b.token), digest: "off" });
   });
   v1.patch("/user", async (c) => {
-    const b = await body<{ name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string; notify?: Record<string, boolean>; defaultVisibility?: string }>(c);
+    const b = await body<{ name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string; notify?: Record<string, boolean>; defaultVisibility?: string; website?: string; location?: string; company?: string; pronouns?: string }>(c);
     return c.json(userJson(accounts.updateProfile(ctx, requireUser(c).id, b)));
+  });
+  // A profile picture: a small PNG, JPEG or WebP sent as the request body (the web app shrinks it first), shown wherever the person appears.
+  v1.put("/user/avatar", async (c) => {
+    const u = requireUser(c);
+    const data = await readLimited(c, accounts.AVATAR_MAX_BYTES).catch((err) => {
+      if (err instanceof ApiError && err.status === 413) throw badRequest(`A profile picture is at most ${accounts.AVATAR_MAX_BYTES / 1024} KB. The web app shrinks it for you.`);
+      throw err;
+    });
+    accounts.setAvatar(ctx, u.id, data);
+    return c.json(userJson(accounts.getUserById(ctx, u.id)));
+  });
+  v1.delete("/user/avatar", (c) => {
+    const u = requireUser(c);
+    accounts.removeAvatar(ctx, u.id);
+    return c.json(userJson(accounts.getUserById(ctx, u.id)));
+  });
+  // Anyone may see a profile picture, like a name. It is revalidated by its version on every use, so a new picture shows at once (a 304 costs almost nothing).
+  v1.get("/avatars/:handle", (c) => {
+    const a = accounts.getAvatar(ctx, c.req.param("handle"));
+    if (!a) throw new ApiError(404, "not_found", "No profile picture.");
+    const etag = `"${a.updatedAt}"`;
+    const headers = { etag, "cache-control": "public, no-cache", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'" };
+    if (c.req.header("if-none-match") === etag) return c.body(null, 304, headers);
+    return c.body(new Uint8Array(a.data), 200, { ...headers, "content-type": a.type, "content-length": String(a.data.length) });
   });
   // Email confirmation.
   v1.post("/auth/verify", async (c) => {
@@ -993,6 +1022,8 @@ export function createApp(ctx: Ctx) {
       kind: o.kind,
       name: o.name,
       bio: o.bio,
+      ...(o.kind === "user" ? { website: o.website, location: o.location, company: o.company, pronouns: o.pronouns } : {}),
+      hasAvatar: accounts.hasAvatar(ctx, o.id),
       createdAt: o.created_at,
       members: o.kind === "org" ? accounts.listMembers(ctx, o.id) : undefined,
       verifiedDomains: o.kind === "org" ? domains.verifiedDomains(ctx, o.id) : undefined,

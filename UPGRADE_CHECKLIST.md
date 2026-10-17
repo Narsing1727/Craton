@@ -337,6 +337,16 @@ Compared with GitHub, GitLab, Google and Linear, Craton had no control over what
 
 Run the browser check against a throwaway API (start it with its own `CRATON_DATA_DIR`), not your demo account: every sign-in is written to that account's security log.
 
+### 25. A fuller profile, and profile pictures
+
+| # | What it does | How to check |
+|---|---|---|
+| 194 | **Profile picture**: Upload picture / Change picture / Remove on Settings → Profile. The browser crops it square and shrinks it to 256 px before sending (a 1.2 MB photo became 2 KB in the test); the API accepts only PNG, JPEG or WebP judged by the file's own bytes (never by what it is called; SVG refused), at most 512 KB, and keeps it in the database. Served to anyone at `/avatar/<handle>` and revalidated on every use, so a new picture shows at once | Settings → Profile; `npm run e2e:profile` in `frontend` (10 browser checks on a throwaway account) |
+| 195 | The picture shows everywhere a person appears: the header menu, the settings form, the profile page, the latest commit on a repository and a folder, and contributors in Insights (initials where there is none) | Any repository page |
+| 196 | **More about you**: company or institute, location, website (an http(s) address; a bare domain gets https; no credentials in it) and pronouns, all optional and public. The profile page shows them, the website as a nofollow link that opens in a new tab | Settings → Profile, then `/<your handle>` |
+| 197 | API: `PUT` and `DELETE /user/avatar`, `GET /avatars/{handle}`, `PATCH /user` takes `website`, `location`, `company`, `pronouns`; `/user` and `/owners/{handle}` return them and `hasAvatar`; migration 33; `avatar` is now a reserved handle | API reference; `backend/test/profile.test.ts` (4 tests) |
+| 198 | **Demo**: `@priyam` has a profile picture (a BMW M3, photo by Matti Blume, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:BMW_M3,_Auto_2024,_Zurich_(PANA0916).jpg), CC BY-SA 4.0, cropped to 256 px). Remove it from Settings → Profile any time | `/priyam` |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

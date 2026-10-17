@@ -1,20 +1,21 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { notify } from "@/components/button-status";
-import { Download, KeyRound, LogOut, MailCheck, MailWarning, Trash2 } from "lucide-react";
+import { Download, ImagePlus, KeyRound, LogOut, MailCheck, MailWarning, Trash2 } from "lucide-react";
 import { ConfirmAction } from "@/components/craton-actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/user-avatar";
+import { squareAvatar } from "@/lib/image-resize";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { changePasswordAction, deleteAccountAction, disconnectIdentityAction, passkeyRegisterAction, passkeyRegisterOptionsAction, removePasskeyAction, renamePasskeyAction, resendVerificationAction, revokeSessionAction, saveProfileAction } from "@/app/auth-actions";
+import { changePasswordAction, deleteAccountAction, disconnectIdentityAction, passkeyRegisterAction, passkeyRegisterOptionsAction, removeAvatarAction, removePasskeyAction, renamePasskeyAction, resendVerificationAction, revokeSessionAction, saveProfileAction, uploadAvatarAction } from "@/app/auth-actions";
 import { createPasskey, passkeyErrorMessage, passkeysSupported } from "@/lib/webauthn";
 import type { ApiIdentities, ApiPasskey, ApiSecurityEvent, ApiSession, ApiTwoFactor } from "@/lib/api";
 import { TwoFactorCard } from "@/components/two-factor-card";
@@ -24,7 +25,7 @@ import { PROVIDERS, PROVIDER_NAME, providerNotice, type OAuthProvider } from "@/
 
 type Tab = "profile" | "security";
 
-export type AccountProfile = { handle: string; name: string; email: string; bio: string; emailVerified: boolean; digest?: "off" | "weekly" };
+export type AccountProfile = { handle: string; name: string; email: string; bio: string; emailVerified: boolean; digest?: "off" | "weekly"; website?: string; location?: string; company?: string; pronouns?: string; hasAvatar?: boolean };
 
 export function SettingsView({
   tab,
@@ -72,21 +73,59 @@ export function SettingsView({
 }
 
 function ProfileCard({ me, live }: { me: AccountProfile; live: boolean }) {
-  const [name, setName] = useState(me.name);
-  const [bio, setBio] = useState(me.bio);
-  const [saved, setSaved] = useState({ name: me.name, bio: me.bio });
+  const router = useRouter();
+  const start = { name: me.name, bio: me.bio, website: me.website ?? "", location: me.location ?? "", company: me.company ?? "", pronouns: me.pronouns ?? "" };
+  const [form, setForm] = useState(start);
+  const [saved, setSaved] = useState(start);
   const [saving, startSave] = useTransition();
-  const changed = name.trim() !== saved.name || bio.trim() !== saved.bio;
-  const initials = (me.name || me.handle).split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
+  const [picture, setPicture] = useState({ has: Boolean(me.hasAvatar), version: 0 });
+  const [busy, startPicture] = useTransition();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const set = (field: keyof typeof start) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  const trimmed = Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v.trim()])) as typeof start;
+  const changed = (Object.keys(start) as (keyof typeof start)[]).some((k) => trimmed[k] !== saved[k]);
 
   function save() {
     if (!live) return void notify.info("Demo mode: nothing is saved.");
-    if (!name.trim()) return void notify.error("Your name can’t be empty");
+    if (!trimmed.name) return void notify.error("Your name can’t be empty");
     startSave(async () => {
-      const result = await saveProfileAction({ name: name.trim(), bio: bio.trim() });
+      const result = await saveProfileAction(trimmed);
       if (!result.ok) return void notify.error("Couldn’t save your profile", { description: result.error });
-      setSaved({ name: name.trim(), bio: bio.trim() });
+      const now = { ...trimmed, website: result.data.website ?? trimmed.website };
+      setForm(now);
+      setSaved(now);
       notify.success("Profile saved");
+    });
+  }
+
+  function choose(file: File | undefined) {
+    if (!file) return;
+    if (!live) return void notify.info("Demo mode: nothing is saved.");
+    startPicture(async () => {
+      try {
+        const blob = await squareAvatar(file);
+        const body = new FormData();
+        body.set("avatar", new File([blob], "avatar", { type: blob.type }));
+        const result = await uploadAvatarAction(body);
+        if (!result.ok) return void notify.error("Couldn’t save the picture", { description: result.error });
+        setPicture({ has: true, version: Date.now() });
+        router.refresh();
+        notify.success("Profile picture updated");
+      } catch (err) {
+        notify.error("Couldn’t use that image", { description: err instanceof Error ? err.message : undefined });
+      } finally {
+        if (fileInput.current) fileInput.current.value = "";
+      }
+    });
+  }
+
+  function remove() {
+    startPicture(async () => {
+      const result = await removeAvatarAction();
+      if (!result.ok) return void notify.error("Couldn’t remove the picture", { description: result.error });
+      setPicture({ has: false, version: Date.now() });
+      router.refresh();
+      notify.success("Profile picture removed");
     });
   }
 
@@ -98,22 +137,49 @@ function ProfileCard({ me, live }: { me: AccountProfile; live: boolean }) {
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-6 sm:flex-row">
-          <div className="flex flex-col items-center gap-2">
-            <Avatar className="size-24">
-              <AvatarFallback className="text-2xl">{initials}</AvatarFallback>
-            </Avatar>
+          <div className="flex flex-col items-center gap-3">
+            <UserAvatar key={picture.version} handle={me.handle} name={me.name || me.handle} version={picture.version || undefined} className="size-24" fallbackClassName="text-2xl" />
             <span className="font-mono text-xs text-muted-foreground">@{me.handle}</span>
+            <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" className="sr-only" aria-label="Choose a profile picture" onChange={(e) => choose(e.target.files?.[0])} />
+            <div className="flex flex-col items-stretch gap-1.5">
+              <Button type="button" variant="outline" size="sm" onClick={() => fileInput.current?.click()} loading={busy} disabled={busy}>
+                <ImagePlus className="size-3.5" aria-hidden /> {picture.has ? "Change picture" : "Upload picture"}
+              </Button>
+              {picture.has && (
+                <Button type="button" variant="ghost" size="sm" onClick={remove} disabled={busy}>
+                  Remove
+                </Button>
+              )}
+            </div>
           </div>
           <FieldGroup className="flex-1">
             <Field>
               <FieldLabel htmlFor="name">Name</FieldLabel>
-              <Input id="name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={80} />
+              <Input id="name" value={form.name} onChange={set("name")} autoComplete="name" maxLength={80} />
             </Field>
             <Field>
               <FieldLabel htmlFor="bio">Bio</FieldLabel>
-              <Textarea id="bio" rows={3} value={bio} onChange={(e) => setBio(e.target.value)} maxLength={280} placeholder="What you model, and where" />
-              <FieldDescription>{280 - bio.length} characters left.</FieldDescription>
+              <Textarea id="bio" rows={3} value={form.bio} onChange={set("bio")} maxLength={280} placeholder="What you model, and where" />
+              <FieldDescription>{280 - form.bio.length} characters left.</FieldDescription>
             </Field>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="company">Company or institute</FieldLabel>
+                <Input id="company" value={form.company} onChange={set("company")} autoComplete="organization" maxLength={80} placeholder="IIT Roorkee" />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="location">Location</FieldLabel>
+                <Input id="location" value={form.location} onChange={set("location")} autoComplete="address-level2" maxLength={80} placeholder="Kochi, India" />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="website">Website</FieldLabel>
+                <Input id="website" type="url" inputMode="url" value={form.website} onChange={set("website")} autoComplete="url" maxLength={200} placeholder="https://example.org" />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="pronouns">Pronouns</FieldLabel>
+                <Input id="pronouns" value={form.pronouns} onChange={set("pronouns")} maxLength={40} placeholder="they/them" />
+              </Field>
+            </div>
           </FieldGroup>
         </div>
       </CardContent>

@@ -226,6 +226,12 @@ export type ApiUser = {
   handle: string;
   name: string;
   bio: string;
+  website?: string;
+  location?: string;
+  company?: string;
+  pronouns?: string;
+  /** Whether a profile picture is stored (it is served at /avatar/<handle>). */
+  hasAvatar?: boolean;
   email: string;
   plan: string;
   role: string | null;
@@ -297,6 +303,11 @@ export type ApiOwner = {
   kind: "user" | "org";
   name: string;
   bio: string;
+  website?: string;
+  location?: string;
+  company?: string;
+  pronouns?: string;
+  hasAvatar?: boolean;
   createdAt: string;
   members?: { handle: string; name: string; role: string }[];
   /** Domains an organization has proved it controls (public). */
@@ -568,6 +579,20 @@ export const api = {
 
 /** Result of a write: the API's JSON on success, its error message otherwise. */
 export type SendResult<T> = { ok: true; data: T } | { ok: false; error: string; code?: string; offline?: boolean };
+
+/** Send raw bytes as the signed-in user (a profile picture). */
+export async function sendBytes<T>(method: "PUT", path: string, bytes: Uint8Array, contentType: string): Promise<SendResult<T>> {
+  try {
+    const res = await fetch(`${BASE}/v1${path}`, { method, headers: { ...(await authHeaders()), "content-type": contentType }, body: bytes as BodyInit, cache: "no-store", signal: AbortSignal.timeout(20_000) });
+    const json = await res.json().catch(() => null);
+    if (res.status === 401) return { ok: false, error: "Sign in to do this." };
+    if (!res.ok) return { ok: false, error: json?.error?.message ?? `Request failed (${res.status}).`, code: json?.error?.code };
+    return { ok: true, data: json as T };
+  } catch (err) {
+    unstable_rethrow(err);
+    return { ok: false, offline: true, error: "The Craton API isn't reachable right now. Your data is safe; try again in a moment." };
+  }
+}
 
 /**
  * Write through the API as the signed-in user (server actions in app/actions.ts and

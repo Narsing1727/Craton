@@ -1,5 +1,6 @@
 "use client";
 
+import { UserAvatar } from "@/components/user-avatar";
 import { HardDrive, GitCommit, Users, TrendingUp } from "lucide-react";
 import { PageHeader, StatGrid, StatTile } from "@/components/craton-ui";
 import { Bar, BarChart, CartesianGrid, XAxis, Area, AreaChart } from "recharts";
@@ -16,7 +17,6 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
 
 const commitConfig = {
@@ -106,9 +106,7 @@ export function InsightsView({ owner, repo, data }: { owner: string; repo: strin
             {data.contributors.map((c) => {
               return (
                 <div key={c.handle} className="flex items-center gap-3">
-                  <Avatar className="size-8">
-                    <AvatarFallback className="font-mono text-[10px]">{c.handle.slice(0, 2).toUpperCase()}</AvatarFallback>
-                  </Avatar>
+                  <UserAvatar handle={c.handle} className="size-8" fallbackClassName="font-mono text-[10px]" />
                   <div className="flex flex-1 flex-col gap-1">
                     <div className="flex items-center justify-between text-sm">
                       <span className="font-medium">{c.name}</span>

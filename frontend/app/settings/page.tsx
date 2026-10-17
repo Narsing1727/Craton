@@ -12,7 +12,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   return (
     <SettingsView
       tab="profile"
-      profile={user ? { handle: user.handle, name: user.name, email: user.email, bio: user.bio, emailVerified: user.emailVerified, digest: user.digest ?? "off" } : null}
+      profile={user ? { handle: user.handle, name: user.name, email: user.email, bio: user.bio, website: user.website, location: user.location, company: user.company, pronouns: user.pronouns, hasAvatar: user.hasAvatar, emailVerified: user.emailVerified, digest: user.digest ?? "off" } : null}
       sessions={[]}
       twoFactor={null}
     />

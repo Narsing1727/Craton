@@ -6,7 +6,7 @@ import { ApiError, badRequest, conflict, forbidden, notFound } from "./context.t
 import { makeToken } from "../core/tokens.ts";
 import { mergeNotify } from "./notify.ts";
 
-export type Owner = { id: number; handle: string; kind: "user" | "org"; name: string; bio: string; created_at: string };
+export type Owner = { id: number; handle: string; kind: "user" | "org"; name: string; bio: string; website: string; location: string; company: string; pronouns: string; created_at: string };
 export type User = Owner & { email: string; plan: string; role: string | null; onboarded_at: string | null; email_verified_at: string | null; totp_enabled_at: string | null; digest: "off" | "weekly"; notify: string; default_visibility: "public" | "private" };
 export type Role = "Owner" | "Maintainer" | "Member";
 
@@ -19,7 +19,7 @@ const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
  */
 export const RESERVED_HANDLES = new Set([
   // pages and routes of the web app
-  "about", "api", "api-reference", "auth", "changelog", "cli", "contact", "dashboard", "dev", "digest", "docs", "explore", "forgot-password", "help", "invite",
+  "about", "api", "api-reference", "auth", "changelog", "cli", "contact", "dashboard", "dev", "digest", "avatar", "docs", "explore", "forgot-password", "help", "invite",
   "issues", "login", "new", "onboarding", "orgs", "pricing", "privacy", "pulls", "reset-password", "s", "search", "security", "settings", "shared",
   "signup", "stars", "support", "terms", "trending", "verify-email",
   // files and framework paths
@@ -314,7 +314,16 @@ export function deleteOrg(ctx: Ctx, orgHandle: string, actorId: number, confirm:
 
 export const PROFILE_ROLES = ["modeler", "gis", "utility", "research", "other"];
 
-export function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string; notify?: unknown; defaultVisibility?: string }) {
+export function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string; notify?: unknown; defaultVisibility?: string; website?: string; location?: string; company?: string; pronouns?: string }) {
+  for (const [field, max] of [["location", 80], ["company", 80], ["pronouns", 40]] as const) {
+    const value = patch[field];
+    if (value === undefined) continue;
+    const text = String(value).trim();
+    if (text.length > max) throw badRequest(`Keep ${field} under ${max} characters.`);
+    if (/[\u0000-\u001f\u007f]/.test(text)) throw badRequest(`${field} cannot contain control characters.`);
+    ctx.db.prepare(`UPDATE owners SET ${field} = ? WHERE id = ?`).run(text, userId);
+  }
+  if (patch.website !== undefined) ctx.db.prepare("UPDATE owners SET website = ? WHERE id = ?").run(cleanWebsite(patch.website), userId);
   if (patch.notify !== undefined) {
     const current = ctx.db.prepare("SELECT notify FROM users WHERE owner_id = ?").get(userId) as { notify: string };
     ctx.db.prepare("UPDATE users SET notify = ? WHERE owner_id = ?").run(mergeNotify(current.notify, patch.notify), userId);
@@ -343,6 +352,53 @@ export function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; 
   if (patch.onboarded) ctx.db.prepare("UPDATE users SET onboarded_at = COALESCE(onboarded_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE owner_id = ?").run(userId);
   return getUserById(ctx, userId);
 }
+
+/** A website for a profile: empty, or an http(s) address (a bare domain gets https). Anything else is refused. */
+export function cleanWebsite(raw: unknown): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  if (text.length > 200) throw badRequest("Keep the website under 200 characters.");
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:/i.test(text) ? text : `https://${text}`);
+  } catch {
+    throw badRequest("Enter a web address such as https://example.org.");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw badRequest("The website must start with http:// or https://.");
+  if (url.username || url.password || !url.hostname.includes(".")) throw badRequest("Enter a web address such as https://example.org.");
+  return url.toString().replace(/\/$/, "");
+}
+
+export const AVATAR_MAX_BYTES = 512 * 1024;
+
+/** The kind of image these bytes are, by what they start with (never by what the client said); SVG and anything that can carry script is not accepted. */
+export function sniffImage(data: Buffer): "image/png" | "image/jpeg" | "image/webp" | null {
+  if (data.length > 12 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (data.length > 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return "image/jpeg";
+  if (data.length > 12 && data.subarray(0, 4).toString("latin1") === "RIFF" && data.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return null;
+}
+
+export function setAvatar(ctx: Ctx, userId: number, data: Buffer) {
+  if (data.length === 0) throw badRequest("Send the image as the request body.");
+  if (data.length > AVATAR_MAX_BYTES) throw badRequest(`A profile picture is at most ${AVATAR_MAX_BYTES / 1024} KB. The web app shrinks it for you.`);
+  const type = sniffImage(data);
+  if (!type) throw badRequest("Use a PNG, JPEG or WebP image.");
+  ctx.db
+    .prepare("INSERT INTO avatars (owner_id, type, data) VALUES (?, ?, ?) ON CONFLICT (owner_id) DO UPDATE SET type = excluded.type, data = excluded.data, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')")
+    .run(userId, type, data);
+}
+
+export function removeAvatar(ctx: Ctx, userId: number) {
+  ctx.db.prepare("DELETE FROM avatars WHERE owner_id = ?").run(userId);
+}
+
+export function getAvatar(ctx: Ctx, handle: string): { type: string; data: Buffer; updatedAt: string } | null {
+  const row = ctx.db.prepare("SELECT a.type, a.data, a.updated_at FROM avatars a JOIN owners o ON o.id = a.owner_id WHERE o.handle = ?").get(handle) as { type: string; data: Uint8Array; updated_at: string } | undefined;
+  return row ? { type: row.type, data: Buffer.from(row.data), updatedAt: row.updated_at } : null;
+}
+
+export const hasAvatar = (ctx: Ctx, ownerId: number) => Boolean(ctx.db.prepare("SELECT 1 FROM avatars WHERE owner_id = ?").get(ownerId));
 
 /** Sign out: the session token stops working immediately. */
 export function revokeSession(ctx: Ctx, token: string) {

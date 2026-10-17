@@ -1,5 +1,6 @@
 "use client";
 
+import { UserAvatar } from "@/components/user-avatar";
 import { useState } from "react";
 import Link from "next/link";
 import {
@@ -27,9 +28,9 @@ import {
   Compass,
   FileCode2,
   ExternalLink,
+  Link2,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,6 +57,9 @@ export type Profile = {
   org?: string;
   orgs: string[];
   location?: string;
+  company?: string;
+  website?: string;
+  pronouns?: string;
   memberSince: string;
 };
 
@@ -116,11 +120,7 @@ export function ProfileView({
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
             <div className="flex items-start sm:items-center gap-5">
               <div className="relative">
-                <Avatar className="size-20 sm:size-24 rounded-2xl border-2 border-border shadow-lg bg-card ring-4 ring-background">
-                  <AvatarFallback className="text-2xl sm:text-3xl font-bold bg-muted text-foreground">
-                    {owner.slice(0, 2).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
+                <UserAvatar handle={owner} name={profile.name} className="size-20 sm:size-24 rounded-2xl border-2 border-border shadow-lg bg-card ring-4 ring-background" fallbackClassName="text-2xl sm:text-3xl font-bold bg-muted text-foreground" />
                 <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full bg-foreground text-[10px] font-bold text-background ring-2 ring-background">
                   ✓
                 </span>
@@ -132,6 +132,7 @@ export function ProfileView({
                   <span className="font-mono text-xs text-muted-foreground bg-muted/60 border border-border/40 px-2 py-0.5 rounded-md">
                     @{owner}
                   </span>
+                  {profile.pronouns && <span className="text-xs text-muted-foreground">{profile.pronouns}</span>}
                   {profile.headline && (
                     <Badge variant="secondary" className="text-[11px] font-normal border-border bg-muted/30 text-foreground">
                       {profile.headline}
@@ -148,11 +149,27 @@ export function ProfileView({
                       <span>•</span>
                     </>
                   )}
+                  {profile.company && (
+                    <>
+                      <span className="flex items-center gap-1">
+                        <Building2 className="size-3.5 text-muted-foreground" /> {profile.company}
+                      </span>
+                      <span>•</span>
+                    </>
+                  )}
                   {profile.location && (
                     <>
                       <span className="flex items-center gap-1">
                         <MapPin className="size-3.5 text-muted-foreground" /> {profile.location}
                       </span>
+                      <span>•</span>
+                    </>
+                  )}
+                  {profile.website && (
+                    <>
+                      <a href={profile.website} target="_blank" rel="noopener noreferrer nofollow ugc" className="flex items-center gap-1 text-foreground hover:underline">
+                        <Link2 className="size-3.5 text-muted-foreground" /> {profile.website.replace(/^https?:\/\//, "")}
+                      </a>
                       <span>•</span>
                     </>
                   )}

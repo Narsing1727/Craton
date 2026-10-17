@@ -1,5 +1,6 @@
 "use client";
 
+import { UserAvatar } from "@/components/user-avatar";
 import Link from "next/link";
 import { InboxBell } from "@/components/inbox-bell";
 import { usePathname, useRouter } from "next/navigation";
@@ -28,7 +29,6 @@ import {
 } from "lucide-react";
 import { CratonLogo } from "@/components/craton-logo";
 import { CommandMenu, OPEN_COMMAND_MENU, OPEN_SHORTCUTS } from "@/components/command-menu";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import {
@@ -60,14 +60,6 @@ const publicLinks = [
   { href: "/docs", label: "Docs" },
   { href: "/pricing", label: "Pricing" },
 ];
-
-const initials = (name: string) =>
-  name
-    .split(/[\s-]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]!.toUpperCase())
-    .join("") || "?";
 
 // Keep the header's original grey highlight instead of the accent color used elsewhere.
 const menuItem = "gap-2.5 px-2.5 py-1.5 text-xs font-medium focus:bg-muted focus:text-foreground not-data-[variant=destructive]:focus:**:text-foreground";
@@ -205,9 +197,7 @@ export function SiteHeader() {
               data-radius="control" className="group flex items-center gap-1 p-0.5 border border-border/70 hover:border-foreground/40 hover:bg-muted/50 transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="Account menu"
             >
-              <Avatar className="size-7">
-                <AvatarFallback className="text-[11px] font-semibold bg-muted text-foreground">{initials(user.name || user.handle)}</AvatarFallback>
-              </Avatar>
+              <UserAvatar handle={user.handle} name={user.name} className="size-7" fallbackClassName="text-[11px] font-semibold bg-muted text-foreground" />
               <ChevronDown
                 className="size-3.5 text-muted-foreground mr-1 group-data-[popup-open]:rotate-180 group-data-[popup-open]:text-foreground"
                 aria-hidden

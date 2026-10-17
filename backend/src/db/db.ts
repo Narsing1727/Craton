@@ -601,6 +601,17 @@ const migrations: string[] = [
   `,/* 32: which emails a person wants (JSON of the ones switched off) and the visibility a new repository starts with. */ `
   ALTER TABLE users ADD COLUMN notify TEXT NOT NULL DEFAULT '{}';
   ALTER TABLE users ADD COLUMN default_visibility TEXT NOT NULL DEFAULT 'public';
+  `,/* 33: what a person says about themselves (website, location, company, pronouns) and their profile picture (a small image kept in the database). */ `
+  ALTER TABLE owners ADD COLUMN website TEXT NOT NULL DEFAULT '';
+  ALTER TABLE owners ADD COLUMN location TEXT NOT NULL DEFAULT '';
+  ALTER TABLE owners ADD COLUMN company TEXT NOT NULL DEFAULT '';
+  ALTER TABLE owners ADD COLUMN pronouns TEXT NOT NULL DEFAULT '';
+  CREATE TABLE avatars (
+    owner_id INTEGER PRIMARY KEY REFERENCES owners(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
   `,
 ];
 

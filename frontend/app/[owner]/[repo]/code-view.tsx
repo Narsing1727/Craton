@@ -1,5 +1,6 @@
 "use client";
 
+import { UserAvatar } from "@/components/user-avatar";
 import { useState } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -8,7 +9,6 @@ import { Code2, Download, FileText, GitBranch, History, MapPin, Scale, Search } 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { PublishReadiness } from "@/components/publish-readiness";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -118,9 +118,7 @@ export function CodeView({ owner, repo, data, branches, currentRef, head, items,
           <Card className="overflow-hidden py-0">
             {head && (
               <div className="flex items-center gap-3 border-b border-border bg-muted/30 px-4 py-3">
-                <Avatar className="size-6">
-                  <AvatarFallback className="text-[0.6rem]">{head.author.slice(0, 2).toUpperCase()}</AvatarFallback>
-                </Avatar>
+                <UserAvatar handle={head.author} className="size-6" fallbackClassName="text-[0.6rem]" />
                 <span className="text-sm font-medium">{head.author}</span>
                 <span className="truncate text-sm text-muted-foreground">{head.message}</span>
                 <Link

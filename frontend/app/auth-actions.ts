@@ -6,7 +6,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import QRCode from "qrcode";
-import { fetchUser, send, type ApiUser } from "@/lib/api";
+import { fetchUser, send, sendBytes, type ApiUser } from "@/lib/api";
 import { cookies } from "next/headers";
 import { clearSession, getSessionToken, GOOGLE_PENDING_COOKIE, MFA_COOKIE, setSession } from "@/lib/session";
 
@@ -161,8 +161,24 @@ export async function resetPasswordAction(_: FormResult | null, form: FormData):
 
 // ── Onboarding ───────────────────────────────────────────────────────────
 
-export async function saveProfileAction(input: { name?: string; bio?: string; role?: string | null; digest?: "off" | "weekly"; notify?: Record<string, boolean>; defaultVisibility?: "public" | "private" }) {
+export async function saveProfileAction(input: { name?: string; bio?: string; role?: string | null; digest?: "off" | "weekly"; notify?: Record<string, boolean>; defaultVisibility?: "public" | "private"; website?: string; location?: string; company?: string; pronouns?: string }) {
   const result = await send<ApiUser>("PATCH", "/user", input);
+  if (result.ok) revalidatePath("/", "layout");
+  return result;
+}
+
+/** The picture arrives already shrunk by the browser (a few tens of KB); the API checks what it really is. */
+export async function uploadAvatarAction(form: FormData) {
+  const file = form.get("avatar");
+  if (!(file instanceof File) || file.size === 0) return { ok: false as const, error: "Choose an image." };
+  if (file.size > 512 * 1024) return { ok: false as const, error: "That image is too large. Try a smaller one." };
+  const result = await sendBytes<ApiUser>("PUT", "/user/avatar", new Uint8Array(await file.arrayBuffer()), file.type || "application/octet-stream");
+  if (result.ok) revalidatePath("/", "layout");
+  return result;
+}
+
+export async function removeAvatarAction() {
+  const result = await send<ApiUser>("DELETE", "/user/avatar");
   if (result.ok) revalidatePath("/", "layout");
   return result;
 }

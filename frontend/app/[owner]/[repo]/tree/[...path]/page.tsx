@@ -1,3 +1,4 @@
+import { UserAvatar } from "@/components/user-avatar";
 import * as React from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -17,7 +18,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -146,9 +146,7 @@ export default async function SubfolderPage({ params, searchParams }: { params: 
           {/* Commit Bar */}
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
             <div className="flex items-center gap-2">
-              <Avatar className="size-5">
-                <AvatarFallback className="text-[10px]">{latest.author.slice(0, 2).toUpperCase()}</AvatarFallback>
-              </Avatar>
+              <UserAvatar handle={latest.author} className="size-5" fallbackClassName="text-[10px]" />
               <span className="font-medium text-foreground">{latest.author}</span>
               <Link href={`${base}/commit/${latest.sha}`} className="truncate hover:text-foreground hover:underline">
                 {latest.message}
