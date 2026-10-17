@@ -1822,7 +1822,7 @@ export function createApp(ctx: Ctx) {
   v1.get("/repos/:owner/:repo/issues/:n", (c) => {
     const repo = repoFor(c);
     const n = Number(c.req.param("n"));
-    return c.json({ ...collab.getIssue(ctx, repo, n), thread: collab.listComments(ctx, repo, "issue", n) });
+    return c.json({ ...collab.getIssue(ctx, repo, n), thread: collab.listComments(ctx, repo, "issue", n, userId(c)) });
   });
   v1.patch("/repos/:owner/:repo/issues/:n", async (c) => {
     const user = requireUser(c);
@@ -1838,6 +1838,29 @@ export function createApp(ctx: Ctx) {
     const b = await body<{ body: string }>(c);
     return c.json(collab.addComment(ctx, repoFor(c), "issue", Number(c.req.param("n")), requireUser(c).id, b.body), 201);
   });
+
+  // Edit, delete and react to a comment (on an issue or a pull request: they share one list of comment ids).
+  v1.patch("/repos/:owner/:repo/comments/:id", async (c) => {
+    const me = requireUser(c);
+    const b = await body<{ body: string }>(c);
+    return c.json(collab.editComment(ctx, repoFor(c), Number(c.req.param("id")), me.id, b.body));
+  });
+  v1.delete("/repos/:owner/:repo/comments/:id", (c) => {
+    const me = requireUser(c);
+    const repo = repoFor(c);
+    const isAdmin = (() => {
+      try {
+        repos.getRepoFor(ctx, repo.owner, repo.name, me.id, "admin");
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    collab.deleteComment(ctx, repo, Number(c.req.param("id")), me.id, isAdmin);
+    return c.body(null, 204);
+  });
+  v1.put("/repos/:owner/:repo/comments/:id/reactions/:emoji", (c) => c.json(collab.setReaction(ctx, repoFor(c), Number(c.req.param("id")), requireUser(c).id, c.req.param("emoji")!, true)));
+  v1.delete("/repos/:owner/:repo/comments/:id/reactions/:emoji", (c) => c.json(collab.setReaction(ctx, repoFor(c), Number(c.req.param("id")), requireUser(c).id, c.req.param("emoji")!, false)));
 
   v1.get("/repos/:owner/:repo/pulls", (c) => c.json(collab.listPulls(ctx, repoFor(c), { state: c.req.query("state") })));
   v1.post("/repos/:owner/:repo/pulls", async (c) => {
@@ -1865,7 +1888,7 @@ export function createApp(ctx: Ctx) {
   v1.get("/repos/:owner/:repo/pulls/:n", (c) => {
     const repo = repoFor(c);
     const n = Number(c.req.param("n"));
-    return c.json({ ...collab.getPull(ctx, repo, n), thread: collab.listComments(ctx, repo, "pull", n) });
+    return c.json({ ...collab.getPull(ctx, repo, n), thread: collab.listComments(ctx, repo, "pull", n, userId(c)) });
   });
   v1.post("/repos/:owner/:repo/pulls/:n/comments", async (c) => {
     const b = await body<{ body: string }>(c);

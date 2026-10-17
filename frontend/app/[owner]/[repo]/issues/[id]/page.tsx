@@ -24,12 +24,12 @@ export default async function IssueDetailPage({ params }: { params: Promise<Para
     const { issue, thread } = found;
     const entries: Entry[] = [
       ...(issue.body ? [{ kind: "comment" as const, id: 0, author: issue.author, role: "Author", time: issue.opened ?? issue.updated, text: issue.body }] : []),
-      ...thread.map((c, i) => ({ kind: "comment" as const, id: i + 1, author: c.author, role: c.author === issue.author ? "Author" : "Member", time: timeAgo(c.createdAt), text: c.body })),
+      ...thread.map((c, i) => ({ kind: "comment" as const, id: i + 1, author: c.author, role: c.author === issue.author ? "Author" : "Member", time: timeAgo(c.createdAt), text: c.body, commentId: c.id, reactions: c.reactions, edited: Boolean(c.editedAt) })),
     ];
     // A pull request that mentions this issue (#88) in its title or description.
     const mention = new RegExp(`#${issue.id}\\b`);
     const linked = pulls.find((p) => mention.test(`${p.title} ${p.description}`))?.id;
-    return <IssueView key={issue.id} owner={owner} repo={repo} issue={issue} thread={entries} live viewer={user?.handle ?? null} linkedPull={linked} canWrite={summary.access === "write" || summary.access === "admin"} milestones={allMilestones.filter((m) => m.state === "open").map((m) => m.title)} />;
+    return <IssueView key={issue.id} owner={owner} repo={repo} issue={issue} thread={entries} live viewer={user?.handle ?? null} linkedPull={linked} canWrite={summary.access === "write" || summary.access === "admin"} canModerate={summary.access === "admin"} milestones={allMilestones.filter((m) => m.state === "open").map((m) => m.title)} />;
   }
 
   const issue: Issue = demoIssues.find((i) => i.id === n) ?? {

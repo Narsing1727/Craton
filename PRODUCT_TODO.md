@@ -178,7 +178,7 @@ maintainer) can release, and a lock icon next to the file.
 - [x] **Lockable patterns.** `S` · Settings → "Files that must be locked" (gitignore-style patterns). A direct push or upload that changes a matching file without holding its lock is refused with `lock_required`; merges and imports are not. The file page says "Lock required" (migration 15, 5 tests).
 - [x] **Review requests.** `S` · Ask a specific person on the pull request page (writers; the person must be able to see the repository). They are emailed and get an inbox item until they review; asking again after a review starts a new request; Withdraw. (migration 19, 4 tests). Assignment of issues was already there.
 - [ ] **Comments on a file, region or feature.** `L` · Pin a comment to a map location (Figma-style).
-- [ ] **@mentions and reactions.** `S`
+- [x] **@mentions and reactions.** `S` · Mentions reach the inbox. Comments on issues and pull requests can be reacted to (eight emoji, counted, with who reacted), edited by their author (marked "edited") and deleted by their author or a repository administrator.
 - [ ] **Branch protection rulesets in the UI.** `M` · Required reviewers per path, not only per repo.
 
 ## B. Getting data out, and sharing it
@@ -251,7 +251,7 @@ and shapefiles; tables and schemas are the gap.
 - [~] **Schema diff** for shapefile fields and CSV columns. `M` · CSV columns added and removed are shown in the
       table diff. Left: retyped columns, and shapefile (.dbf) fields.
 - [x] **Raster statistics diff.** `S` · `GET /repos/:o/:r/raster-stats/:ref/*?base=`: summary of each version (min, 5th/50th/95th percentile, mean, max, nodata), a shared-range histogram, and the cell-by-cell change (mean, RMSE, share raised/lowered, volume for projected grids). Shown under every raster heatmap on commit, compare and pull request pages. Computed on the sampled grid the heatmap uses, and says so.
-- [ ] **CRS and nodata mismatch warning** when a changed file disagrees with the repository settings. `S`
+- [x] **CRS and nodata mismatch warning** when a changed file disagrees with the repository settings. `S` · Already part of every check run: the Coordinate reference system, Vertical datum and Nodata value steps compare each file with the repository's settings and name the files that disagree.
 - [x] **Checks as code.** `L` · Built as `.craton-checks.json` at the repository root (the CLI owns `.craton/`).
 - [x] **Restore a file to an earlier version.** `S` · From the file's history, "Restore" adds a commit that puts it
       back (the replaced version stays in history and can be restored again). Respects locks and write
@@ -331,8 +331,8 @@ and shapefiles; tables and schemas are the gap.
       and the sliding underline are plain markup and CSS, and the counts are now in the server-rendered HTML
       instead of popping in after hydration); Go to file loads on first use. Issues page JavaScript went from
       385 KB to 313 KB gzipped.
-- [ ] **Light theme.** `M` (the dark theme is the product's look; this is an accessibility option)
-- [ ] **Personal activity digest** by email. `S`
+- [x] **Light theme.** `M` (the dark theme is the product's look; this is an accessibility option)
+- [x] **Personal activity digest** by email. `S` · Off by default; Settings → Notifications.
 
 ## H. Hydrology and GIS specifics (the part no general tool will build)
 
@@ -341,7 +341,7 @@ and shapefiles; tables and schemas are the gap.
 - [ ] **Model run metadata** stored with a release: plan, software version, runtime, inputs by commit. `M`
 - [x] **Hydrograph / time-series viewer** for gauge CSVs, with a compare-two-versions overlay. `M` · "Plot over time" on any table with a time column: pick the time and value columns, optionally one line per station, and show the previous version dashed behind. Drawn as SVG on the server; up to six lines of 800 points; shareable as a link.
 - [~] **Calibration table**: observed vs modelled at gauges, per release. `L` · Done for a single table: on any CSV page, "Compare two columns" gives NSE, KGE, PBIAS, RMSE, MAE and r over the whole file (Nash and Sutcliffe 1970; Gupta et al. 2009; ratings from Moriasi et al. 2007), shareable as a link. Not yet: per gauge, and stored with a release.
-- [ ] **Units setting** (metric / imperial) applied to metadata and diffs. `S`
+- [x] **Units setting** (metric / imperial) applied to metadata and diffs. `S` · Settings → Preferences.
 - [ ] **LiDAR point-density preview.** `M`
 - [ ] **MapLibre viewer** with the compare slider on PR diffs. `L`
 

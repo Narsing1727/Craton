@@ -25,15 +25,18 @@ import { closePullAction, commentAction, mergePullAction, requestReviewAction, r
 import { useCanWrite } from "@/components/repo-context";
 import { Input } from "@/components/ui/input";
 import { SignInPrompt } from "@/components/sign-in-prompt";
+import { CommentBody, type Reactions } from "@/components/comment-body";
 
 export type TimelineItem =
   | { kind: "event"; actor: string; text: string; time: string }
-  | { kind: "comment"; actor: string; text: string; time: string; badge?: "Approved" | "Changes requested" }
+  | { kind: "comment"; actor: string; text: string; time: string; badge?: "Approved" | "Changes requested"; commentId?: number; reactions?: Reactions; edited?: boolean }
   | { kind: "approve" | "changes"; actor: string; text: string; time: string };
 
 export type CheckStep = { name: string; status: "passed" | "failed" | "skipped"; detail: string };
 
 export type PullViewProps = {
+  /** Administrators of the repository can delete anyone's comment. */
+  canModerate?: boolean;
   owner: string;
   repo: string;
   pr: PullRequest;
@@ -60,7 +63,7 @@ export type PullViewProps = {
   linkedIssue?: { id: number; title: string; open: boolean };
 };
 
-export function PullView({ owner, repo, pr, live, viewer, timeline: initial, files, filesTotal, commitsTotal, previews = {}, commits, conflicts, checkSteps, rules, reviewers, waiting: initialWaiting = [], owners = [], linkedIssue }: PullViewProps) {
+export function PullView({ owner, repo, pr, live, viewer, timeline: initial, files, filesTotal, commitsTotal, previews = {}, commits, conflicts, checkSteps, rules, reviewers, waiting: initialWaiting = [], owners = [], linkedIssue, canModerate = false }: PullViewProps) {
   const canWrite = useCanWrite();
   const fileCount = filesTotal ?? files.length;
   const commitCount = commitsTotal ?? commits.length;
@@ -117,8 +120,15 @@ export function PullView({ owner, repo, pr, live, viewer, timeline: initial, fil
   async function comment() {
     const text = draft.trim();
     if (!text || pending) return;
-    if (live && !(await run("post the comment", () => commentAction(owner, repo, "pull", pr.id, text)))) return;
-    setTimeline((t) => [...t, { kind: "comment", actor: viewer ?? "you", text, time: "just now" }]);
+    let commentId: number | undefined;
+    if (live) {
+      setPending("post the comment");
+      const result = await commentAction(owner, repo, "pull", pr.id, text);
+      setPending(null);
+      if (!result.ok) return void notify.error("Couldn’t post the comment", { description: result.error });
+      commentId = result.data.id;
+    }
+    setTimeline((t) => [...t, { kind: "comment", actor: viewer ?? "you", text, time: "just now", commentId }]);
     setDraft("");
     notify.success("Comment added");
   }
@@ -234,7 +244,18 @@ export function PullView({ owner, repo, pr, live, viewer, timeline: initial, fil
                                 )}
                               </span>
                             </div>
-                            <p className="px-3 py-3 text-sm text-muted-foreground text-pretty whitespace-pre-line">{item.text}</p>
+                            <CommentBody
+                              owner={owner}
+                              repo={repo}
+                              commentId={live ? item.commentId : undefined}
+                              author={item.actor}
+                              text={item.text}
+                              edited={item.edited}
+                              reactions={item.reactions}
+                              viewer={viewer}
+                              canModerate={canModerate}
+                              onDeleted={() => setTimeline((all) => all.filter((_, j) => j !== i))}
+                            />
                           </div>
                         </>
                       ) : (

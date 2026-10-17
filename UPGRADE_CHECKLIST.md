@@ -354,6 +354,14 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 | 199 | One centred panel with outlined fields whose labels float onto the border (the way Google's forms work), a short title and one line of explanation, the address filling itself from the name until you change it, and the Cancel / Create buttons at opposite ends | `/orgs/new`; `npm run e2e:org` in `frontend` (7 browser checks on a throwaway account) |
 | 200 | **Live address check**: "is available" with a tick, "That address is taken", or why it is badly formed, all before you press Create; a name the server refuses (reserved) is shown under the form | Type an existing organization's address |
 
+### 27. Comments you can edit, delete and react to
+
+| # | What it does | How to check |
+|---|---|---|
+| 201 | **Reactions** on issue and pull request comments: thumbs up and down, laugh, hooray, confused, heart, rocket, eyes. One per person per emoji, counted, hover to see who; the picker is the smiley under a comment | Any issue thread; `npm run e2e:comments` (needs `CRATON_E2E_DB`) |
+| 202 | **Edit** your own comment (it then says "(edited)"); **Delete** your own, or anyone's if you administer the repository (its reactions go with it) | Under a comment |
+| 203 | API: `PATCH` and `DELETE /repos/{owner}/{repo}/comments/{id}`, `PUT` and `DELETE …/comments/{id}/reactions/{emoji}`; threads now carry `id`, `editedAt` and `reactions` (with `mine` for the caller); comments are limited to 64 KB; migration 34 | API reference; `backend/test/comments.test.ts` (5 tests) |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

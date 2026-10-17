@@ -17,9 +17,10 @@ import { Editable, EditableArea, EditableInput, EditablePreview } from "@/compon
 import type { Issue } from "@/lib/data";
 import { commentAction, updateIssueAction } from "@/app/actions";
 import { SignInPrompt } from "@/components/sign-in-prompt";
+import { CommentBody, type Reactions } from "@/components/comment-body";
 
 export type Entry =
-  | { kind: "comment"; id: number; author: string; role: string; time: string; text: string }
+  | { kind: "comment"; id: number; author: string; role: string; time: string; text: string; commentId?: number; reactions?: Reactions; edited?: boolean }
   | { kind: "event"; id: number; author: string; time: string; text: string; closed: boolean };
 
 export function IssueView({
@@ -32,6 +33,7 @@ export function IssueView({
   linkedPull,
   milestones = [],
   canWrite = false,
+  canModerate = false,
 }: {
   owner: string;
   repo: string;
@@ -44,6 +46,8 @@ export function IssueView({
   /** Titles of the repository's open milestones, for writers to choose from. */
   milestones?: string[];
   canWrite?: boolean;
+  /** Administrators of the repository can delete anyone's comment. */
+  canModerate?: boolean;
 }) {
   const router = useRouter();
   const base = `/${owner}/${repo}`;
@@ -86,6 +90,7 @@ export function IssueView({
   async function addComment() {
     const text = draft.trim();
     if (!text || pending) return false;
+    let commentId: number | undefined;
     if (live) {
       setPending(true);
       const result = await commentAction(owner, repo, "issue", issue.id, text);
@@ -94,8 +99,9 @@ export function IssueView({
         notify.error("Couldn’t post the comment", { description: result.error });
         return false;
       }
+      commentId = result.data.id;
     }
-    setEntries((e) => [...e, { kind: "comment", id: Date.now(), author: viewer ?? "you", role: viewer === issue.author ? "Author" : "Member", time: "just now", text }]);
+    setEntries((e) => [...e, { kind: "comment", id: Date.now(), author: viewer ?? "you", role: viewer === issue.author ? "Author" : "Member", time: "just now", text, commentId }]);
     setDraft("");
     return true;
   }
@@ -182,7 +188,18 @@ export function IssueView({
                           <span className="text-muted-foreground">commented {entry.time}</span>
                           <Badge variant="outline" className="ml-auto text-[10px]">{entry.role}</Badge>
                         </div>
-                        <p className="px-3 py-3 text-sm text-muted-foreground text-pretty whitespace-pre-line">{entry.text}</p>
+                        <CommentBody
+                          owner={owner}
+                          repo={repo}
+                          commentId={live ? entry.commentId : undefined}
+                          author={entry.author}
+                          text={entry.text}
+                          edited={entry.edited}
+                          reactions={entry.reactions}
+                          viewer={viewer}
+                          canModerate={canModerate}
+                          onDeleted={() => setEntries((all) => all.filter((x) => x.id !== entry.id))}
+                        />
                       </div>
                     </>
                   ) : (

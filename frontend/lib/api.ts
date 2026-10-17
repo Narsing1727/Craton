@@ -104,7 +104,7 @@ export type ApiCheckRun = { id: number; commit: string; branch: string; status: 
 export type ApiBranch = { name: string; isDefault: boolean; commit: ApiCommit; ahead: number; behind: number; updatedAt: string };
 export type ApiTreeEntry = { name: string; path: string; type: "dir" | "file"; size: number; blob?: string; lastCommit?: { sha: string; message: string; timestamp: string; author: string } };
 export type ApiIssue = { number: number; title: string; body: string; author: string; state: "open" | "closed"; label: "data-quality" | "question" | "enhancement" | "bug"; assignee: string | null; milestone: string | null; file: string | null; comments: number; createdAt: string; updatedAt: string };
-export type ApiComment = { author: string; body: string; createdAt: string };
+export type ApiComment = { id: number; author: string; body: string; createdAt: string; editedAt: string | null; reactions: Partial<Record<"thumbs_up" | "thumbs_down" | "laugh" | "hooray" | "confused" | "heart" | "rocket" | "eyes", { count: number; mine: boolean; by: string[] }>> };
 export type ApiReview = { author: string; state: "approved" | "changes_requested" | "commented"; body: string; commit: string; createdAt: string };
 export type ApiPull = {
   number: number;

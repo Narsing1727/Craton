@@ -2,7 +2,7 @@
 
 import type { Ctx } from "./context.ts";
 import { repoAccess } from "./accounts.ts";
-import { badRequest, conflict, notFound } from "./context.ts";
+import { badRequest, conflict, forbidden, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import * as milestones from "./milestones.ts";
 import type { CommitObject, TreeObject } from "../core/objects.ts";
@@ -88,18 +88,83 @@ export function updateIssue(ctx: Ctx, repo: RepoRow, number: number, patch: { st
 
 // ── Comments ────────────────────────────────────────────────────────────────
 
+/** The reactions a comment can carry (named, as the web app draws them). */
+export const REACTIONS = ["thumbs_up", "thumbs_down", "laugh", "hooray", "confused", "heart", "rocket", "eyes"] as const;
+export type Reaction = (typeof REACTIONS)[number];
+export type ReactionCounts = Partial<Record<Reaction, { count: number; mine: boolean; by: string[] }>>;
+
+type CommentRow = { id: number; author_id: number; body: string; created_at: string; edited_at: string | null };
+
+function reactionsOf(ctx: Ctx, ids: number[], viewerId: number | null): Map<number, ReactionCounts> {
+  const out = new Map<number, ReactionCounts>();
+  if (!ids.length) return out;
+  const rows = ctx.db
+    .prepare(`SELECT r.comment_id, r.emoji, r.user_id, o.handle FROM comment_reactions r JOIN owners o ON o.id = r.user_id WHERE r.comment_id IN (${ids.map(() => "?").join(",")}) ORDER BY r.created_at, o.handle`)
+    .all(...ids) as { comment_id: number; emoji: Reaction; user_id: number; handle: string }[];
+  for (const r of rows) {
+    const mine = out.get(r.comment_id) ?? {};
+    const entry = (mine[r.emoji] ??= { count: 0, mine: false, by: [] });
+    entry.count += 1;
+    if (r.user_id === viewerId) entry.mine = true;
+    if (entry.by.length < 10) entry.by.push(r.handle);
+    out.set(r.comment_id, mine);
+  }
+  return out;
+}
+
+const commentJson = (ctx: Ctx, r: CommentRow, reactions: ReactionCounts | undefined) => ({ id: r.id, author: handleOf(ctx, r.author_id), body: r.body, createdAt: r.created_at, editedAt: r.edited_at, reactions: reactions ?? {} });
+
 export function addComment(ctx: Ctx, repo: RepoRow, target: "issue" | "pull", number: number, authorId: number, body: string) {
   if (!body?.trim()) throw badRequest("Comments can’t be empty.");
+  if (body.length > 65_536) throw badRequest("Comments are at most 64 KB.");
   const table = target === "issue" ? "issues" : "pulls";
   if (!ctx.db.prepare(`SELECT 1 FROM ${table} WHERE repo_id = ? AND number = ?`).get(repo.id, number)) throw notFound(`${target === "issue" ? "Issue" : "Pull request"} #${number}`);
   ctx.db.prepare("INSERT INTO comments (repo_id, target, number, author_id, body) VALUES (?, ?, ?, ?, ?)").run(repo.id, target, number, authorId, body.trim());
   ctx.db.prepare(`UPDATE ${table} SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE repo_id = ? AND number = ?`).run(repo.id, number);
-  return listComments(ctx, repo, target, number).at(-1);
+  return listComments(ctx, repo, target, number, authorId).at(-1);
 }
 
-export function listComments(ctx: Ctx, repo: RepoRow, target: "issue" | "pull", number: number) {
-  const rows = ctx.db.prepare("SELECT author_id, body, created_at FROM comments WHERE repo_id = ? AND target = ? AND number = ? ORDER BY id").all(repo.id, target, number) as { author_id: number; body: string; created_at: string }[];
-  return rows.map((r) => ({ author: handleOf(ctx, r.author_id), body: r.body, createdAt: r.created_at }));
+export function listComments(ctx: Ctx, repo: RepoRow, target: "issue" | "pull", number: number, viewerId: number | null = null) {
+  const rows = ctx.db.prepare("SELECT id, author_id, body, created_at, edited_at FROM comments WHERE repo_id = ? AND target = ? AND number = ? ORDER BY id").all(repo.id, target, number) as CommentRow[];
+  const reactions = reactionsOf(ctx, rows.map((r) => r.id), viewerId);
+  return rows.map((r) => commentJson(ctx, r, reactions.get(r.id)));
+}
+
+function commentOf(ctx: Ctx, repo: RepoRow, id: number): CommentRow & { target: "issue" | "pull"; number: number } {
+  const row = ctx.db.prepare("SELECT id, author_id, body, created_at, edited_at, target, number FROM comments WHERE id = ? AND repo_id = ?").get(id, repo.id) as (CommentRow & { target: "issue" | "pull"; number: number }) | undefined;
+  if (!row) throw notFound("Comment");
+  return row;
+}
+
+export function getComment(ctx: Ctx, repo: RepoRow, id: number, viewerId: number | null) {
+  const row = commentOf(ctx, repo, id);
+  return commentJson(ctx, row, reactionsOf(ctx, [id], viewerId).get(id));
+}
+
+/** Only the person who wrote a comment can change its words. */
+export function editComment(ctx: Ctx, repo: RepoRow, id: number, userId: number, body: string) {
+  const row = commentOf(ctx, repo, id);
+  if (row.author_id !== userId) throw forbidden("You can only edit your own comments.");
+  if (!body?.trim()) throw badRequest("Comments can’t be empty.");
+  if (body.length > 65_536) throw badRequest("Comments are at most 64 KB.");
+  if (body.trim() !== row.body) ctx.db.prepare("UPDATE comments SET body = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(body.trim(), id);
+  return getComment(ctx, repo, id, userId);
+}
+
+/** The author can take a comment back; so can anyone who administers the repository (`isAdmin`), for moderation. */
+export function deleteComment(ctx: Ctx, repo: RepoRow, id: number, userId: number, isAdmin: boolean) {
+  const row = commentOf(ctx, repo, id);
+  if (row.author_id !== userId && !isAdmin) throw forbidden("You can only delete your own comments, unless you administer the repository.");
+  ctx.db.prepare("DELETE FROM comments WHERE id = ?").run(id);
+}
+
+/** Add or take away one person's reaction; asking twice changes nothing. */
+export function setReaction(ctx: Ctx, repo: RepoRow, id: number, userId: number, emoji: string, on: boolean) {
+  if (!(REACTIONS as readonly string[]).includes(emoji)) throw badRequest(`Unknown reaction “${emoji.slice(0, 20)}”. Choose from ${REACTIONS.join(", ")}.`);
+  commentOf(ctx, repo, id);
+  if (on) ctx.db.prepare("INSERT OR IGNORE INTO comment_reactions (comment_id, user_id, emoji) VALUES (?, ?, ?)").run(id, userId, emoji);
+  else ctx.db.prepare("DELETE FROM comment_reactions WHERE comment_id = ? AND user_id = ? AND emoji = ?").run(id, userId, emoji);
+  return getComment(ctx, repo, id, userId);
 }
 
 // ── Pull requests ───────────────────────────────────────────────────────────

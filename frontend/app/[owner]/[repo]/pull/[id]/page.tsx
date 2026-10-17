@@ -81,7 +81,7 @@ export default async function PullDetailPage({ params }: { params: Promise<Param
   const events: Timed[] = [
     { at: found.createdAt, item: { kind: "event", actor: pr.author, text: `opened this pull request from ${pr.source}` } },
     ...(pr.description ? [{ at: found.createdAt, item: { kind: "comment" as const, actor: pr.author, text: pr.description } }] : []),
-    ...thread.map((c) => ({ at: c.createdAt, item: { kind: "comment" as const, actor: c.author, text: c.body } })),
+    ...thread.map((c) => ({ at: c.createdAt, item: { kind: "comment" as const, actor: c.author, text: c.body, commentId: c.id, reactions: c.reactions, edited: Boolean(c.editedAt) } })),
     ...reviews.map((r) => ({
       at: r.createdAt,
       item: r.body
@@ -130,6 +130,7 @@ export default async function PullDetailPage({ params }: { params: Promise<Param
       reviewers={[...latest.entries()].map(([handle, state]) => ({ handle, state }))}
       waiting={found.reviewRequests}
       owners={owners}
+      canModerate={summary.access === "admin"}
       linkedIssue={linked ? { id: linked.id, title: linked.title, open: linked.status === "open" } : undefined}
     />
   );

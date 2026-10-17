@@ -612,6 +612,15 @@ const migrations: string[] = [
     data BLOB NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   );
+  `,/* 34: comments can be edited (and say so) and carry reactions: one row per person per emoji. */ `
+  ALTER TABLE comments ADD COLUMN edited_at TEXT;
+  CREATE TABLE comment_reactions (
+    comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+    emoji TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (comment_id, user_id, emoji)
+  );
   `,
 ];
 

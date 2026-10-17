@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { parseUnits, UNITS_COOKIE } from "@/lib/units";
 import { redirect } from "next/navigation";
-import { api, send, type ApiOwnersPreview, type ApiCitation, type ApiCollaborator, type ApiMilestone, type ApiDelivery, type ApiLock, type ApiSavedFilter, type ApiInvite, type ApiModelReview, type ApiReviewItem, type AuditScope } from "@/lib/api";
+import { api, send, type ApiComment, type ApiOwnersPreview, type ApiCitation, type ApiCollaborator, type ApiMilestone, type ApiDelivery, type ApiLock, type ApiSavedFilter, type ApiInvite, type ApiModelReview, type ApiReviewItem, type AuditScope } from "@/lib/api";
 
 const repoPath = (owner: string, repo: string) => `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 
@@ -39,7 +39,16 @@ export async function updateIssueAction(owner: string, repo: string, n: number, 
 }
 export async function commentAction(owner: string, repo: string, target: "issue" | "pull", n: number, body: string) {
   const path = target === "issue" ? `${repoPath(owner, repo)}/issues/${n}/comments` : `${repoPath(owner, repo)}/pulls/${n}/comments`;
-  return write<{ author: string; body: string; createdAt: string }>("POST", path, { body }, [`/${owner}/${repo}`]);
+  return write<{ id: number; author: string; body: string; createdAt: string }>("POST", path, { body }, [`/${owner}/${repo}`]);
+}
+export async function editCommentAction(owner: string, repo: string, id: number, body: string) {
+  return write<ApiComment>("PATCH", `${repoPath(owner, repo)}/comments/${id}`, { body }, [`/${owner}/${repo}`]);
+}
+export async function deleteCommentAction(owner: string, repo: string, id: number) {
+  return write<null>("DELETE", `${repoPath(owner, repo)}/comments/${id}`, undefined, [`/${owner}/${repo}`]);
+}
+export async function reactAction(owner: string, repo: string, id: number, emoji: string, on: boolean) {
+  return write<ApiComment>(on ? "PUT" : "DELETE", `${repoPath(owner, repo)}/comments/${id}/reactions/${encodeURIComponent(emoji)}`, undefined, []);
 }
 
 // ── Pull requests ──
