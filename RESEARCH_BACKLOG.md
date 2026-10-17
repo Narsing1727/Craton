@@ -745,3 +745,7 @@ Ranked by (value to a first-time visitor and to a paying hydro team) ÷ effort, 
 - rashdf: https://github.com/fema-ffrd/rashdf ; rivia: https://rivia.readthedocs.io/
 - TUFLOW QA checklist: https://docs.tuflow.com/classic-hpc/manual/2026.0/QAchecklist-2.html
 - Search-summary only (secondary): lakeFS, DagsHub/DVC/Dolt/Oxen comparisons, WorkOS/SSOJet enterprise checklists, SOC 2 checklists, GDPR checklists, multi-tenancy articles, pricing articles, Canny comparisons, Product Hunt guides, FEMA/state LOMR guidance, CWC/World Bank tenders.
+
+## Storage without changing a byte (2026-10-18)
+
+See [research/storage/README.md](research/storage/README.md): DEFLATE GeoTIFF tiles are bit-exactly reproducible with pako (16/16, 247/247, 190/190 on real files; Node's own zlib is not), and storing pixels plus a parent-tile delta took four versions of a real Copernicus DEM from 122.2 MB to 30.6 MB, every rebuild SHA-256 identical. Next: parent-chunk delta codec, then the re-deflate path.
