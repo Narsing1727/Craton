@@ -66,7 +66,7 @@ export async function closePullAction(owner: string, repo: string, n: number) {
 }
 
 // ── Releases ──
-export async function createReleaseAction(owner: string, repo: string, input: { tag: string; target: string; title: string; notes: string; prerelease: boolean }) {
+export async function createReleaseAction(owner: string, repo: string, input: { tag: string; target: string; title: string; notes: string; prerelease: boolean; run?: { software?: string; version?: string; plan?: string; runtimeSeconds?: number; completedAt?: string; notes?: string; inputs?: { repo: string; commit: string; note?: string }[] } }) {
   return write<{ tag: string }>("POST", `${repoPath(owner, repo)}/releases`, input, [`/${owner}/${repo}`]);
 }
 

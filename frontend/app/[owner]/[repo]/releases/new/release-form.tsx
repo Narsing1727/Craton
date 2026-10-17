@@ -46,6 +46,10 @@ export function ReleaseForm({
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [prerelease, setPrerelease] = useState(false);
+  const [run, setRun] = useState({ software: "", version: "", plan: "", minutes: "", notes: "" });
+  const setRunField = (k: keyof typeof run) => (e: { target: { value: string } }) => setRun((r) => ({ ...r, [k]: e.target.value }));
+  const runtime = run.minutes.trim() === "" ? null : Number(run.minutes);
+  const runError = runtime !== null && (!Number.isFinite(runtime) || runtime < 0) ? "Enter the run time in minutes, such as 90." : null;
   const [touched, setTouched] = useState(false);
 
   const tagError = !SEMVER.test(tag.trim())
@@ -60,13 +64,20 @@ export function ReleaseForm({
 
   async function publish(draft: boolean) {
     setTouched(true);
-    if (tagError || pending) {
+    if (tagError || runError || pending) {
       document.getElementById("release-tag")?.focus();
       return;
     }
     if (live) {
       setPending(true);
-      const result = await createReleaseAction(owner, repo, { tag: tag.trim(), target, title: title.trim() || tag.trim(), notes: notes.trim(), prerelease });
+      const described = {
+        ...(run.software.trim() ? { software: run.software.trim() } : {}),
+        ...(run.version.trim() ? { version: run.version.trim() } : {}),
+        ...(run.plan.trim() ? { plan: run.plan.trim() } : {}),
+        ...(runtime !== null && !runError ? { runtimeSeconds: Math.round(runtime * 60) } : {}),
+        ...(run.notes.trim() ? { notes: run.notes.trim() } : {}),
+      };
+      const result = await createReleaseAction(owner, repo, { tag: tag.trim(), target, title: title.trim() || tag.trim(), notes: notes.trim(), prerelease, ...(Object.keys(described).length ? { run: described } : {}) });
       setPending(false);
       if (!result.ok) {
         notify.error("Couldn’t publish the release", { description: result.error });
@@ -164,6 +175,34 @@ export function ReleaseForm({
                 className="font-mono text-xs leading-relaxed"
               />
             </Field>
+
+            <fieldset className="flex flex-col gap-4 border border-border p-4">
+              <legend className="px-1 text-sm font-medium">Model run <span className="font-normal text-muted-foreground">(optional)</span></legend>
+              <p className="-mt-2 text-xs text-muted-foreground">Which run this release was made from, so a result can be traced to the software and plan that produced it.</p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field>
+                  <FieldLabel htmlFor="run-software">Software</FieldLabel>
+                  <Input id="run-software" value={run.software} onChange={setRunField("software")} placeholder="HEC-RAS" maxLength={80} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="run-version">Version</FieldLabel>
+                  <Input id="run-version" value={run.version} onChange={setRunField("version")} placeholder="6.5" maxLength={40} className="font-mono" />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="run-plan">Plan or scenario</FieldLabel>
+                  <Input id="run-plan" value={run.plan} onChange={setRunField("plan")} placeholder="p01, 100-year flood" maxLength={160} />
+                </Field>
+                <Field data-invalid={runError ? true : undefined}>
+                  <FieldLabel htmlFor="run-minutes">Run time (minutes)</FieldLabel>
+                  <Input id="run-minutes" inputMode="decimal" value={run.minutes} onChange={setRunField("minutes")} placeholder="90" aria-invalid={!!runError} className="font-mono" />
+                  {runError && <FieldError>{runError}</FieldError>}
+                </Field>
+              </div>
+              <Field>
+                <FieldLabel htmlFor="run-notes">Run notes</FieldLabel>
+                <Input id="run-notes" value={run.notes} onChange={setRunField("notes")} placeholder="Manning n from calibration v3" maxLength={1000} />
+              </Field>
+            </fieldset>
 
             <Field orientation="horizontal">
               <Checkbox id="prerelease" checked={prerelease} onCheckedChange={(v) => setPrerelease(Boolean(v))} />

@@ -200,6 +200,7 @@ function toRelease(r: ApiRelease): Release {
     prerelease: r.prerelease,
     merkleRoot: r.merkleRoot,
     checksums: r.checksums,
+    run: r.run ?? null,
   };
 }
 

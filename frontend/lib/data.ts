@@ -475,6 +475,8 @@ export type Release = {
   prerelease?: boolean;
   merkleRoot?: string;
   checksums?: { path: string; size: number; sha256: string }[];
+  /** The model run the release was made from, when it says. */
+  run?: { software?: string; version?: string; plan?: string; runtimeSeconds?: number; completedAt?: string; notes?: string; inputs?: { repo: string; commit: string; note?: string }[] } | null;
 };
 
 export const releases: Release[] = [

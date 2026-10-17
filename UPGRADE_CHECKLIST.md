@@ -362,6 +362,13 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 | 202 | **Edit** your own comment (it then says "(edited)"); **Delete** your own, or anyone's if you administer the repository (its reactions go with it) | Under a comment |
 | 203 | API: `PATCH` and `DELETE /repos/{owner}/{repo}/comments/{id}`, `PUT` and `DELETE …/comments/{id}/reactions/{emoji}`; threads now carry `id`, `editedAt` and `reactions` (with `mine` for the caller); comments are limited to 64 KB; migration 34 | API reference; `backend/test/comments.test.ts` (5 tests) |
 
+### 28. Model run on a release
+
+| # | What it does | How to check |
+|---|---|---|
+| 204 | A release can say **which model run it came from**: software, version, plan or scenario, run time, when it finished, notes, and the commits of the inputs (`owner/name@commit`). Every field is optional and checked (unknown fields, bad times, a branch name where a commit id belongs, more than 50 inputs are all refused) | `POST /repos/{owner}/{repo}/releases` with `run`; `backend/test/releaserun.test.ts` (4 tests) |
+| 205 | The release form has an optional **Model run** section (software, version, plan, run time in minutes, notes); the releases page shows it under the notes; the STAC collection carries it as `craton:run` | Releases → New release; `npm run e2e:release-run` in `frontend` (needs `CRATON_E2E_DB`) |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

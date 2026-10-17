@@ -130,7 +130,7 @@ export type ApiBlame = { path: string; ref: string; commit: string; size: number
 export type ApiOwnersPreview = { rules: number; files: number; owned: number; unowned: number; people: { handle: string; files: number; problem: string | null }[]; unownedSample: string[]; skipped: { line: number; text: string }[] };
 /** Someone named in CODEOWNERS for files a pull request changes, and where they stand. */
 export type ApiPullOwner = { handle: string; files: string[]; requested: boolean; state: "approved" | "changes_requested" | "commented" | null; current: boolean };
-export type ApiRelease = { tag: string; commit: string; title: string; notes: string; prerelease: boolean; latest: boolean; merkleRoot: string; sizeBytes: number; checksums: { path: string; size: number; sha256: string }[]; author: string; createdAt: string };
+export type ApiRelease = { tag: string; commit: string; title: string; notes: string; prerelease: boolean; latest: boolean; merkleRoot: string; sizeBytes: number; checksums: { path: string; size: number; sha256: string }[]; run?: { software?: string; version?: string; plan?: string; runtimeSeconds?: number; completedAt?: string; notes?: string; inputs?: { repo: string; commit: string; note?: string }[] } | null; author: string; createdAt: string };
 export type ApiStorage = {
   logicalBytes: number;
   historyBytes: number;

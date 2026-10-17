@@ -338,7 +338,7 @@ and shapefiles; tables and schemas are the gap.
 
 - [ ] **Recognise a HEC-RAS project** (`.prj`, `.g01`, `.p01`, `.u01`, `.hdf`) and show plan, geometry and
       flow files as one unit with their relationships. `M`
-- [ ] **Model run metadata** stored with a release: plan, software version, runtime, inputs by commit. `M`
+- [x] **Model run metadata** stored with a release: plan, software version, runtime, inputs by commit. `M` · Optional `run` on a release ({ software, version, plan, runtimeSeconds, completedAt, notes, inputs: [{ repo, commit, note }] }), checked field by field (unknown fields refused), shown on the releases page, entered in the release form, and carried into the STAC collection as `craton:run`.
 - [x] **Hydrograph / time-series viewer** for gauge CSVs, with a compare-two-versions overlay. `M` · "Plot over time" on any table with a time column: pick the time and value columns, optionally one line per station, and show the previous version dashed behind. Drawn as SVG on the server; up to six lines of 800 points; shareable as a link.
 - [~] **Calibration table**: observed vs modelled at gauges, per release. `L` · Done for a single table: on any CSV page, "Compare two columns" gives NSE, KGE, PBIAS, RMSE, MAE and r over the whole file (Nash and Sutcliffe 1970; Gupta et al. 2009; ratings from Moriasi et al. 2007), shareable as a link. Not yet: per gauge, and stored with a release.
 - [x] **Units setting** (metric / imperial) applied to metadata and diffs. `S` · Settings → Preferences.

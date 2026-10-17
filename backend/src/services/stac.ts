@@ -8,7 +8,7 @@ import type { RepoRow } from "./repos.ts";
 import { extentsOf } from "./extent.ts";
 import type { BBox } from "../core/geo.ts";
 
-type ReleaseLike = { tag: string; commit: string; title: string; notes: string; createdAt: string; merkleRoot: string; checksums: { path: string; size: number; sha256: string }[] };
+type ReleaseLike = { tag: string; commit: string; title: string; notes: string; createdAt: string; merkleRoot: string; run?: unknown; checksums: { path: string; size: number; sha256: string }[] };
 
 const STAC_VERSION = "1.0.0";
 const EXTENSIONS = ["https://stac-extensions.github.io/file/v2.1.0/schema.json"];
@@ -77,6 +77,7 @@ export async function buildStac(ctx: Ctx, repo: RepoRow, release: ReleaseLike, o
     keywords: JSON.parse(repo.topics ?? "[]") as string[],
     "craton:commit": release.commit,
     "craton:merkle_root": release.merkleRoot,
+    ...(release.run ? { "craton:run": release.run } : {}),
     links: [
       { rel: "self", href: collectionUrl, type: "application/json" },
       { rel: "root", href: collectionUrl, type: "application/json" },

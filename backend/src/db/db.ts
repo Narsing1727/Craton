@@ -621,6 +621,8 @@ const migrations: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     PRIMARY KEY (comment_id, user_id, emoji)
   );
+  `,/* 35: a release can say which model run produced it (software, version, plan, run time, and the commits of the inputs), as JSON. */ `
+  ALTER TABLE releases ADD COLUMN run TEXT;
   `,
 ];
 

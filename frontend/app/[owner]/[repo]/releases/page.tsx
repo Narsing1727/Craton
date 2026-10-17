@@ -120,6 +120,7 @@ export default async function ReleasesPage({
                 <CardContent className="flex flex-col gap-4">
                   <h2 className="text-base font-medium">{r.title}</h2>
                   <p className="text-sm text-muted-foreground">{r.notes}</p>
+                  {r.run && <RunSummary run={r.run} />}
                   {/* Releases are newest first, so the next one down is the previous release. Live data only. */}
                   {r.checksums && releases[i + 1]?.checksums && (
                     <ReleaseChanges owner={owner} repo={repo} previous={releases[i + 1].version} baseSha={releases[i + 1].sha} current={r.version} headSha={r.sha} />
@@ -179,5 +180,35 @@ export default async function ReleasesPage({
         </div>
       </div>
     </>
+  );
+}
+
+const duration = (seconds: number) => {
+  if (seconds < 90) return `${Math.round(seconds)} s`;
+  const m = Math.round(seconds / 60);
+  return m < 90 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60 ? `${m % 60} min` : ""}`.trim();
+};
+
+/** The run a release was made from: what ran, which plan, how long, and which commits fed it. */
+function RunSummary({ run }: { run: NonNullable<Release["run"]> }) {
+  const what = [[run.software, run.version].filter(Boolean).join(" "), run.plan, run.runtimeSeconds !== undefined ? duration(run.runtimeSeconds) : ""].filter(Boolean);
+  return (
+    <div className="flex flex-col gap-1.5 border-l-2 border-border pl-3 text-xs text-muted-foreground">
+      <p>
+        <span className="font-medium text-foreground">Model run</span>
+        {what.length > 0 && <> · {what.join(" · ")}</>}
+      </p>
+      {run.notes && <p className="text-pretty">{run.notes}</p>}
+      {run.inputs && run.inputs.length > 0 && (
+        <ul className="flex flex-col gap-0.5">
+          {run.inputs.map((i) => (
+            <li key={`${i.repo}@${i.commit}`}>
+              Input <span className="font-mono text-foreground">{i.repo}@{i.commit.slice(0, 7)}</span>
+              {i.note ? ` (${i.note})` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

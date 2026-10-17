@@ -267,7 +267,7 @@ const groups: Group[] = [
       { method: "POST", path: "/repos/{owner}/{repo}/pulls/{n}/review-requests", note: "Ask a specific person to review: { handle }. They are emailed and it waits in their inbox.", auth: "write" },
       { method: "DELETE", path: "/repos/{owner}/{repo}/pulls/{n}/review-requests/{handle}", note: "Withdraw the request.", auth: "write" },
       { method: "GET", path: "/repos/{owner}/{repo}/releases", note: "Releases with pinned per-file SHA-256 and Merkle root." },
-      { method: "POST", path: "/repos/{owner}/{repo}/releases", note: "Publish a release; every file is re-hashed first.", auth: "write" },
+      { method: "POST", path: "/repos/{owner}/{repo}/releases", note: "Publish a release; every file is re-hashed first. { tag, target?, title?, notes?, prerelease?, run? }. run says which model run it came from, all optional: { software, version, plan, runtimeSeconds, completedAt, notes, inputs: [{ repo: \"owner/name\", commit, note? }] } (unknown fields are refused). It is returned with the release and carried into its STAC collection as craton:run.", auth: "write" },
       { method: "GET", path: "/repos/{owner}/{repo}/releases/{tag}/SHA256SUMS", note: "Checksums in sha256sum format." },
       { method: "GET", path: "/repos/{owner}/{repo}/text-diff/{ref}/{path}", note: "Line diff of a text file against ?base=<ref>: hunks with three lines of context. 415 for binaries and very large files." },
       { method: "GET", path: "/repos/{owner}/{repo}/blame/{ref}/{path}", note: "Which commit last rewrote each byte range of a file (by chunk), up to 500 commits back." },
