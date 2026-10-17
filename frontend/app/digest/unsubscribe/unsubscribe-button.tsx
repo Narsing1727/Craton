@@ -11,7 +11,7 @@ export function UnsubscribeButton({ token }: { token: string }) {
   const [busy, start] = useTransition();
   if (state.done) {
     return (
-      <p role="status" className="text-[14px] leading-relaxed text-white/70">
+      <p role="status" className="text-[14px] leading-relaxed text-foreground/70">
         Done. You won’t get the weekly email any more.{" "}
         <Link href="/" className={AUTH.link}>
           Back to Craton

@@ -13,7 +13,7 @@ export default async function UnsubscribePage({ searchParams }: { searchParams: 
   return (
     <AuthShell>
       <AuthTitle title="Stop the weekly email?" subtitle="You can turn it back on any time in Settings → Profile." />
-      {token ? <UnsubscribeButton token={token} /> : <p className="text-[14px] text-white/50">This link is incomplete. Turn the weekly email off in Settings → Profile.</p>}
+      {token ? <UnsubscribeButton token={token} /> : <p className="text-[14px] text-foreground/50">This link is incomplete. Turn the weekly email off in Settings → Profile.</p>}
     </AuthShell>
   );
 }

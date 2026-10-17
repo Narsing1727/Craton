@@ -1,6 +1,6 @@
 "use client";
 
-// Settings → Appearance: Darker (the default; one near-black surface everywhere) or Standard (Craton's dark grey).
+// Settings → Appearance: Darker (the default; one near-black surface everywhere) or Light.
 
 import * as React from "react";
 import { Check } from "lucide-react";
@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 
 const CHOICES: { id: Theme; name: string; about: string; page: string; card: string; line: string }[] = [
   { id: "darker", name: "Darker", about: "Near-black everywhere, like GitHub and Vercel. The default.", page: "oklch(0.145 0 0)", card: "oklch(0.205 0 0)", line: "oklch(0.29 0 0)" },
-  { id: "standard", name: "Standard", about: "Craton’s dark grey.", page: "oklch(0.2138 0.0019 286.2347)", card: "oklch(0.2686 0 0)", line: "oklch(0.3250 0 0)" },
+  { id: "light", name: "Light", about: "Soft white with crisp white surfaces, for bright rooms.", page: "oklch(0.985 0 0)", card: "oklch(1 0 0)", line: "oklch(0.915 0 0)" },
 ];
 
 export function ThemeChoice() {

@@ -308,6 +308,14 @@ Run `craton help` for the table; `craton completion powershell` for tab completi
 | 182 | Scoped re-pointing of tokens (`.auth-surface`) so nothing else in the app changed; sizes and radii stay on the app's scale | Open any other page |
 | 183 | All browser flows (Google, GitHub, single sign-on, passkeys) still pass on the new pages; the page sweep is clean | `npm run e2e:*`, `npm run sweep` |
 
+### 22. Light theme
+
+| # | What it does | How to check |
+|---|---|---|
+| 184 | **A Light look** beside Darker, chosen in Settings → Profile → Appearance (kept in this browser, applied before first paint so nothing flashes): a very light page with crisp white surfaces, hairline borders, near-black text and primary, the faintest depth on cards, white fields, a machined edge on the primary button. The blue accent, square structure and fonts are unchanged | Settings → Appearance → Light |
+| 185 | **The Standard look is removed from Settings**; a browser that had saved it gets Darker | Settings → Appearance |
+| 186 | The sign-in pages follow the chosen look: pure black in Darker, soft white in Light | `/login` in each |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

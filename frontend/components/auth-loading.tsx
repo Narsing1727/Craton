@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 // where it will be, and a spinner where the form will be.
 export function AuthLoading({ branded = false }: { branded?: boolean }) {
   return (
-    <main className="auth-surface dark flex min-h-dvh flex-col bg-black text-white">
+    <main className="auth-surface flex min-h-dvh flex-col bg-background text-foreground">
       <header className="px-6 py-6 sm:px-10">{branded && <CratonLogo className="text-[14px]" />}</header>
       <div className={cn("flex flex-1 items-center justify-center pb-24")}>
         <SquareSpinner size={22} />

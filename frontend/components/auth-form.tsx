@@ -207,12 +207,12 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
                     autoFocus
                   />
                   {usernameError ? (
-                    <FieldError id="username-help" className="text-[13px] text-red-400">
+                    <FieldError id="username-help" className="text-[13px] text-destructive">
                       {usernameError}
                     </FieldError>
                   ) : (
-                    <FieldDescription id="username-help" className="text-[13px] text-white/40">
-                      Shown on your profile and commits as <span className="font-mono text-white/70">@{username || "username"}</span>
+                    <FieldDescription id="username-help" className="text-[13px] text-foreground/40">
+                      Shown on your profile and commits as <span className="font-mono text-foreground/70">@{username || "username"}</span>
                     </FieldDescription>
                   )}
                 </Field>
@@ -239,7 +239,7 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
                   autoFocus={isLogin}
                 />
                 {fieldError("email") && (
-                  <FieldError id="login-error" className="text-[13px] text-red-400">
+                  <FieldError id="login-error" className="text-[13px] text-destructive">
                     {fieldError("email")}
                   </FieldError>
                 )}
@@ -275,18 +275,18 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
                     onClick={() => setShowPassword((v) => !v)}
                     aria-label={showPassword ? "Hide password" : "Show password"}
                     aria-pressed={showPassword}
-                    className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded-[4px] text-white/40 transition-colors hover:text-white"
+                    className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 cursor-pointer items-center justify-center rounded-[4px] text-foreground/40 transition-colors hover:text-foreground"
                   >
                     {showPassword ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
                   </button>
                 </div>
                 {passwordError ? (
-                  <FieldError id="password-error" className="text-[13px] text-red-400">
+                  <FieldError id="password-error" className="text-[13px] text-destructive">
                     {passwordError}
                   </FieldError>
                 ) : (
                   !isLogin && (
-                    <FieldDescription id="password-help" className="text-[13px] text-white/40">
+                    <FieldDescription id="password-help" className="text-[13px] text-foreground/40">
                       At least 12 characters. A passphrase works well.
                     </FieldDescription>
                   )
@@ -301,7 +301,7 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
                 {pending ? (isLogin ? "Signing in…" : "Creating your account…") : isLogin ? "Sign in" : "Create account"}
               </Button>
               {!isLogin && (
-                <p className="text-center text-[12px] leading-relaxed text-white/40 text-pretty">
+                <p className="text-center text-[12px] leading-relaxed text-foreground/40 text-pretty">
                   By creating an account you agree to the{" "}
                   <Link href="/terms" className={AUTH.link}>
                     Terms
@@ -316,15 +316,15 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
             </div>
           </form>
           {((notSetUp && notSetUp.length > 0) || (isLogin && demoHint)) && (
-            <div className="mt-10 flex flex-col gap-1.5 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-white/35">
+            <div className="mt-10 flex flex-col gap-1.5 border-t border-foreground/10 pt-4 text-[11px] leading-relaxed text-foreground/35">
               {notSetUp && notSetUp.length > 0 && (
                 <p data-testid="providers-not-set-up" className="text-pretty">
-                  Development note: {notSetUp.join(" and ")} {notSetUp.length === 1 ? "is" : "are"} not set up on this server yet. Add the credentials with <span className="font-mono text-white/55">npm run setup:oauth</span>. Visitors never see this, or an unconfigured button, in production.
+                  Development note: {notSetUp.join(" and ")} {notSetUp.length === 1 ? "is" : "are"} not set up on this server yet. Add the credentials with <span className="font-mono text-foreground/55">npm run setup:oauth</span>. Visitors never see this, or an unconfigured button, in production.
                 </p>
               )}
               {isLogin && demoHint && (
                 <p>
-                  Local demo: <span className="font-mono text-white/55">priyam</span> / <span className="font-mono text-white/55">craton-demo-2026</span>
+                  Local demo: <span className="font-mono text-foreground/55">priyam</span> / <span className="font-mono text-foreground/55">craton-demo-2026</span>
                 </p>
               )}
             </div>
@@ -367,9 +367,9 @@ function CodeStep({ ticket, next, onBack }: { ticket: string; next?: string; onB
             required
           />
           {error?.field === "code" ? (
-            <FieldError className="text-[13px] text-red-400">{error.error}</FieldError>
+            <FieldError className="text-[13px] text-destructive">{error.error}</FieldError>
           ) : (
-            <FieldDescription className="text-[13px] text-white/40">{recovery ? "Each recovery code works once." : "The code changes every 30 seconds."}</FieldDescription>
+            <FieldDescription className="text-[13px] text-foreground/40">{recovery ? "Each recovery code works once." : "The code changes every 30 seconds."}</FieldDescription>
           )}
         </Field>
         {error && error.field !== "code" && (

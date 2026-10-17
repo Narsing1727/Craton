@@ -15,7 +15,7 @@ export default async function VerifyEmailPage({ searchParams }: { searchParams: 
       {token ? (
         <VerifyButton token={token} />
       ) : (
-        <p className="text-[14px] leading-relaxed text-white/50">
+        <p className="text-[14px] leading-relaxed text-foreground/50">
           Open the link from your email again, or send a new one from{" "}
           <Link href="/settings/security" className={AUTH.link}>
             Settings → Security

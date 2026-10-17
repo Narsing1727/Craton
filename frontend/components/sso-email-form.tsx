@@ -37,7 +37,7 @@ export function SsoEmailForm({ email, next, message }: { email?: string; next?: 
       <Button type="submit" className={AUTH.primary} loading={going} disabled={going || !value.trim()}>
         Continue
       </Button>
-      <p className="text-center text-[13px] text-white/45">
+      <p className="text-center text-[13px] text-foreground/45">
         <Link href="/login" className={AUTH.link}>
           Back to sign in
         </Link>

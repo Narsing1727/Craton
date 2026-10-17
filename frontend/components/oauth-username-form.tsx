@@ -22,7 +22,7 @@ export function OAuthUsernameForm({ provider, email, name, suggestion, next }: {
 
   return (
     <AuthShell>
-      <AuthTitle title="Choose your username" subtitle={<>{label} confirmed <span className="font-mono text-white/80">{email}</span>. One more thing: the username that appears on your profile and commits.</>} />
+      <AuthTitle title="Choose your username" subtitle={<>{label} confirmed <span className="font-mono text-foreground/80">{email}</span>. One more thing: the username that appears on your profile and commits.</>} />
       <form action={formAction} noValidate>
         {next && <input type="hidden" name="next" value={next} />}
         <input type="hidden" name="name" value={name} />
@@ -47,12 +47,12 @@ export function OAuthUsernameForm({ provider, email, name, suggestion, next }: {
               autoFocus
             />
             {usernameError ? (
-              <FieldError id="username-help" className="text-[13px] text-red-400">
+              <FieldError id="username-help" className="text-[13px] text-destructive">
                 {usernameError}
               </FieldError>
             ) : (
-              <FieldDescription id="username-help" className="text-[13px] text-white/40">
-                Shown as <span className="font-mono text-white/70">@{username || "username"}</span>. It is part of every link to your work, so choose one you will keep.
+              <FieldDescription id="username-help" className="text-[13px] text-foreground/40">
+                Shown as <span className="font-mono text-foreground/70">@{username || "username"}</span>. It is part of every link to your work, so choose one you will keep.
               </FieldDescription>
             )}
           </Field>
@@ -69,7 +69,7 @@ export function OAuthUsernameForm({ provider, email, name, suggestion, next }: {
           <Button type="submit" className={AUTH.primary} loading={pending} disabled={pending || !!usernameError || !username}>
             {pending ? "Creating your account…" : "Create account"}
           </Button>
-          <p className="text-center text-[12px] leading-relaxed text-white/40 text-pretty">
+          <p className="text-center text-[12px] leading-relaxed text-foreground/40 text-pretty">
             By continuing you agree to the{" "}
             <Link href="/terms" className={AUTH.link}>
               Terms

@@ -449,6 +449,54 @@
   --sidebar-border: oklch(0.245 0 0);
 }
 
+/* "Light" theme (Settings → Appearance). The rest of the tokens (the blue accent, square structure, fonts) are the app's own;
+   this only sets the surfaces and lines, the way a considered product does it: a very light grey page with white
+   surfaces on it, hairline borders, near-black text and primary, and the faintest depth. */
+.light {
+  --background: oklch(0.985 0.001 106);
+  --foreground: oklch(0.16 0.004 286);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.16 0.004 286);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.16 0.004 286);
+  --primary: oklch(0.16 0.004 286);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.963 0.002 286);
+  --muted: oklch(0.963 0.002 286);
+  --muted-foreground: oklch(0.49 0.008 286);
+  --accent: oklch(0.55 0.2 262);
+  --accent-foreground: oklch(0.985 0 0);
+  --border: oklch(0.915 0.003 286);
+  --input: oklch(0.89 0.004 286);
+  --ring: oklch(0.55 0.2 262 / 0.55);
+  --sidebar: oklch(0.985 0.001 106);
+  --sidebar-accent: oklch(0.963 0.002 286);
+  --sidebar-border: oklch(0.915 0.003 286);
+  --shadow-sm: 0 1px 2px 0 oklch(0.2 0 0 / 0.05);
+  --shadow: 0 1px 2px 0 oklch(0.2 0 0 / 0.06), 0 1px 3px 0 oklch(0.2 0 0 / 0.05);
+  --shadow-md: 0 2px 4px -1px oklch(0.2 0 0 / 0.06), 0 4px 12px -2px oklch(0.2 0 0 / 0.06);
+  --shadow-lg: 0 4px 8px -2px oklch(0.2 0 0 / 0.06), 0 12px 28px -6px oklch(0.2 0 0 / 0.1);
+}
+/* Surfaces lift a hair off the page; fields are white, not see-through; the primary button has a machined edge. */
+.light [data-slot="card"] {
+  box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.04), 0 8px 24px -14px oklch(0.2 0 0 / 0.08);
+}
+.light input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.light textarea,
+.light select {
+  background-color: oklch(1 0 0);
+}
+.light input:not([type="checkbox"]):not([type="radio"]):focus-visible,
+.light textarea:focus-visible {
+  border-color: oklch(0.55 0.2 262 / 0.7);
+}
+.light .bg-primary {
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.14), 0 1px 2px oklch(0.15 0 0 / 0.28);
+}
+.light ::selection {
+  background: oklch(0.55 0.2 262 / 0.22);
+}
+
 /*
  * Long lists: rows far from the viewport are not laid out or painted until they get near it (Google's guidance for a
  * large DOM, web.dev/articles/optimize-inp). `auto` in contain-intrinsic-size remembers a row's real height once it has
@@ -537,7 +585,7 @@
     animation: none;
   }
 }
-.auth-surface {
+.dark .auth-surface {
   --background: oklch(0 0 0);
   --card: oklch(0 0 0);
   --popover: oklch(0.1 0 0);
@@ -546,16 +594,24 @@
   --muted: oklch(1 0 0 / 0.06);
   --muted-foreground: oklch(1 0 0 / 0.5);
   --ring: oklch(1 0 0 / 0.5);
-  color-scheme: dark;
-  background-color: #000;
+}
+.auth-surface {
   -webkit-font-smoothing: antialiased;
 }
 /* The browser's own autofill colours (bright blue or yellow) would break the page. */
-.auth-surface input:-webkit-autofill,
-.auth-surface input:-webkit-autofill:hover,
-.auth-surface input:-webkit-autofill:focus {
+.dark .auth-surface input:-webkit-autofill,
+.dark .auth-surface input:-webkit-autofill:hover,
+.dark .auth-surface input:-webkit-autofill:focus {
   -webkit-text-fill-color: #fff;
   caret-color: #fff;
   -webkit-box-shadow: 0 0 0 100px #0b0b0b inset;
+  transition: background-color 9999s ease-out 0s;
+}
+.light .auth-surface input:-webkit-autofill,
+.light .auth-surface input:-webkit-autofill:hover,
+.light .auth-surface input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #111;
+  caret-color: #111;
+  -webkit-box-shadow: 0 0 0 100px #f5f5f5 inset;
   transition: background-color 9999s ease-out 0s;
 }

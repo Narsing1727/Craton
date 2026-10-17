@@ -14,8 +14,8 @@ export function VerifyButton({ token }: { token: string }) {
   if (state.done) {
     return (
       <div className="flex flex-col gap-4">
-        <p role="status" className="flex items-center gap-2 text-[14px] text-white/80">
-          <CircleCheck className="size-4 text-emerald-400" aria-hidden />
+        <p role="status" className="flex items-center gap-2 text-[14px] text-foreground/80">
+          <CircleCheck className="size-4 text-emerald-500" aria-hidden />
           Email confirmed.
         </p>
         <Button href="/dashboard" className={AUTH.primary}>

@@ -21,12 +21,12 @@ export function ResetForm({ token }: { token: string }) {
         <Field data-invalid={state && !state.ok && state.field === "password" ? true : undefined}>
           <FieldLabel htmlFor="password" className={AUTH.label}>New password</FieldLabel>
           <Input id="password" name="password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className={AUTH.input} required autoFocus />
-          <FieldDescription className="text-[13px] text-white/40">At least 12 characters. Every other session will be signed out.</FieldDescription>
+          <FieldDescription className="text-[13px] text-foreground/40">At least 12 characters. Every other session will be signed out.</FieldDescription>
         </Field>
         <Field data-invalid={mismatch ? true : undefined}>
           <FieldLabel htmlFor="confirm" className={AUTH.label}>Confirm password</FieldLabel>
           <Input id="confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={mismatch} className={AUTH.input} required />
-          {mismatch && <FieldError className="text-[13px] text-red-400">The passwords don&apos;t match.</FieldError>}
+          {mismatch && <FieldError className="text-[13px] text-destructive">The passwords don&apos;t match.</FieldError>}
         </Field>
         {error && (
           <p role="alert" className={AUTH.error}>
