@@ -16,6 +16,7 @@ import { repackCommit } from "../src/services/repack.ts";
 import { recodeRepository } from "../src/services/recode.ts";
 import { fsck } from "../src/services/fsck.ts";
 import { forgetRebuiltTiles } from "../src/services/tiles.ts";
+import { collectGarbage } from "../src/services/gc.ts";
 
 let ctx: Ctx;
 let app: ReturnType<typeof createApp>;
@@ -134,4 +135,29 @@ test("a chunk the database says is one form but whose bytes are another is repor
   assert.ok(r2.chunks.wrongForm.some((m) => m.startsWith(hash.slice(0, 12))), JSON.stringify(r2.chunks.wrongForm));
   ctx.db.prepare("UPDATE chunks SET codec = 'zstd' WHERE hash = ?").run(hash);
   assert.equal((await fsck(ctx)).chunks.wrongForm.length, 0);
+});
+
+test("a database restored from before the chunks were rewritten is put right from the bytes, so nothing they need is collected", async () => {
+  const snapshot = ctx.db.prepare("SELECT hash, codec, stored_size FROM chunks ORDER BY hash").all() as { hash: string; codec: string; stored_size: number }[];
+  const refs = (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunk_refs").get() as { n: number }).n;
+  const tiles = (ctx.db.prepare("SELECT COUNT(*) AS n FROM tiles").get() as { n: number }).n;
+  const links = (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunk_tiles").get() as { n: number }).n;
+  assert.ok(refs > 0 && tiles >= 24 && links > 0);
+
+  // A backup whose database snapshot knows nothing about the differences and tiles that are in the chunk files.
+  ctx.db.exec("DELETE FROM chunk_refs; DELETE FROM chunk_tiles; DELETE FROM tiles; UPDATE chunks SET codec = 'zstd', stored_size = size WHERE codec IN ('ref-delta', 'tiles');");
+  const before = await fsck(ctx);
+  assert.equal(before.ok, false, "it is noticed");
+
+  const healed = await fsck(ctx, { repair: true });
+  assert.equal(healed.ok, true, JSON.stringify([healed.chunks, healed.tiles, healed.bases]));
+  assert.ok(healed.repaired.length > 20);
+  assert.deepEqual(ctx.db.prepare("SELECT hash, codec, stored_size FROM chunks ORDER BY hash").all(), snapshot, "every chunk is recorded as it was");
+  assert.deepEqual([(ctx.db.prepare("SELECT COUNT(*) AS n FROM chunk_refs").get() as { n: number }).n, (ctx.db.prepare("SELECT COUNT(*) AS n FROM tiles").get() as { n: number }).n, (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunk_tiles").get() as { n: number }).n], [refs, tiles, links]);
+  assert.equal((await fsck(ctx, { repair: true })).repaired.length, 0, "and a second repair has nothing to do");
+
+  // What the repair is for: garbage collection no longer sees the bases and tiles as unused.
+  const swept = await collectGarbage(ctx, { apply: true, graceDays: 30, now: Date.now() + 40 * 86_400_000 });
+  assert.equal(swept.tilesRemoved, 0);
+  assert.equal((await fsck(ctx)).ok, true);
 });

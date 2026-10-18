@@ -2,16 +2,19 @@
 //
 //   npm run fsck               # read and verify every chunk, difference and tile (slow on a large store)
 //   npm run fsck -- --quick    # structure only: files add up, Merkle roots match, nothing is read
+//   npm run fsck -- --repair   # first put right the database rows of chunks rewritten after the database was backed up
 
 import { createContext } from "../src/services/context.ts";
 import { fsck } from "../src/services/fsck.ts";
 
 const quick = process.argv.includes("--quick");
+const repair = process.argv.includes("--repair");
 const ctx = createContext();
 const started = Date.now();
 let last = 0;
 const report = await fsck(ctx, {
   quick,
+  repair,
   progress: (done, total) => {
     if (Date.now() - last > 2000 && process.stdout.isTTY) {
       last = Date.now();
@@ -28,6 +31,7 @@ line("tiles", report.tiles.checked, report.tiles.bad);
 line("files", report.files.checked, report.files.bad);
 line("commits", report.commits.checked, report.commits.bad);
 const show = (title: string, list: string[]) => list.length && console.log(`\n${title}:\n  ${list.slice(0, 20).join("\n  ")}${list.length > 20 ? `\n  … and ${list.length - 20} more` : ""}`);
+show("Put right in the database", report.repaired);
 show("Chunks that are not stored", report.chunks.missing);
 show("Chunks that do not hash to their name", report.chunks.corrupt);
 show("Chunks stored in another form than the database says", report.chunks.wrongForm);

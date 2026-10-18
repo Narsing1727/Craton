@@ -1,6 +1,6 @@
 // Back up Craton: a consistent copy of the database (SQLite VACUUM INTO, safe while the server
-// runs) plus any local chunks not already in the backup (chunks are content-addressed and never
-// change, so each run only copies new ones). With R2, turn on bucket versioning instead of
+// runs) plus any local chunks not already in the backup (a chunk's name is its hash, so what it stands for never
+// changes; repacking may keep it in a smaller form, and the copy already in the backup is then an older, equally valid form). With R2, turn on bucket versioning instead of
 // copying chunks.
 //
 //   npm run backup                 # into data/backups/

@@ -409,6 +409,7 @@ Not done: NetCDF 4 / HDF5 written with the newest layout (version 4 chunk indexe
 
 | # | What it does | How to check |
 |---|---|---|
+| 220 | **`npm run fsck -- --repair`** puts right the database after a restore from a backup that caught repacking half way (a chunk file newer than its database snapshot): it reads each chunk kept as a difference or as pieces of tiles and restores the rows that say what it is built on, its form and size, and the tiles it names, so garbage collection keeps them (otherwise a tile that looks unused would be removed). Restoring then running it gives exactly the rows that were there before | `backend/test/fsck.test.ts` (the last test deletes those rows, repairs, compares every row, and shows `npm run gc` then removes no tile) |
 | 219 | `npm run fsck` (and `-- --quick`) verifies the entire store in one go: every chunk decodes (also when kept as a difference or as pieces of tiles) and hashes to its name, stored differences' bases and cold tiles are present and rebuild exactly, each file's chunks are all there and add up, each commit's Merkle root matches its tree, and the database's idea of each chunk's form matches its bytes. Changes nothing; exit code 1 on any problem; names what is wrong. Run on the real data here: 158 chunks, 61 files, 47 commits, all fine | OPERATING.md → Checking the whole store; `backend/test/fsck.test.ts` (5: a clean store with every form, then each kind of damage) |
 
 ### Turning Google on (what you need from Google)

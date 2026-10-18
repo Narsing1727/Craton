@@ -89,8 +89,9 @@ npm run backup -- --to D:/bk      # somewhere else: another disk, a synced folde
 npm run backup -- --keep 14       # database copies to keep (default 14)
 ```
 
-The database copy is made with SQLite's `VACUUM INTO`, which is safe while the server runs. Chunks never change once
-written, so each run copies only new ones. With R2, turn on bucket versioning instead of copying chunks. Nothing here
+The database copy is made with SQLite's `VACUUM INTO`, which is safe while the server runs. What a chunk stands for never changes, so each
+run copies only chunk files that are not already in the backup (repacking may later keep a chunk in a smaller form; the older copy in the
+backup is then an equally valid form of the same chunk). With R2, turn on bucket versioning instead of copying chunks. Nothing here
 encrypts the backup; put it somewhere you already protect.
 
 ## Restoring
@@ -100,7 +101,12 @@ Stop the API first, then:
 ```sh
 npm run restore -- data/backups/db/craton-<time>.db
 npm run restore -- <file> --chunks data/backups/chunks    # also copy missing chunk files back
+npm run fsck -- --repair                                  # then check it, and put right anything the backup caught half way
 ```
+
+A backup taken while repacking or the cold tier was running can hold a chunk file that is newer than its database snapshot. The chunk
+file is the truth; `npm run fsck -- --repair` reads every rewritten chunk and puts back the database rows that say what it is built on, so
+`npm run gc` keeps those chunks, then verifies the whole store.
 
 The database being replaced is kept next to it as `craton.db.before-restore-<time>`, so a mistaken restore can itself
 be undone. Practise it once on a copy before you need it.
