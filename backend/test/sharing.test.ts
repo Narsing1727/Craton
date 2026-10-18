@@ -12,7 +12,7 @@ import type { Ctx } from "../src/services/context.ts";
 import { getRepoFor } from "../src/services/repos.ts";
 import { commitFiles } from "../src/dev/push.ts";
 import { geotiff } from "../src/dev/fixtures.ts";
-import * as limits from "../src/api/limits.ts";
+import * as guards from "../src/api/guards.ts";
 
 let ctx: Ctx;
 let app: ReturnType<typeof createApp>;
@@ -152,7 +152,7 @@ test("the link opens only its own repository: it can't be used to read another's
 });
 
 test("expired, revoked, invented and malformed tokens all answer the same way", async () => {
-  limits.clear("share-miss:local");
+  await guards.clear(ctx.db, "share-miss:local");
   const second = (await call("POST", "/repos/rhea/basin/share-links", "rhea", { expiresInDays: 1 })).json;
   await ctx.db.run("UPDATE share_links SET expires_at = ? WHERE id = ?", new Date(Date.now() - 1000).toISOString(), second.id);
   const third = (await call("POST", "/repos/rhea/basin/share-links", "rhea", { expiresInDays: 30 })).json;
@@ -172,17 +172,17 @@ test("expired, revoked, invented and malformed tokens all answer the same way", 
 });
 
 test("guessing tokens is throttled", async () => {
-  limits.clear("share-miss:local");
+  await guards.clear(ctx.db, "share-miss:local");
   let last = 0;
   for (let i = 0; i < 40; i++) last = (await anon(`/shared/bcn_share_${crypto.randomBytes(24).toString("base64url")}`)).status;
   assert.equal(last, 429);
   assert.equal((await anon(`/shared/${link.token}`)).status, 429, "while throttled, even a good link waits");
-  limits.clear("share-miss:local");
+  await guards.clear(ctx.db, "share-miss:local");
   assert.equal((await anon(`/shared/${link.token}`)).status, 200);
 });
 
 test("a repository can have twenty active links, and deleting the repository removes them", async () => {
-  limits.clear("share-miss:local");
+  await guards.clear(ctx.db, "share-miss:local");
   const before = (await call("GET", "/repos/rhea/basin/share-links", "rhea")).json.links.filter((l: any) => l.active).length;
   for (let i = before; i < 20; i++) assert.equal((await call("POST", "/repos/rhea/basin/share-links", "rhea", { expiresInDays: 1 })).status, 201);
   assert.match((await call("POST", "/repos/rhea/basin/share-links", "rhea", { expiresInDays: 1 })).json.error.message, /up to 20 active/);

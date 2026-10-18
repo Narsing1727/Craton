@@ -43,7 +43,8 @@ export async function sendDue(ctx: Ctx, at: Date = new Date()): Promise<number> 
   for (const u of due) {
     const since = u.digest_sent_at ?? cutoff;
     const items = (await listInbox(ctx, { id: u.owner_id, handle: u.handle }, { view: "inbox", limit: 200 })).items.filter((i) => !i.read && i.at > since);
-    await ctx.db.run("UPDATE users SET digest_sent_at = ? WHERE owner_id = ?", at.toISOString(), u.owner_id);
+    // Take the person's turn in one step: of several servers running this at once, only one changes the stamp, and only that one sends.
+    if (!(await ctx.db.run("UPDATE users SET digest_sent_at = ? WHERE owner_id = ? AND digest_sent_at IS NOT DISTINCT FROM ?", at.toISOString(), u.owner_id, u.digest_sent_at)).changes) continue;
     if (!items.length) continue;
     const mentions = items.filter((i) => i.reason === "mention").length;
     await sendDigestEmail(

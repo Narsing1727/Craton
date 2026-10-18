@@ -15,6 +15,7 @@ import { ApiError, badRequest, notFound } from "../services/context.ts";
 import * as accounts from "../services/accounts.ts";
 import * as scim from "../services/scim.ts";
 import * as saml from "../services/saml.ts";
+import * as guards from "./guards.ts";
 import * as repos from "../services/repos.ts";
 import { datasetJsonLd } from "../services/dataset.ts";
 import * as chunks from "../services/chunks.ts";
@@ -389,19 +390,19 @@ export function createApp(ctx: Ctx) {
     const login = (b.login ?? "").trim().toLowerCase();
     limit(c, `login:${clientIp(c)}`, { ...config.limits.login, max: config.limits.login.max * 5 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     // Lock one account after repeated failures, whoever is trying.
-    if (limits.count(`fail:${login}`, config.limits.lockout) >= config.limits.lockout.max) {
+    if (await guards.count(ctx.db, `fail:${login}`, config.limits.lockout) >= config.limits.lockout.max) {
       throw new ApiError(429, "account_locked", "Too many failed sign-ins for this account. Wait 15 minutes, or reset your password.");
     }
     let id: number;
     try {
       id = await accounts.checkPassword(ctx, login, b.password ?? "");
     } catch (err) {
-      limits.take(`fail:${login}`, config.limits.lockout);
+      await guards.take(ctx.db, `fail:${login}`, config.limits.lockout);
       const who = await accounts.findUserId(ctx, login);
       if (who) await securitylog.record(ctx, who, "sign_in_failed", { detail: "wrong password", ...clientInfo(c) });
       throw err;
     }
-    limits.clear(`fail:${login}`);
+    await guards.clear(ctx.db, `fail:${login}`);
     await sso.assertMethodAllowed(ctx, id, "password");
     // With two-step verification on, the password only earns a short-lived ticket; the session
     // comes after the code (POST /auth/login/2fa).
@@ -431,15 +432,15 @@ export function createApp(ctx: Ctx) {
     const who = await twofactor.ticketUser(ctx, b.ticket);
     const budget = { max: 10, windowMs: 15 * 60_000 };
     // Across tickets, one account only gets so many code guesses.
-    if (who && limits.count(`mfa:${who}`, budget) >= budget.max) {
+    if (who && await guards.count(ctx.db, `mfa:${who}`, budget) >= budget.max) {
       throw new ApiError(429, "account_locked", "Too many wrong codes for this account. Wait 15 minutes, or sign in with a recovery code later.");
     }
     try {
       const done = await twofactor.finishLogin(ctx, b.ticket, b.code);
-      limits.clear(`mfa:${done.userId}`);
+      await guards.clear(ctx.db, `mfa:${done.userId}`);
       return await signedIn(c, done.userId);
     } catch (err) {
-      if (who && err instanceof ApiError && err.code === "invalid_code") limits.take(`mfa:${who}`, budget);
+      if (who && err instanceof ApiError && err.code === "invalid_code") await guards.take(ctx.db, `mfa:${who}`, budget);
       throw err;
     }
   });
@@ -1428,11 +1429,11 @@ export function createApp(ctx: Ctx) {
   const guessing = { max: 30, windowMs: 10 * 60_000 };
   async function shared<T>(c: Context<Env>, work: () => T | Promise<T>): Promise<T> {
     const key = `share-miss:${clientIp(c)}`;
-    if (limits.count(key, guessing) >= guessing.max) throw new ApiError(429, "rate_limited", "Too many links tried from this network. Wait a few minutes.");
+    if (await guards.count(ctx.db, key, guessing) >= guessing.max) throw new ApiError(429, "rate_limited", "Too many links tried from this network. Wait a few minutes.");
     try {
       return await work();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) limits.take(key, guessing);
+      if (err instanceof ApiError && err.status === 404) await guards.take(ctx.db, key, guessing);
       throw err;
     }
   }

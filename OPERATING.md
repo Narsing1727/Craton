@@ -107,6 +107,22 @@ lock, so several API processes starting together do not collide; the version is 
   kept, moves the counters past them, and checks each table's row count. It refuses a target that already has data unless you add
   `--force`. It never changes the SQLite file.
 
+## Running several servers
+
+Behind a load balancer, any number of API servers can share one database and one chunk store (S3 or R2: a local data folder belongs to one machine). What is shared, through the database, and therefore correct however many servers there are:
+
+- accounts, sessions, tokens, every repository's data, issue and pull request numbers, branch moves (a push that lost a race is told its branch moved);
+- the failed-password lockout, the two-step code budget and the share-link guessing budget (`rate_hits`), so an attacker gains nothing by spreading guesses over servers;
+- webhook deliveries (each is leased to one server while it is being sent, and comes due again if that server dies) and the weekly digest (each person's turn is taken once).
+
+What is per server, and what to do about it:
+
+- the general request limits, the idempotency-key cache and the preview and tile caches live in each server's memory: the limits are "slow down" limits, so put a rate limit on the load balancer too if you want one for the whole site;
+- the cold tier (`CRATON_RECODE`) and `npm run repack` / `recode` / `gc` are maintenance work: run them on one server (or from one machine) at a time;
+- the development email outbox is a folder on the machine; configure a real email provider for more than one server.
+
+Every server runs the schema migrations when it starts, one at a time (a lock in the database), so start one, then the others, when upgrading; do not run an old and a new version together while a migration is pending.
+
 ## Backups
 
 ```sh

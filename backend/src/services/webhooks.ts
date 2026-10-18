@@ -342,10 +342,24 @@ async function attempt(ctx: Ctx, d: DueRow) {
 }
 
 /** Send everything that is due. Safe to call from a timer and from emit() at once. */
+/** How long a server holds a delivery it is sending before another may take it. */
+const LEASE_MS = 3 * 60_000;
+
 export async function deliverDue(ctx: Ctx) {
-  const due = await ctx.db.all(`SELECT d.id, d.webhook_id, d.event, d.message_id, d.payload, d.attempt, w.url, w.secret, w.format, o.handle AS owner, r.name AS repo_name
+  // Claim a batch: each delivery is leased to this server for a few minutes (its due time is pushed out), so another server doing
+  // the same sweep skips it. A delivery that finishes sets its own next time; one whose server died comes due again after the lease.
+  const claimed = await ctx.db.all<{ id: number }>(
+    `UPDATE webhook_deliveries SET next_attempt_at = ?
+      WHERE id IN (SELECT id FROM webhook_deliveries WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT 25 FOR UPDATE SKIP LOCKED)
+      RETURNING id`,
+    new Date(Date.now() + LEASE_MS).toISOString(),
+    now(),
+  );
+  const due = claimed.length
+    ? (await ctx.db.all(`SELECT d.id, d.webhook_id, d.event, d.message_id, d.payload, d.attempt, w.url, w.secret, w.format, o.handle AS owner, r.name AS repo_name
        FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id JOIN repos r ON r.id = w.repo_id JOIN owners o ON o.id = r.owner_id
-       WHERE d.status = 'pending' AND d.next_attempt_at <= ? ORDER BY d.id LIMIT 25`, now()) as DueRow[];
+       WHERE d.id IN (${claimed.map(() => "?").join(",")}) ORDER BY d.id`, ...claimed.map((c) => c.id))) as DueRow[]
+    : [];
   await Promise.all(
     due
       .filter((d) => !inflight.has(d.id))

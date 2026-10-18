@@ -12,6 +12,7 @@ import { decryptSecret, encryptSecret } from "../src/services/secrets.ts";
 import { sentEmails } from "../src/services/email.ts";
 import { clock } from "../src/services/twofactor.ts";
 import * as limits from "../src/api/limits.ts";
+import * as guards from "../src/api/guards.ts";
 
 // ── The maths ──────────────────────────────────────────────────────────────
 
@@ -195,7 +196,7 @@ test("wrong codes use up a ticket's tries, then it dies even for the right code"
   tick();
   const right = await call("POST", "/auth/login/2fa", null, { ticket: t, code: codeNow(secret) });
   assert.equal(right.json.error.code, "invalid_ticket", "the ticket is gone");
-  limits.clear(`mfa:${(await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number }).id}`);
+  await guards.clear(ctx.db, `mfa:${(await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number }).id}`);
 });
 
 test("a recovery code signs in once and is then spent; the count goes down", async () => {
@@ -211,7 +212,7 @@ test("a recovery code signs in once and is then spent; the count goes down", asy
 
 test("an account is locked out of code guessing across tickets", async () => {
   const id = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number }).id;
-  limits.clear(`mfa:${id}`);
+  await guards.clear(ctx.db, `mfa:${id}`);
   let locked: any;
   for (let i = 0; i < 12 && !locked; i++) {
     const t = (await login("rhea")).json.ticket;
@@ -220,7 +221,7 @@ test("an account is locked out of code guessing across tickets", async () => {
   }
   assert.ok(locked, "after enough wrong codes the account stops accepting guesses");
   assert.equal(locked.status, 429);
-  limits.clear(`mfa:${id}`);
+  await guards.clear(ctx.db, `mfa:${id}`);
 });
 
 test("changing anything needs the password and a current code; access tokens cannot touch it", async () => {

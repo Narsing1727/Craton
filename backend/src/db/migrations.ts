@@ -45,4 +45,12 @@ export const MIGRATIONS: string[] = [
     expires_at TEXT NOT NULL
   );
   `,
+  // 4: guess limits that hold across several servers (guards.ts).
+  `
+  CREATE TABLE rate_hits (
+    key TEXT NOT NULL,
+    hit_at BIGINT NOT NULL
+  );
+  CREATE INDEX rate_hits_key ON rate_hits (key, hit_at);
+  `,
 ];
