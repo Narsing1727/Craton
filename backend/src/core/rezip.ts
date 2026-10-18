@@ -19,11 +19,14 @@ export function deflateWith(raw: Uint8Array, p: DeflateParams): Buffer {
   return Buffer.from(out.buffer, out.byteOffset, out.byteLength);
 }
 
-/** The bytes a zlib stream decompresses to, or null when it is not one, or has anything after its end. */
+/** The most a single tile or chunk may decompress to. Real tiles are a few megabytes; a stream of a few kilobytes that claims a gigabyte is an attack on the server's memory, and is left as uploaded. */
+export const MAX_INFLATED = 128 * 1024 * 1024;
+
+/** The bytes a zlib stream decompresses to, or null when it is not one, is larger than `MAX_INFLATED`, or has anything after its end. */
 export function inflateExact(stream: Buffer): Buffer | null {
   if (stream.length < 6 || (stream[0] & 0x0f) !== 8 || ((stream[0] << 8) | stream[1]) % 31 !== 0 || (stream[1] & 0x20) !== 0) return null;
   try {
-    return zlib.inflateSync(stream, { finishFlush: zlib.constants.Z_SYNC_FLUSH, maxOutputLength: 1 << 30 });
+    return zlib.inflateSync(stream, { finishFlush: zlib.constants.Z_SYNC_FLUSH, maxOutputLength: MAX_INFLATED });
   } catch {
     return null;
   }

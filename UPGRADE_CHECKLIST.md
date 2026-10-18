@@ -412,6 +412,12 @@ Not done: NetCDF 4 / HDF5 written with the newest layout (version 4 chunk indexe
 | 220 | **`npm run fsck -- --repair`** puts right the database after a restore from a backup that caught repacking half way (a chunk file newer than its database snapshot): it reads each chunk kept as a difference or as pieces of tiles and restores the rows that say what it is built on, its form and size, and the tiles it names, so garbage collection keeps them (otherwise a tile that looks unused would be removed). Restoring then running it gives exactly the rows that were there before | `backend/test/fsck.test.ts` (the last test deletes those rows, repairs, compares every row, and shows `npm run gc` then removes no tile) |
 | 219 | `npm run fsck` (and `-- --quick`) verifies the entire store in one go: every chunk decodes (also when kept as a difference or as pieces of tiles) and hashes to its name, stored differences' bases and cold tiles are present and rebuild exactly, each file's chunks are all there and add up, each commit's Merkle root matches its tree, and the database's idea of each chunk's form matches its bytes. Changes nothing; exit code 1 on any problem; names what is wrong. Run on the real data here: 158 chunks, 61 files, 47 commits, all fine | OPERATING.md → Checking the whole store; `backend/test/fsck.test.ts` (5: a clean store with every form, then each kind of damage) |
 
+### 33. Hardening of the new storage code
+
+| # | What it does | How to check |
+|---|---|---|
+| 221 | A compressed tile or HDF5 chunk that claims to expand to more than 128 MB (a few kilobytes can) is left as uploaded instead of being inflated, and a file with more than 250,000 compressed pieces is not recoded (a hostile file could otherwise keep the cold tier busy for ever, or fill its memory) | `backend/test/rezip.test.ts` (a 129 MB stream of zeros that is only a few KB) |
+
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.

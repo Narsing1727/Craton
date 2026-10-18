@@ -67,3 +67,13 @@ test("things that are not DEFLATE TIFFs give nothing", async () => {
   damaged.writeUInt32LE(damaged.length + 100, 4); // the first directory points outside the file
   assert.deepEqual((await deflateSegments(reader(damaged), damaged.length)) ?? [], [], "nothing is trusted");
 });
+
+test("a stream that claims to expand to more than a tile can is refused, not inflated", async () => {
+  const { MAX_INFLATED } = await import("../src/core/rezip.ts");
+  const zlibNode = (await import("node:zlib")).default;
+  const small = zlibNode.deflateSync(Buffer.alloc(1024 * 1024, 5));
+  assert.equal(inflateExact(small)!.length, 1024 * 1024, "an ordinary tile is fine");
+  const bomb = zlibNode.deflateSync(Buffer.alloc(MAX_INFLATED + 1024 * 1024, 0));
+  assert.ok(bomb.length < 400 * 1024, `the stream itself is only ${bomb.length} bytes`);
+  assert.equal(inflateExact(bomb), null, "but it would fill the server's memory, so it is left as uploaded");
+});

@@ -33,6 +33,8 @@ const CHUNK_WORTH = 0.9;
 const KEYFRAME_MAX = 1.15;
 const KEYFRAME_NEXT_SHARE = 0.15;
 const SMALLEST_FILE = 64 * 1024;
+/** A file with more compressed pieces than this is left as uploaded: each one is read, checked and recorded, which a hostile file could make endless. */
+const MAX_PIECES_PER_FILE = 250_000;
 
 export type RecodeResult = { tiles: number; reused: number; chunks: number; savedBytes: number; files: number };
 const none = (): RecodeResult => ({ tiles: 0, reused: 0, chunks: 0, savedBytes: 0, files: 0 });
@@ -47,7 +49,7 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
   if (blob.size < SMALLEST_FILE) return result;
   const reader = new Window(ctx, blob);
   const segments = await compressedSegments((o, l) => reader.read(o, l), blob.size);
-  if (!segments?.length) return result;
+  if (!segments?.length || segments.length > MAX_PIECES_PER_FILE) return result;
 
   const starts: number[] = [];
   let at = 0;
