@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
-import { config, r2Enabled } from "../src/config.ts";
+import { config, objectStoreEnabled } from "../src/config.ts";
 import { createContext } from "../src/services/context.ts";
 import { dumpDatabase } from "../src/db/dump.ts";
 
@@ -60,7 +60,7 @@ if (bad.length) {
 }
 
 let copied = 0;
-if (!r2Enabled()) {
+if (!objectStoreEnabled()) {
   const src = path.join(config.dataDir, "chunks");
   const dst = path.join(target, "chunks");
   const walk = (dir: string): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)])) : []);
@@ -81,4 +81,4 @@ const p = summary.perTable;
 await ctx.db.close();
 console.log(`Backed up to ${out}`);
 console.log(`  ${p.repos ?? 0} repositories, ${p.commits ?? 0} commits, ${p.chunks ?? 0} chunks; ${summary.rows} rows in ${summary.tables} tables (read back and counted)`);
-console.log(r2Enabled() ? "  Chunks are in R2: keep bucket versioning on." : `  ${copied} new chunk files copied to ${path.join(target, "chunks")}`);
+console.log(objectStoreEnabled() ? "  Chunks are in the object store (R2 or S3): keep bucket versioning on." : `  ${copied} new chunk files copied to ${path.join(target, "chunks")}`);

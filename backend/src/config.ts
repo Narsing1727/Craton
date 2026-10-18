@@ -55,6 +55,8 @@ export const config = {
     url: env.CRATON_DATABASE_URL ?? env.DATABASE_URL ?? "",
     caFile: env.CRATON_DB_CA ?? "",
     poolMax: Math.max(1, Math.min(200, Math.floor(Number(env.CRATON_DB_POOL_MAX ?? 10)) || 10)),
+    /** A statement that runs longer than this is cancelled by the server (0 turns it off). Stops one runaway query holding a connection. */
+    statementTimeoutMs: Math.max(0, Math.floor(Number(env.CRATON_DB_STATEMENT_TIMEOUT_MS ?? 120_000)) || 0),
   },
   /** Where the web app lives, for links the API writes (password reset). */
   webUrl: (env.CRATON_WEB_URL ?? "http://localhost:3100").replace(/\/+$/, ""),
@@ -186,6 +188,23 @@ export const config = {
     secretAccessKey: env.R2_SECRET_ACCESS_KEY ?? "",
     bucket: env.R2_BUCKET ?? "",
   },
+
+  /**
+   * Amazon S3 (or an S3-compatible service with its own endpoint). When the bucket and region are set, chunks are stored there instead
+   * of on disk. Without access keys the process uses the role of the ECS task or EC2 instance it runs on.
+   */
+  s3: {
+    bucket: env.CRATON_S3_BUCKET ?? "",
+    region: env.CRATON_S3_REGION ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "",
+    endpoint: env.CRATON_S3_ENDPOINT ?? "",
+    prefix: env.CRATON_S3_PREFIX ?? "",
+    accessKeyId: env.CRATON_S3_ACCESS_KEY_ID ?? env.AWS_ACCESS_KEY_ID ?? "",
+    secretAccessKey: env.CRATON_S3_SECRET_ACCESS_KEY ?? env.AWS_SECRET_ACCESS_KEY ?? "",
+    sessionToken: env.AWS_SESSION_TOKEN ?? "",
+  },
 } as const;
 
 export const r2Enabled = () => Boolean(config.r2.accountId && config.r2.accessKeyId && config.r2.secretAccessKey && config.r2.bucket);
+export const s3Enabled = () => Boolean(config.s3.bucket && config.s3.region);
+/** Chunks live in an object store (R2 or S3) rather than on this machine's disk. */
+export const objectStoreEnabled = () => r2Enabled() || s3Enabled();

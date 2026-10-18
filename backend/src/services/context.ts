@@ -4,18 +4,21 @@ import { openDb } from "../db/db.ts";
 import type { ChunkStore } from "../storage/chunk-store.ts";
 import { FsStore } from "../storage/fs-store.ts";
 import { R2Store } from "../storage/r2-store.ts";
-import { config, r2Enabled } from "../config.ts";
+import { S3Store } from "../storage/s3-store.ts";
+import { config, r2Enabled, s3Enabled } from "../config.ts";
 
 /** Everything a service needs: the database and the chunk byte store. */
 export type Ctx = { db: DB; store: ChunkStore };
 
 export async function createContext(opts?: { database?: string; store?: ChunkStore }): Promise<Ctx> {
-  const db = await openDb(opts?.database ?? (config.database.url || `pglite:${path.join(config.dataDir, "pgdata")}`), { poolMax: config.database.poolMax, caFile: config.database.caFile || undefined });
+  const db = await openDb(opts?.database ?? (config.database.url || `pglite:${path.join(config.dataDir, "pgdata")}`), { poolMax: config.database.poolMax, caFile: config.database.caFile || undefined, statementTimeoutMs: config.database.statementTimeoutMs });
   const store =
     opts?.store ??
     (r2Enabled()
       ? new R2Store({ ...config.r2 })
-      : new FsStore(path.join(config.dataDir, "chunks")));
+      : s3Enabled()
+        ? new S3Store({ ...config.s3, endpoint: config.s3.endpoint || undefined, sessionToken: config.s3.sessionToken || undefined })
+        : new FsStore(path.join(config.dataDir, "chunks")));
   return { db, store };
 }
 

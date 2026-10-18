@@ -38,6 +38,26 @@ export function statement(db: Queryable, sql: string) {
   };
 }
 
+/**
+ * Insert many rows with as few statements as possible (one round trip per few thousand rows instead of one per row, which is what a
+ * database across a network needs). `suffix` is what follows the VALUES, by default skipping rows that already exist.
+ */
+export async function insertMany(db: Queryable, table: string, columns: string[], rows: Param[][], suffix = "ON CONFLICT DO NOTHING") {
+  const per = Math.max(1, Math.floor(20_000 / columns.length));
+  const one = `(${columns.map(() => "?").join(", ")})`;
+  for (let i = 0; i < rows.length; i += per) {
+    const slice = rows.slice(i, i + per);
+    await db.run(`INSERT INTO ${table} (${columns.join(", ")}) VALUES ${slice.map(() => one).join(", ")} ${suffix}`, ...slice.flat());
+  }
+}
+
+/** Run `fn` over `items` in groups, for `IN (?, ?, ...)` lists that must not grow without limit. */
+export async function inGroups<T, R>(items: T[], size: number, fn: (group: T[]) => Promise<R[]>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += size) out.push(...(await fn(items.slice(i, i + size))));
+  return out;
+}
+
 export interface DB extends Queryable {
   readonly kind: "postgres" | "pglite";
   /**
@@ -229,7 +249,28 @@ async function migrate(db: DB) {
   });
 }
 
-export type OpenOptions = { poolMax?: number; caFile?: string };
+export type OpenOptions = { poolMax?: number; caFile?: string; statementTimeoutMs?: number };
+
+/**
+ * Settings every server connection gets. A connection that the database drops while idle (an RDS failover, a restart, a network
+ * cut) reports on the pool, not on a query: without a listener Node would stop the whole process, so it is logged and the pool
+ * simply opens another connection when one is next needed.
+ */
+function poolFor(target: string, opts: OpenOptions, extra: Partial<pg.PoolConfig> = {}) {
+  const ca = opts.caFile ? fs.readFileSync(opts.caFile, "utf8") : undefined;
+  const pool = new pg.Pool({
+    connectionString: target,
+    max: opts.poolMax ?? 10,
+    connectionTimeoutMillis: 15_000,
+    idleTimeoutMillis: 30_000,
+    keepAlive: true,
+    ...(opts.statementTimeoutMs ? { statement_timeout: opts.statementTimeoutMs } : {}),
+    ...(ca ? { ssl: { ca, rejectUnauthorized: true } } : {}),
+    ...extra,
+  });
+  pool.on("error", (err) => console.error(`database connection lost (a new one will be opened when needed): ${err.message}`));
+  return pool;
+}
 
 /**
  * Open a database and bring its schema up to date.
@@ -249,7 +290,7 @@ export async function openDb(target: string, opts: OpenOptions = {}): Promise<DB
     await admin.query("SELECT pg_advisory_unlock(726602)");
     await admin.query(`CREATE SCHEMA ${schema}`);
     await admin.end();
-    const pool = new pg.Pool({ connectionString: testServer, max: opts.poolMax ?? 10, options: `-c search_path=${schema},public` });
+    const pool = poolFor(testServer, opts, { options: `-c search_path=${schema},public` });
     const db = new PgDb(pool, async () => {
       const drop = new pg.Pool({ connectionString: testServer, max: 1 });
       await drop.query(`DROP SCHEMA ${schema} CASCADE`).catch(() => undefined);
@@ -259,13 +300,7 @@ export async function openDb(target: string, opts: OpenOptions = {}): Promise<DB
     return db;
   }
   if (/^postgres(ql)?:\/\//i.test(target)) {
-    const ca = opts.caFile ? fs.readFileSync(opts.caFile, "utf8") : undefined;
-    const pool = new pg.Pool({
-      connectionString: target,
-      max: opts.poolMax ?? 10,
-      ...(ca ? { ssl: { ca, rejectUnauthorized: true } } : {}),
-    });
-    const db = new PgDb(pool);
+    const db = new PgDb(poolFor(target, opts));
     await migrate(db);
     return db;
   }

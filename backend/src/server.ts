@@ -30,3 +30,17 @@ if ("keepAliveTimeout" in server) {
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
 }
+
+// Stop taking requests, let the ones in flight finish, then close the database connections (Ctrl-C, or a platform stopping the container).
+let stopping = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`${signal}: shutting down`);
+    const force = setTimeout(() => process.exit(1), 15_000);
+    force.unref();
+    server.close(() => void ctx.db.close().finally(() => process.exit(0)));
+    if ("closeIdleConnections" in server) server.closeIdleConnections();
+  });
+}

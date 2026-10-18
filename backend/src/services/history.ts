@@ -2,9 +2,9 @@
 // it recomputes them, and every chunk a blob names must already be in a scope the push may use.
 
 import { filterAsync } from "../core/async.ts";
-import { statement } from "../db/db.ts";
+import { inGroups, insertMany } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
-import { badRequest, conflict, isUnique, notFound } from "./context.ts";
+import { badRequest, conflict, inTransaction, isUnique, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { repoScope } from "./repos.ts";
 import { missingChunks } from "./chunks.ts";
@@ -28,7 +28,17 @@ async function hasObject(ctx: Ctx, repo: RepoRow, id: string) {
 
 /** Which of `ids` does the repository not have yet (so the client knows what to send)? */
 export async function missingObjects(ctx: Ctx, repo: RepoRow, ids: string[]) {
-  return (await filterAsync([...new Set(ids)], async (id) => !await hasObject(ctx, repo, id)));
+  const wanted = [...new Set(ids)];
+  const have = new Set((await inGroups(wanted, 500, (group) => ctx.db.all<{ object_id: string }>(`SELECT object_id FROM repo_objects WHERE repo_id = ? AND object_id IN (${group.map(() => "?").join(",")})`, repo.id, ...group))).map((r) => r.object_id));
+  return wanted.filter((id) => !have.has(id));
+}
+
+/** The objects of this repository among `ids`, with their bodies, in a few queries rather than one each. */
+async function objectsAmong(ctx: Ctx, repo: RepoRow, ids: string[]) {
+  const rows = await inGroups([...new Set(ids)], 500, (group) =>
+    ctx.db.all<{ id: string; type: string; body: string }>(`SELECT o.id, o.type, o.body FROM objects o JOIN repo_objects ro ON ro.object_id = o.id WHERE ro.repo_id = ? AND o.id IN (${group.map(() => "?").join(",")})`, repo.id, ...group),
+  );
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
 /** Validate and store pushed objects (blobs, then trees, then commits). */
@@ -39,8 +49,24 @@ export async function registerObjects(ctx: Ctx, repo: RepoRow, objects: unknown[
   });
   const batch = new Map<string, CratonObject>();
   for (const o of parsed) batch.set(objectId(o), o);
-  const known = async (id: string) => batch.has(id) || await hasObject(ctx, repo, id);
-  const lookup = async <T extends CratonObject>(id: string, type: T["type"]): Promise<T> => (batch.get(id) as T | undefined) ?? await getObject<T>(ctx, repo, id, type);
+  // Everything the pushed trees and commits point at that is not in this push is looked up once, here.
+  const referenced: string[] = [];
+  for (const o of parsed) {
+    if (o.type === "tree" && Array.isArray(o.entries)) for (const e of o.entries) if (typeof e?.blob === "string") referenced.push(e.blob);
+    if (o.type === "commit") {
+      if (typeof o.tree === "string") referenced.push(o.tree);
+      if (Array.isArray(o.parents)) referenced.push(...o.parents);
+    }
+  }
+  const existing = await objectsAmong(ctx, repo, referenced.filter((id) => !batch.has(id)));
+  const known = async (id: string) => batch.has(id) || existing.has(id);
+  const lookup = async <T extends CratonObject>(id: string, type: T["type"]): Promise<T> => {
+    const pushed = batch.get(id) as T | undefined;
+    if (pushed) return pushed;
+    const row = existing.get(id);
+    if (!row || row.type !== type) throw notFound(`${type} ${id.slice(0, 7)}`);
+    return JSON.parse(row.body) as T;
+  };
 
   // Blobs: sizes add up, every chunk is available to this repository.
   const blobs = parsed.filter((o): o is BlobObject => o.type === "blob");
@@ -75,26 +101,18 @@ export async function registerObjects(ctx: Ctx, repo: RepoRow, objects: unknown[
     }
   }
 
-  const insertObject = statement(ctx.db, "INSERT INTO objects (id, type, body) VALUES (?, ?, ?) ON CONFLICT DO NOTHING");
-  const link = statement(ctx.db, "INSERT INTO repo_objects (repo_id, object_id) VALUES (?, ?) ON CONFLICT DO NOTHING");
-  const repoChunk = statement(ctx.db, "INSERT INTO repo_chunks (repo_id, hash) VALUES (?, ?) ON CONFLICT DO NOTHING");
-  const scope = statement(ctx.db, "INSERT INTO chunk_scopes (hash, scope) VALUES (?, ?) ON CONFLICT DO NOTHING");
-  const commitRow = statement(ctx.db, "INSERT INTO commits (repo_id, id, tree, parents, author, message, timestamp, merkle_root) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING");
-  const stored: string[] = [];
-  for (const [id, o] of batch) {
-    await insertObject.run(id, o.type, canonicalJson(o));
-    await link.run(repo.id, id);
-    stored.push(id);
-    if (o.type === "blob") {
-      for (const c of o.chunks) {
-        await repoChunk.run(repo.id, c.hash);
-        await scope.run(c.hash, repoScope(repo));
-      }
-    }
-    if (o.type === "commit") {
-      await commitRow.run(repo.id, id, o.tree, JSON.stringify(o.parents), o.author, o.message, o.timestamp, o.merkleRoot);
-    }
-  }
+  // The writes go in together, a few thousand rows to a statement, or not at all.
+  const scopeOf = repoScope(repo);
+  const stored = [...batch.keys()];
+  await inTransaction(ctx, async (c) => {
+    await insertMany(c.db, "objects", ["id", "type", "body"], [...batch].map(([id, o]) => [id, o.type, canonicalJson(o)]));
+    await insertMany(c.db, "repo_objects", ["repo_id", "object_id"], stored.map((id) => [repo.id, id]));
+    const hashes = [...new Set([...batch.values()].flatMap((o) => (o.type === "blob" ? o.chunks.map((ch) => ch.hash) : [])))];
+    await insertMany(c.db, "repo_chunks", ["repo_id", "hash"], hashes.map((h) => [repo.id, h]));
+    await insertMany(c.db, "chunk_scopes", ["hash", "scope"], hashes.map((h) => [h, scopeOf]));
+    const commits = [...batch].filter((entry): entry is [string, CommitObject] => entry[1].type === "commit");
+    await insertMany(c.db, "commits", ["repo_id", "id", "tree", "parents", "author", "message", "timestamp", "merkle_root"], commits.map(([id, o]) => [repo.id, id, o.tree, JSON.stringify(o.parents), o.author, o.message, o.timestamp, o.merkleRoot]));
+  });
   return { stored };
 }
 
