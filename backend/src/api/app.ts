@@ -1189,9 +1189,9 @@ export function createApp(ctx: Ctx) {
     let readme: string | null = null;
     const tip = branches.find((b) => b.name === repo.default_branch)?.commit_id;
     if (tip) {
-      const log = await history.listCommits(ctx, repo, tip, 10_000);
-      commitCount = log.length;
-      head = history.commitJson(log[0]);
+      const [newest] = await history.listCommits(ctx, repo, tip, 1);
+      commitCount = await history.countCommits(ctx, repo, tip);
+      head = history.commitJson(newest);
       readme = await files.readmeAt(ctx, repo, tip);
     }
     return c.json({ ...repos.repoJson(repo), access: await accounts.repoAccess(ctx, repo, c.get("user")?.id ?? null), starred: await social.hasStarred(ctx, repo, c.get("user")?.id ?? null), branchCount: branches.length, commitCount, head, readme, ...(await collab.openCounts(ctx, repo)) });

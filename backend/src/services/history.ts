@@ -134,53 +134,49 @@ export async function resolveRef(ctx: Ctx, repo: RepoRow, ref: string): Promise<
   throw notFound(`Ref ${ref}`);
 }
 
-async function parentsOf(ctx: Ctx, repo: RepoRow, id: string): Promise<string[]> {
-  const row = await ctx.db.get("SELECT parents FROM commits WHERE repo_id = ? AND id = ?", repo.id, id) as { parents: string } | undefined;
-  return row ? (JSON.parse(row.parents) as string[]) : [];
-}
+/**
+ * Walking a history is done by the database, in one statement: a commit's parents are in its row, and asking for them one commit at a
+ * time costs a round trip each, which for a few thousand commits is seconds. `reach(start)` is the set of commits reachable from `start`
+ * (itself included); `stop` is the name of another such set that the walk does not go into.
+ */
+const reach = (name: string, startParam = "CAST(? AS TEXT)", stop?: string) =>
+  `${name}(id) AS (
+     SELECT ${startParam}${stop ? ` WHERE ${startParam} NOT IN (SELECT id FROM ${stop})` : ""}
+     UNION
+     SELECT p.value FROM ${name} w JOIN commits c ON c.repo_id = ? AND c.id = w.id CROSS JOIN LATERAL jsonb_array_elements_text(c.parents::jsonb) AS p(value)
+     ${stop ? `WHERE p.value NOT IN (SELECT id FROM ${stop})` : ""}
+   )`;
 
 export async function ancestors(ctx: Ctx, repo: RepoRow, from: string): Promise<Set<string>> {
-  const seen = new Set<string>();
-  const queue = [from];
-  while (queue.length) {
-    const id = queue.shift()!;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    queue.push(...await parentsOf(ctx, repo, id));
-  }
-  return seen;
+  const rows = await ctx.db.all<{ id: string }>(`WITH RECURSIVE ${reach("walk")} SELECT id FROM walk`, from, repo.id);
+  return new Set(rows.map((r) => r.id));
 }
 
 /** The commits reachable from `to` that are not reachable from `from` (all of them when `from` is null), newest first. */
 export async function commitsBetween(ctx: Ctx, repo: RepoRow, from: string | null, to: string): Promise<string[]> {
-  const known = from ? await ancestors(ctx, repo, from) : new Set<string>();
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const queue = [to];
-  while (queue.length) {
-    const id = queue.shift()!;
-    if (seen.has(id) || known.has(id)) continue;
-    seen.add(id);
-    out.push(id);
-    queue.push(...await parentsOf(ctx, repo, id));
-  }
-  return out;
+  const sql = from
+    ? `WITH RECURSIVE ${reach("known")}, ${reach("walk", "CAST(? AS TEXT)", "known")} SELECT w.id FROM walk w LEFT JOIN commits c ON c.repo_id = ? AND c.id = w.id ORDER BY c.timestamp DESC NULLS LAST, w.id`
+    : `WITH RECURSIVE ${reach("walk")} SELECT w.id FROM walk w LEFT JOIN commits c ON c.repo_id = ? AND c.id = w.id ORDER BY c.timestamp DESC NULLS LAST, w.id`;
+  const params = from ? [from, repo.id, to, to, repo.id, repo.id] : [to, repo.id, repo.id];
+  return (await ctx.db.all<{ id: string }>(sql, ...params)).map((r) => r.id);
 }
 
-export const isAncestor = async (ctx: Ctx, repo: RepoRow, maybeAncestor: string, of: string) => (await ancestors(ctx, repo, of)).has(maybeAncestor);
+export const isAncestor = async (ctx: Ctx, repo: RepoRow, maybeAncestor: string, of: string) =>
+  Boolean(await ctx.db.get(`WITH RECURSIVE ${reach("walk")} SELECT 1 FROM walk WHERE id = ? LIMIT 1`, of, repo.id, maybeAncestor));
 
+/** The nearest commit both reach: walking back from `b` one generation at a time, the first one that `a` also reaches. */
 export async function mergeBase(ctx: Ctx, repo: RepoRow, a: string, b: string): Promise<string | null> {
-  const fromA = await ancestors(ctx, repo, a);
-  const queue = [b];
-  const seen = new Set<string>();
-  while (queue.length) {
-    const id = queue.shift()!;
-    if (fromA.has(id)) return id;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    queue.push(...await parentsOf(ctx, repo, id));
-  }
-  return null;
+  const row = await ctx.db.get<{ id: string }>(
+    `WITH RECURSIVE ${reach("from_a")},
+       from_b(id, depth) AS (
+         SELECT CAST(? AS TEXT), 0
+         UNION
+         SELECT p.value, w.depth + 1 FROM from_b w JOIN commits c ON c.repo_id = ? AND c.id = w.id CROSS JOIN LATERAL jsonb_array_elements_text(c.parents::jsonb) AS p(value)
+       )
+     SELECT id FROM from_b WHERE id IN (SELECT id FROM from_a) ORDER BY depth, id LIMIT 1`,
+    a, repo.id, b, repo.id,
+  );
+  return row?.id ?? null;
 }
 
 /** The paths that differ between two commits, checked against other people's file locks. */
@@ -294,9 +290,17 @@ export type CommitRow = { id: string; tree: string; parents: string; author: str
 /** Commits reachable from `ref`, newest first. */
 export async function listCommits(ctx: Ctx, repo: RepoRow, ref: string, limit = 50) {
   const tip = await resolveRef(ctx, repo, ref);
-  const ids = await ancestors(ctx, repo, tip);
-  const rows = await ctx.db.all("SELECT id, tree, parents, author, message, timestamp, merkle_root FROM commits WHERE repo_id = ? ORDER BY timestamp DESC", repo.id) as CommitRow[];
-  return rows.filter((r) => ids.has(r.id)).slice(0, limit);
+  return await ctx.db.all<CommitRow>(
+    `WITH RECURSIVE ${reach("walk")}
+     SELECT c.id, c.tree, c.parents, c.author, c.message, c.timestamp, c.merkle_root FROM commits c JOIN walk w ON w.id = c.id WHERE c.repo_id = ? ORDER BY c.timestamp DESC, c.id LIMIT ?`,
+    tip, repo.id, repo.id, limit,
+  );
+}
+
+/** How many commits `ref` reaches, counted by the database. */
+export async function countCommits(ctx: Ctx, repo: RepoRow, ref: string) {
+  const tip = await resolveRef(ctx, repo, ref);
+  return (await ctx.db.get<{ n: number }>(`WITH RECURSIVE ${reach("walk")} SELECT COUNT(*) AS n FROM commits c JOIN walk w ON w.id = c.id WHERE c.repo_id = ?`, tip, repo.id, repo.id))!.n;
 }
 
 export function commitJson(row: CommitRow) {
@@ -324,6 +328,32 @@ export async function commitChanges(ctx: Ctx, repo: RepoRow, commit: CommitObjec
   })));
 }
 
+/**
+ * Each commit with what it changed against its first parent, newest first, produced lazily: the trees of twenty commits (and their parents)
+ * are fetched together, and nothing further is fetched once the caller stops asking.
+ */
+export async function* walkChanges(ctx: Ctx, repo: RepoRow, rows: CommitRow[]): AsyncGenerator<{ row: CommitRow; changed: ReturnType<typeof diffTrees> }> {
+  const treeOfCommit = new Map(rows.map((r) => [r.id, r.tree]));
+  const trees = new Map<string, TreeObject>();
+  const parentOf = (r: CommitRow) => (JSON.parse(r.parents) as string[])[0] ?? null;
+  for (let i = 0; i < rows.length; i += 20) {
+    const chunk = rows.slice(i, i + 20);
+    const unknownParents = [...new Set(chunk.map(parentOf).filter((p): p is string => p !== null && !treeOfCommit.has(p)))];
+    if (unknownParents.length) {
+      const found = await ctx.db.all<{ id: string; tree: string }>(`SELECT id, tree FROM commits WHERE repo_id = ? AND id IN (${unknownParents.map(() => "?").join(",")})`, repo.id, ...unknownParents);
+      for (const f of found) treeOfCommit.set(f.id, f.tree);
+    }
+    const wanted = [...new Set(chunk.flatMap((r) => [r.tree, treeOfCommit.get(parentOf(r) ?? "") ?? ""]).filter((id) => id && !trees.has(id)))];
+    for (const [treeId, obj] of await objectsAmong(ctx, repo, wanted)) trees.set(treeId, JSON.parse(obj.body) as TreeObject);
+    for (const row of chunk) {
+      const after = trees.get(row.tree);
+      if (!after) continue;
+      const parent = parentOf(row);
+      yield { row, changed: diffTrees(parent ? (trees.get(treeOfCommit.get(parent) ?? "") ?? null) : null, after) };
+    }
+  }
+}
+
 export type ListingEntry = { name: string; path: string; type: "dir" | "file"; size: number; blob?: string; lastCommit?: { sha: string; message: string; timestamp: string; author: string } };
 
 /** Directory listing at `ref`, with the last commit that touched each entry. */
@@ -349,15 +379,12 @@ export async function listTree(ctx: Ctx, repo: RepoRow, ref: string, dir = ""): 
 
   // Walk history from the tip until every entry has its most recent change.
   const pending = new Set(children.keys());
-  for (const row of await listCommits(ctx, repo, tip, 500)) {
+  for await (const { row, changed } of walkChanges(ctx, repo, await listCommits(ctx, repo, tip, 500))) {
     if (!pending.size) break;
-    const commit = await getObject<CommitObject>(ctx, repo, row.id, "commit");
-    const after = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
-    const parent = commit.parents[0] ? await getObject<CommitObject>(ctx, repo, commit.parents[0], "commit") : null;
-    const changed = diffTrees(parent ? await getObject<TreeObject>(ctx, repo, parent.tree, "tree") : null, after).map((c) => c.path);
+    const paths = changed.map((c) => c.path);
     for (const name of [...pending]) {
       const p = children.get(name)!.path;
-      if (changed.some((c) => c === p || c.startsWith(`${p}/`))) {
+      if (paths.some((c) => c === p || c.startsWith(`${p}/`))) {
         children.get(name)!.lastCommit = { sha: row.id, message: row.message, timestamp: row.timestamp, author: row.author };
         pending.delete(name);
       }
