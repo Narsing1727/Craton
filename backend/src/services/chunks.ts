@@ -4,7 +4,7 @@
 // the requester may see (public, plus the repository owner's scope). Answering against every chunk
 // would let anyone test whether some other customer stored a given file.
 
-import { statement } from "../db/db.ts";
+import { inGroups, statement } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
 import { badRequest, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
@@ -184,6 +184,15 @@ export async function decodeAny(ctx: Ctx, hash: string, stored: Buffer): Promise
 export { decodeStored };
 
 /** Random access into a stored file without reassembling all of it (used by the checks runner). */
+export type ChunkInfo = { size: number; stored_size: number; codec: string };
+
+/** Size, stored size and codec of many chunks, a thousand to a query (a large file has tens of thousands of chunks). */
+export async function chunkInfos(ctx: Ctx, hashes: Iterable<string>): Promise<Map<string, ChunkInfo>> {
+  const wanted = [...new Set(hashes)];
+  const rows = await inGroups(wanted, 1000, (g) => ctx.db.all<ChunkInfo & { hash: string }>(`SELECT hash, size, stored_size, codec FROM chunks WHERE hash IN (${g.map(() => "?").join(",")})`, ...g));
+  return new Map(rows.map((r) => [r.hash, r]));
+}
+
 export class BlobReader {
   private readonly ctx: Ctx;
   private readonly blob: BlobObject;

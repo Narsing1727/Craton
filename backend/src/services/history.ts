@@ -34,7 +34,7 @@ export async function missingObjects(ctx: Ctx, repo: RepoRow, ids: string[]) {
 }
 
 /** The objects of this repository among `ids`, with their bodies, in a few queries rather than one each. */
-async function objectsAmong(ctx: Ctx, repo: RepoRow, ids: string[]) {
+export async function objectsAmong(ctx: Ctx, repo: RepoRow, ids: string[]) {
   const rows = await inGroups([...new Set(ids)], 500, (group) =>
     ctx.db.all<{ id: string; type: string; body: string }>(`SELECT o.id, o.type, o.body FROM objects o JOIN repo_objects ro ON ro.object_id = o.id WHERE ro.repo_id = ? AND o.id IN (${group.map(() => "?").join(",")})`, repo.id, ...group),
   );

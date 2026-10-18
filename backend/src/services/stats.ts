@@ -3,10 +3,12 @@
 import { filterAsync } from "../core/async.ts";
 import { statement } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
+import { notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { repoJson, listRepos, repoPage } from "./repos.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
-import { getObject, listCommits, resolveRef } from "./history.ts";
+import { getObject, listCommits, objectsAmong, resolveRef } from "./history.ts";
+import { chunkInfos } from "./chunks.ts";
 import { leafHash, merkleProof, merkleProofs } from "../core/merkle.ts";
 import { orgRole } from "./accounts.ts";
 import { config } from "../config.ts";
@@ -33,21 +35,24 @@ export async function storageStats(ctx: Ctx, repo: RepoRow) {
   } catch {}
   if (tip) {
     const tree = await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, tip, "commit")).tree, "tree");
+    const blobs = await objectsAmong(ctx, repo, tree.entries.map((e) => e.blob));
     for (const e of tree.entries) {
       logical += e.size;
       const top = e.path.includes("/") ? `${e.path.split("/")[0]}/` : "(root)";
       const f = folders.get(top) ?? { logical: 0, chunks: new Set<string>() };
       f.logical += e.size;
-      for (const c of (await getObject<BlobObject>(ctx, repo, e.blob, "blob")).chunks) f.chunks.add(c.hash);
+      const blob = blobs.get(e.blob);
+      if (!blob) throw notFound(`blob ${e.blob.slice(0, 7)}`);
+      for (const c of (JSON.parse(blob.body) as BlobObject).chunks) f.chunks.add(c.hash);
       folders.set(top, f);
     }
   }
-  const storedOf = statement(ctx.db, "SELECT size, stored_size, codec FROM chunks WHERE hash = ?");
-  const folderRows = (await Promise.all([...folders.entries()].map(async ([path, f]) => {
+  const infos = await chunkInfos(ctx, [...folders.values()].flatMap((f) => [...f.chunks]));
+  const folderRows = ([...folders.entries()].map(([path, f]) => {
     let raw = 0, stored = 0;
     const codecs = new Set<string>();
     for (const h of f.chunks) {
-      const c = await storedOf.get(h) as { size: number; stored_size: number; codec: string } | undefined;
+      const c = infos.get(h);
       if (c) {
         raw += c.size;
         stored += c.stored_size;
@@ -55,7 +60,7 @@ export async function storageStats(ctx: Ctx, repo: RepoRow) {
       }
     }
     return { path, logicalBytes: f.logical, uniqueBytes: raw, storedBytes: stored, codecs: [...codecs] };
-  })));
+  }));
 
   // Public repositories this one shares chunks with. Private ones are never named: that would
   // tell the viewer something about data they can't see.
