@@ -297,6 +297,7 @@ export type ApiOrgDomain = { domain: string; verified: boolean; verifiedAt: stri
 
 /** An organization's single sign-on setup, as its owners see it (the client secret is never sent back). */
 export type ApiOrgScim = { baseUrl: string; tokens: { id: number; note: string; createdAt: string; lastUsedAt: string | null }[]; provisioned: number; domains: string[] };
+export type ApiOrgSaml = { configured: boolean; entityId?: string; ssoUrl?: string; certificateExpires?: string; fingerprint?: string; enforced?: boolean; testedAt?: string | null; sp: { entityId: string; acsUrl: string; metadataUrl: string }; domains: string[] };
 export type ApiOrgSso = { configured: boolean; issuer?: string; clientId?: string; hasSecret?: boolean; enforced?: boolean; testedAt?: string | null; redirectUri: string; domains: string[] };
 
 export type ApiOwner = {
@@ -598,6 +599,7 @@ export const api = {
   search: (q: string) => get<{ repositories: ApiRepo[]; files: { repo: string; path: string; size: number }[]; people: { handle: string; name: string; bio: string }[]; organizations: { handle: string; name: string; bio: string }[] }>(`/search?q=${encodeURIComponent(q)}`),
   owner: (handle: string) => get<ApiOwner>(`/owners/${encodeURIComponent(handle)}`),
   orgSso: (org: string) => get<ApiOrgSso>(`/orgs/${encodeURIComponent(org)}/sso`),
+  orgSaml: (org: string) => get<ApiOrgSaml>(`/orgs/${encodeURIComponent(org)}/saml`),
   orgScim: (org: string) => get<ApiOrgScim>(`/orgs/${encodeURIComponent(org)}/scim`),
   orgDomains: (org: string) => get<{ domains: ApiOrgDomain[] }>(`/orgs/${encodeURIComponent(org)}/domains`),
   starred: () => get<ApiRepo[]>("/user/starred"),

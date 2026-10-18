@@ -118,6 +118,17 @@ export async function removeSsoAction(org: string) {
   return write<null>("DELETE", `/orgs/${encodeURIComponent(org)}/sso`, undefined, [`/orgs/${org}`]);
 }
 
+// ── Organization SAML single sign-on (owners) ──
+export async function saveSamlAction(org: string, input: { ssoUrl: string; entityId: string; certificate?: string }) {
+  return write<import("@/lib/api").ApiOrgSaml>("PUT", `/orgs/${encodeURIComponent(org)}/saml`, input, [`/orgs/${org}`]);
+}
+export async function setSamlEnforcedAction(org: string, enforced: boolean) {
+  return write<import("@/lib/api").ApiOrgSaml>("PATCH", `/orgs/${encodeURIComponent(org)}/saml`, { enforced }, [`/orgs/${org}`]);
+}
+export async function removeSamlAction(org: string) {
+  return write<null>("DELETE", `/orgs/${encodeURIComponent(org)}/saml`, undefined, [`/orgs/${org}`]);
+}
+
 // ── Organization provisioning (SCIM) tokens (owners) ──
 export async function createScimTokenAction(org: string, note: string) {
   return write<{ id: number; note: string; token: string; baseUrl: string }>("POST", `/orgs/${encodeURIComponent(org)}/scim/tokens`, { note }, [`/orgs/${org}`]);

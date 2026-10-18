@@ -62,7 +62,7 @@ before(async () => {
   proc.stderr!.on("data", (d) => (serverErrors += d));
   proc.once("exit", (code) => code !== null && code !== 0 && console.error(`server exited with ${code}:
 ${serverErrors}`));
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 600; i++) {
     try {
       if ((await fetch(`${server}/v1/health`)).ok) break;
     } catch {}

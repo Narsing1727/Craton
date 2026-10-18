@@ -26,4 +26,23 @@ export const MIGRATIONS: string[] = [
   );
   CREATE UNIQUE INDEX scim_users_external ON scim_users (org_id, external_id) WHERE external_id IS NOT NULL;
   `,
+  // 3: SAML 2.0 single sign-on for organizations (saml.ts), beside OpenID Connect.
+  `
+  CREATE TABLE org_saml (
+    org_id BIGINT PRIMARY KEY REFERENCES owners(id) ON DELETE CASCADE,
+    idp_entity_id TEXT NOT NULL,
+    sso_url TEXT NOT NULL,
+    idp_cert TEXT NOT NULL,
+    enforced BIGINT NOT NULL DEFAULT 0,
+    tested_at TEXT,
+    created_at TEXT NOT NULL DEFAULT now_iso()
+  );
+
+  -- A sign-in request we sent, kept until its answer arrives (or it expires): an answer to a request we never made is refused.
+  CREATE TABLE saml_requests (
+    id TEXT PRIMARY KEY,
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  `,
 ];

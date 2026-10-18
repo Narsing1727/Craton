@@ -421,6 +421,7 @@ Not done: NetCDF 4 / HDF5 written with the newest layout (version 4 chunk indexe
 | 223 | **S3 chunk store** beside R2: keys, or the role of an ECS task / EC2 instance, refetched before it expires | Set `CRATON_S3_BUCKET` and `CRATON_S3_REGION`; `npm test` runs `s3store.test.ts` against a local S3-shaped server | |
 | 224 | **SCIM provisioning**: an organization with a verified domain makes a token in Settings → User provisioning; its identity provider adds and removes people (owners never removed) | Org settings → User provisioning; `backend/test/scim.test.ts` plays the provider's side | |
 | 225 | **Zoom and pan a GeoTIFF at full resolution**: 256-pixel hillshaded tiles drawn from the file's nearest overview (a COG reads little when zoomed out), pinned commits cache for a year, ETags; a file without overviews says to zoom in instead of reading everything | A raster's page → "Zoom and pan at full resolution"; `npm run e2e:explorer` in `frontend` (public repo, anonymous) | |
+| 226 | **SAML 2.0 single sign-on** per organization beside OpenID Connect (signed responses only, issuer/audience/time checks, single-use requests), enforceable like OIDC | Org settings → Single sign-on (SAML 2.0); `backend/test/saml.test.ts` plays a provider that signs real responses | |
 
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.

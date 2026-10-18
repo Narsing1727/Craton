@@ -61,7 +61,11 @@ export async function callbackRoute(request: Request, provider: OAuthProvider) {
     const why = result.code === "email_unverified_account" ? "unverified" : result.code === "identity_taken" ? "taken" : result.code === "email_not_verified" || result.code === "no_email" ? "noemail" : result.code === "domain_not_verified" ? "domain" : result.offline ? "offline" : "error";
     return to(`${back}?${provider}=${why}`);
   }
-  const a = result.data;
+  return answerResponse(to, provider, result.data, back);
+}
+
+/** What to do with the API's answer to a finished sign-in: a session, a second step, a username to choose, or a linked account. */
+export async function answerResponse(to: (path: string) => NextResponse, provider: string, a: Answer, back: string) {
   if (a.linked) return to(`/settings/security?${provider}=linked`);
   const next = safeNext(a.next);
   const keep = next ? `&next=${encodeURIComponent(next)}` : "";

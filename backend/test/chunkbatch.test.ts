@@ -143,9 +143,13 @@ test("shuffle and unshuffle are exact inverses, including a trailing partial ele
 test("a batch is stored a few chunks at a time: against a slow object store it takes a fraction of one-by-one", async () => {
   class SlowStore extends MemoryStore {
     puts = 0;
+    inFlight = 0;
+    peak = 0;
     async put(hash: string, stored: Buffer) {
       this.puts++;
+      this.peak = Math.max(this.peak, ++this.inFlight);
       await new Promise((r) => setTimeout(r, 30));
+      this.inFlight--;
       return super.put(hash, stored);
     }
   }
@@ -164,5 +168,7 @@ test("a batch is stored a few chunks at a time: against a slow object store it t
   const out = (await res.json()) as { chunks: { hash: string }[] };
   assert.deepEqual(out.chunks.map((c) => c.hash), parts.map(sha), "results keep the order of the frames");
   assert.equal(store.puts, 80);
-  assert.ok(elapsed < 80 * 30 * 0.75, `took ${elapsed} ms; one by one would be about ${80 * 30} ms`);
+  // Counting how many writes were under way at once says the same thing as the clock, without depending on how busy the machine is.
+  assert.ok(store.peak >= 4, `at most ${store.peak} chunks were being stored at once (took ${elapsed} ms; one by one would be about ${80 * 30} ms)`);
+  assert.ok(store.peak <= 32, `${store.peak} at once is more than a polite batch`);
 });

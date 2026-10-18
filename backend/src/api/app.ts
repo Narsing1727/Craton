@@ -14,6 +14,7 @@ import type { Ctx } from "../services/context.ts";
 import { ApiError, badRequest, notFound } from "../services/context.ts";
 import * as accounts from "../services/accounts.ts";
 import * as scim from "../services/scim.ts";
+import * as saml from "../services/saml.ts";
 import * as repos from "../services/repos.ts";
 import { datasetJsonLd } from "../services/dataset.ts";
 import * as chunks from "../services/chunks.ts";
@@ -444,7 +445,7 @@ export function createApp(ctx: Ctx) {
   });
   // ── Sign in with Google or GitHub ───────────────────────────────────────
   // Which providers this server offers, so the sign-in page shows only buttons that work.
-  v1.get("/auth/providers", async (c) => c.json({ google: oauth.enabled("google"), github: oauth.enabled("github"), sso: Boolean(await ctx.db.get("SELECT 1 FROM org_sso LIMIT 1")), passkeys: true }));
+  v1.get("/auth/providers", async (c) => c.json({ google: oauth.enabled("google"), github: oauth.enabled("github"), sso: Boolean(await ctx.db.get("SELECT 1 FROM org_sso UNION ALL SELECT 1 FROM org_saml LIMIT 1")), passkeys: true }));
   const providerOf = (c: Context<Env>) => c.req.param("provider") as oauth.Provider;
   // Step 1: a one-time state and PKCE challenge are stored, and the web app sends the browser to `url`.
   // With a signed-in session and { link: true } the result is added to that account instead of signing anyone in.
@@ -520,12 +521,13 @@ export function createApp(ctx: Ctx) {
   v1.post("/auth/sso/start", async (c) => {
     limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     const b = await body<{ email?: string; next?: string }>(c);
-    return c.json(await sso.start(ctx, b));
+    // The address's domain says whose provider, and that organization chose the protocol.
+    const email = String(b.email ?? "").trim();
+    const viaSaml = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) && !await sso.hasOidc(ctx, email) ? await saml.orgForEmail(ctx, email) : null;
+    return c.json(viaSaml ? await saml.start(ctx, viaSaml, { email, next: b.next }) : await sso.start(ctx, b));
   });
-  v1.post("/auth/sso/callback", async (c) => {
-    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
-    const b = await body<{ code?: string; state?: string }>(c);
-    const done = await sso.finish(ctx, { code: b.code ?? "", state: b.state ?? "" });
+  // What happens once an organization's provider (OpenID Connect or SAML) has vouched for someone: the same for both.
+  const ssoArrival = async (c: Context<Env>, done: { claims: { sub: string; email: string; name: string }; next: string | null; orgId: number; orgHandle: string; provider: string }) => {
     const g = done.claims;
     const info = clientInfo(c);
     const arrive = async (id: number) => {
@@ -547,6 +549,36 @@ export function createApp(ctx: Ctx) {
     }
     const ticket = await oauth.createPending(ctx, { subject: g.sub, email: g.email, name: g.name }, done.provider);
     return c.json({ needsUsername: true, ticket, email: g.email, name: g.name, suggestion: await oauth.suggestHandle(ctx, g.email, g.name), next: done.next });
+  };
+  v1.post("/auth/sso/callback", async (c) => {
+    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    const b = await body<{ code?: string; state?: string }>(c);
+    return ssoArrival(c, await sso.finish(ctx, { code: b.code ?? "", state: b.state ?? "" }));
+  });
+  // SAML: the identity provider posts its answer to the web app's /auth/saml/acs, which passes it here.
+  v1.post("/auth/saml/acs", async (c) => {
+    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    const b = await body<{ samlResponse?: string; relayState?: string }>(c);
+    return ssoArrival(c, await saml.finish(ctx, { samlResponse: b.samlResponse ?? "", relayState: b.relayState ?? "" }));
+  });
+  // The service-provider description an identity provider's administrator can import.
+  v1.get("/saml/:org/metadata", async (c) => c.body(await saml.metadata(ctx, c.req.param("org")), 200, { "content-type": "application/samlmetadata+xml" }));
+  // Setting it up (owners).
+  v1.get("/orgs/:org/saml", async (c) => (requireScope(c, "admin:org"), c.json(await saml.getConfig(ctx, c.req.param("org"), requireUser(c).id))));
+  v1.put("/orgs/:org/saml", async (c) => {
+    requireScope(c, "admin:org");
+    limit(c, `sso-config:${requireUser(c).id}`, { max: 20, windowMs: 10 * 60_000 }, "Too many changes. Wait a few minutes.");
+    return c.json(await saml.configure(ctx, c.req.param("org"), requireUser(c).id, await body(c)));
+  });
+  v1.patch("/orgs/:org/saml", async (c) => {
+    requireScope(c, "admin:org");
+    const b = await body<{ enforced?: boolean }>(c);
+    return c.json(await saml.setEnforced(ctx, c.req.param("org"), requireUser(c).id, b.enforced));
+  });
+  v1.delete("/orgs/:org/saml", async (c) => {
+    requireScope(c, "admin:org");
+    await saml.remove(ctx, c.req.param("org"), requireUser(c).id);
+    return c.body(null, 204);
   });
   v1.post("/auth/sso/pending", async (c) => {
     limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");

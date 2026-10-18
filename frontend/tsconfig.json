@@ -37,7 +37,9 @@
     ".next-prod/types/**/*.ts",
     ".next-prod/dev/types/**/*.ts",
     ".next-slow/types/**/*.ts",
-    ".next-slow/dev/types/**/*.ts"
+    ".next-slow/dev/types/**/*.ts",
+    ".next-sweep/types/**/*.ts",
+    ".next-sweep/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

@@ -15,9 +15,10 @@ import { AuditLog } from "@/components/audit-log";
 import { OrgDomains } from "@/components/org-domains";
 import { OrgSso } from "@/components/org-sso";
 import { OrgScim } from "@/components/org-scim";
-import type { ApiAuditPage, ApiOrgDomain, ApiOrgScim, ApiOrgSso } from "@/lib/api";
+import { OrgSaml } from "@/components/org-saml";
+import type { ApiAuditPage, ApiOrgDomain, ApiOrgSaml, ApiOrgScim, ApiOrgSso } from "@/lib/api";
 
-export function OrgSettingsView({ org, name, bio, role, repositories, audit, domains, sso, scim, verified }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null; domains: ApiOrgDomain[] | null; sso: ApiOrgSso | null; scim: ApiOrgScim | null; verified: string[] }) {
+export function OrgSettingsView({ org, name, bio, role, repositories, audit, domains, sso, scim, saml, verified }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null; domains: ApiOrgDomain[] | null; sso: ApiOrgSso | null; scim: ApiOrgScim | null; saml: ApiOrgSaml | null; verified: string[] }) {
   const owner = role === "Owner";
   const [displayName, setDisplayName] = useState(name);
   const [description, setDescription] = useState(bio);
@@ -105,6 +106,18 @@ export function OrgSettingsView({ org, name, bio, role, repositories, audit, dom
               </CardHeader>
               <CardContent className="p-5">
                 <OrgSso org={org} initial={sso} />
+              </CardContent>
+            </Card>
+          )}
+
+          {owner && saml && (
+            <Card>
+              <CardHeader className="p-5 pb-2">
+                <CardTitle className="text-base font-semibold">Single sign-on (SAML 2.0)</CardTitle>
+                <CardDescription>The same, for an identity provider that speaks SAML rather than OpenID Connect (Okta, Microsoft Entra ID, OneLogin, ADFS). Use one or the other for {org}.</CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                <OrgSaml org={org} initial={saml} />
               </CardContent>
             </Card>
           )}

@@ -143,7 +143,7 @@ export async function remove(ctx: Ctx, orgHandle: string, actorId: number) {
   if (!await rowOf(ctx, org.id)) throw notFound("Single sign-on setup");
   await ctx.db.run("DELETE FROM org_sso WHERE org_id = ?", org.id);
   // People who signed in this way keep their accounts; the link just stops being usable.
-  await ctx.db.run("DELETE FROM oauth_identities WHERE provider = ?", `${SSO_PREFIX}${org.id}`);
+  await ctx.db.run("DELETE FROM oauth_identities WHERE provider = ? AND subject NOT LIKE 'saml:%'", `${SSO_PREFIX}${org.id}`);
 }
 
 // ── Who has single sign-on ───────────────────────────────────────────────────
@@ -164,9 +164,16 @@ export async function assertMethodAllowed(ctx: Ctx, userId: number, via: "passwo
   if (via === "sso") return;
   const u = await ctx.db.get("SELECT email FROM users WHERE owner_id = ?", userId) as { email: string } | undefined;
   if (!u) return;
-  const org = await orgForEmail(ctx, u.email);
-  if (!org || !org.row.enforced) return;
-  const role = await orgRole(ctx, org.orgId, userId);
+  // Either protocol (OpenID Connect or SAML) may be the one the organization requires.
+  const org = await ctx.db.get(
+    `SELECT d.org_id, o.handle, COALESCE(s.enforced, 0) + COALESCE(m.enforced, 0) AS enforced
+       FROM org_domains d JOIN owners o ON o.id = d.org_id
+       LEFT JOIN org_sso s ON s.org_id = d.org_id LEFT JOIN org_saml m ON m.org_id = d.org_id
+      WHERE d.domain = ? AND d.verified_at IS NOT NULL AND (s.org_id IS NOT NULL OR m.org_id IS NOT NULL)`,
+    emailDomain(u.email),
+  ) as { org_id: number; handle: string; enforced: number } | undefined;
+  if (!org || !org.enforced) return;
+  const role = await orgRole(ctx, org.org_id, userId);
   if (!role || role === "Owner") return;
   throw new ApiError(403, "sso_required", `${org.handle} requires single sign-on for ${emailDomain(u.email)} addresses. Choose “Continue with single sign-on” and enter your work email.`, { organization: org.handle });
 }
@@ -174,6 +181,11 @@ export async function assertMethodAllowed(ctx: Ctx, userId: number, via: "passwo
 // ── Signing in ───────────────────────────────────────────────────────────────
 
 const safeNext = (n: string | null | undefined) => (n && n.startsWith("/") && !n.startsWith("//") && !n.includes("\\") && n.length <= 300 ? n : null);
+
+/** Whether this address's organization uses OpenID Connect (rather than SAML) for single sign-on. */
+export async function hasOidc(ctx: Ctx, email: string) {
+  return Boolean(await orgForEmail(ctx, email));
+}
 
 export async function start(ctx: Ctx, input: { email?: unknown; next?: string | null }) {
   const email = String(input.email ?? "").trim();
@@ -295,6 +307,7 @@ export async function finish(ctx: Ctx, input: { code: string; state: string }): 
 /** The first successful sign-in proves the setup works; only then can it be required. */
 export async function markTested(ctx: Ctx, orgId: number) {
   await ctx.db.run("UPDATE org_sso SET tested_at = COALESCE(tested_at, ?) WHERE org_id = ?", nowIso(), orgId);
+  await ctx.db.run("UPDATE org_saml SET tested_at = COALESCE(tested_at, ?) WHERE org_id = ?", nowIso(), orgId);
 }
 
 /** A person who came through the organization's provider belongs to the organization. */
