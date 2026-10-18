@@ -11,6 +11,7 @@
     "sweep": "node scripts/route-sweep.mjs",
     "focus": "node scripts/focus-walk.mjs",
     "contrast": "node scripts/contrast-scan.mjs",
+    "e2e:explorer": "node scripts/raster-explorer-e2e.mjs",
     "e2e:google": "node scripts/google-e2e.mjs",
     "e2e:github": "node scripts/github-e2e.mjs",
     "e2e:sso": "node scripts/sso-e2e.mjs",

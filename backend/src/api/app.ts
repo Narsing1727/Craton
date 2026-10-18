@@ -1662,6 +1662,48 @@ export function createApp(ctx: Ctx) {
     throw new ApiError(415, "no_preview", "Previews are drawn for GeoTIFF rasters, shapefiles and uncompressed LAS point clouds.");
   });
 
+  // A raster you can zoom into: its layout (size, zoom levels, colour range), then 256-pixel tiles in the image's own pixel space,
+  // drawn from the nearest overview the file has. Tiles are pure functions of the blob, so a pinned commit caches for a year.
+  const rasterOnly = (path: string) => {
+    if (!/\.tiff?$/i.test(path)) throw new ApiError(415, "no_preview", "Zooming is available for GeoTIFF rasters.");
+  };
+  const cacheFor = async (repo: repos.RepoRow, ref: string, key: string | null) => {
+    let pinned = false;
+    if (/^[0-9a-f]{64}$/.test(ref)) {
+      try {
+        pinned = (await history.resolveRef(ctx, repo, ref)) === ref;
+      } catch {}
+    }
+    const tag = key ? `"${createHash("sha256").update(key).digest("hex").slice(0, 32)}"` : null;
+    return { "cache-control": pinned ? "private, max-age=31536000, immutable" : "private, max-age=300", ...(tag ? { etag: tag } : {}) } as Record<string, string>;
+  };
+  v1.get("/repos/:owner/:repo/tileinfo/:ref/:path{.+}", async (c) => {
+    const repo = await repoFor(c);
+    const path = c.req.param("path");
+    rasterOnly(path);
+    try {
+      return c.json(await previews.rasterTileInfo(ctx, repo, c.req.param("ref"), path));
+    } catch (err) {
+      if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
+      throw err;
+    }
+  });
+  v1.get("/repos/:owner/:repo/tiles/:ref/:z/:x/:y/:path{.+}", async (c) => {
+    const repo = await repoFor(c);
+    const ref = c.req.param("ref"), path = c.req.param("path");
+    rasterOnly(path);
+    const [z, x, y] = [c.req.param("z"), c.req.param("x"), c.req.param("y")].map((v) => (/^\d{1,6}$/.test(v) ? Number(v) : NaN));
+    if ([z, x, y].some(Number.isNaN)) throw badRequest("Tile numbers are whole numbers.");
+    const headers = await cacheFor(repo, ref, await previews.tileKey(ctx, repo, ref, path, z, x, y));
+    if (headers.etag && c.req.header("if-none-match")?.split(",").some((v) => v.trim().replace(/^W\//, "") === headers.etag)) return c.body(null, 304, headers);
+    try {
+      return c.body(new Uint8Array(await previews.rasterTile(ctx, repo, ref, path, z, x, y)), 200, { ...headers, "content-type": "image/png" });
+    } catch (err) {
+      if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
+      throw err;
+    }
+  });
+
   // Numbers behind a raster change (?base=<ref>): summary of each version, a shared histogram and the
   // cell-by-cell change. Same sampled grids as the heatmap, cached by blob id.
   v1.get("/repos/:owner/:repo/raster-stats/:ref/:path{.+}", async (c) => {

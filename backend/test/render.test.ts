@@ -11,7 +11,7 @@ import type { Ctx } from "../src/services/context.ts";
 import { getRepoFor } from "../src/services/repos.ts";
 import { commitFiles } from "../src/dev/push.ts";
 import { catchments, levees, shapefile } from "../src/dev/fixtures.ts";
-import { readGrid } from "../src/render/tiff.ts";
+import { openTiff, readGrid, readWindow, TooManyBlocksError } from "../src/render/tiff.ts";
 import { encodePng } from "../src/render/png.ts";
 import { warmCommit } from "../src/render/previews.ts";
 
@@ -441,4 +441,64 @@ test("a shapefile's file info lists its attribute fields from the dBase header",
   const info = (await r.json()) as { vector: { features: number; fields: { name: string; type: string; length: number }[] } };
   assert.equal(info.vector.features, 6);
   assert.deepEqual(info.vector.fields, [{ name: "NAME", type: "C", length: 32, decimals: 0 }]);
+});
+
+test("windows: zoomed in reads exact pixels, zoomed out reads an overview, outside the image is empty, and a huge area is refused", async () => {
+  const width = 64, height = 48;
+  const values = Array.from({ length: width * height }, (_, i) => (i % width) * 10 + Math.floor(i / width));
+  const overview = { width: 16, height: 12, values: Array.from({ length: 16 * 12 }, () => 7777), kind: "i16" as const, compression: 8 as const, predictor: 1 as const, rowsPerStrip: 12 };
+  const full = { width, height, values, kind: "i16" as const, compression: 8 as const, predictor: 1 as const, tile: 16 };
+  const file = writeTiff([full, overview]);
+  const open = await openTiff(readerOf(file), file.length);
+
+  // 8 × 8 pixels at (20, 10), one image pixel per output pixel: the exact values.
+  const near = await readWindow(open, { x: 20, y: 10, w: 8, h: 8 }, 8, 8);
+  assert.equal(near[0], 20 * 10 + 10);
+  assert.equal(near[7], 27 * 10 + 10);
+  assert.equal(near[63], 27 * 10 + 17);
+
+  // Zoomed far out (4 image pixels per output pixel) the 16 × 12 overview is the right level.
+  const far = await readWindow(open, { x: 0, y: 0, w: 64, h: 48 }, 16, 12);
+  assert.ok(far.every((v) => v === 7777), "drawn from the overview");
+
+  // Half outside the image on the left and the top: those pixels are empty, the rest are real.
+  const edge = await readWindow(open, { x: -4, y: -4, w: 8, h: 8 }, 8, 8);
+  assert.ok(Number.isNaN(edge[0]) && Number.isNaN(edge[3]));
+  assert.equal(edge[4 * 8 + 4], 0);
+
+  // Asked for more blocks than allowed.
+  await assert.rejects(readWindow(open, { x: 0, y: 0, w: 64, h: 48 }, 64, 48, 3), TooManyBlocksError);
+});
+
+test("a raster can be zoomed: layout first, then tiles that cover the image, join without seams, and are cached", async () => {
+  const info = await get("/repos/rhea/basin/tileinfo/main/terrain/basin_dem.tif", "rhea");
+  assert.equal(info.status, 200);
+  const layout = JSON.parse(info.body.toString());
+  assert.deepEqual([layout.width, layout.height, layout.tileSize, layout.maxZoom], [512, 512, 256, 1]);
+  assert.ok(layout.max > layout.min);
+
+  const whole = await get("/repos/rhea/basin/tiles/main/0/0/0/terrain/basin_dem.tif", "rhea");
+  assert.equal(whole.status, 200);
+  assert.equal(whole.type, "image/png");
+  assert.deepEqual([whole.body.readUInt32BE(16), whole.body.readUInt32BE(20)], [256, 256]);
+
+  const topLeft = await get("/repos/rhea/basin/tiles/main/1/0/0/terrain/basin_dem.tif", "rhea");
+  const topRight = await get("/repos/rhea/basin/tiles/main/1/1/0/terrain/basin_dem.tif", "rhea");
+  assert.deepEqual([topLeft.body.readUInt32BE(16), topLeft.body.readUInt32BE(20)], [256, 256]);
+  assert.equal(pixel(topLeft.body, 0, 0)[3], 0, "the nodata corner is transparent at full detail");
+  // Across the seam between two tiles the shading continues: no jump the size of a different tile.
+  const a = pixel(topLeft.body, 255, 100)[0], b = pixel(topRight.body, 0, 100)[0];
+  assert.ok(Math.abs(a - b) < 40, `tiles join (${a} next to ${b})`);
+
+  assert.equal((await get("/repos/rhea/basin/tiles/main/1/2/0/terrain/basin_dem.tif", "rhea")).status, 404, "past the right edge");
+  assert.equal((await get("/repos/rhea/basin/tiles/main/2/0/0/terrain/basin_dem.tif", "rhea")).status, 404, "deeper than the image");
+  assert.equal((await get("/repos/rhea/basin/tiles/main/x/0/0/terrain/basin_dem.tif", "rhea")).status, 400);
+  assert.equal((await get("/repos/rhea/basin/tiles/main/0/0/0/terrain/basin_dem.tif", "sol")).status, 404, "a private repository stays private");
+  assert.equal((await get("/repos/rhea/basin/tiles/main/0/0/0/README.md", "rhea")).status, 415);
+
+  const first = await app.request("/v1/repos/rhea/basin/tiles/main/1/0/0/terrain/basin_dem.tif", { headers: { authorization: `Bearer ${tokens.rhea}` } });
+  const etag = first.headers.get("etag");
+  assert.ok(etag);
+  const again = await app.request("/v1/repos/rhea/basin/tiles/main/1/0/0/terrain/basin_dem.tif", { headers: { authorization: `Bearer ${tokens.rhea}`, "if-none-match": etag! } });
+  assert.equal(again.status, 304);
 });

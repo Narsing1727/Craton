@@ -10,7 +10,7 @@ import { readLasHeader } from "../checks/las.ts";
 import { getObject, resolveRef } from "../services/history.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { encodePng } from "./png.ts";
-import { readGrid, UnsupportedTiffError, type Grid } from "./tiff.ts";
+import { describeTiff, openTiff, readGrid, readWindow, UnsupportedTiffError, type Grid, type OpenTiff } from "./tiff.ts";
 
 const cache = new Map<string, { at: number; value: unknown }>();
 function cached<T>(key: string, make: () => Promise<T>): Promise<T> {
@@ -147,6 +147,22 @@ function hillshade(g: Grid) {
 
 const mix = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
 
+/** Elevation tint under hillshade, RGBA; nodata is transparent. `min` and `max` set the colour ramp. */
+function colorize(g: Grid, shade: Float32Array, min: number, max: number) {
+  const rgba = new Uint8Array(g.width * g.height * 4);
+  for (let i = 0; i < g.values.length; i++) {
+    const v = g.values[i];
+    if (Number.isNaN(v)) continue; // transparent nodata
+    const t = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0.5;
+    const s = 0.35 + 0.65 * (Number.isNaN(shade[i]) ? 0.5 : shade[i]);
+    rgba[i * 4] = Math.min(255, mix(LOW[0], HIGH[0], t) * s);
+    rgba[i * 4 + 1] = Math.min(255, mix(LOW[1], HIGH[1], t) * s);
+    rgba[i * 4 + 2] = Math.min(255, mix(LOW[2], HIGH[2], t) * s);
+    rgba[i * 4 + 3] = 255;
+  }
+  return rgba;
+}
+
 /** Hillshaded, elevation-tinted PNG of a raster at `ref`. */
 export async function rasterThumbnail(ctx: Ctx, repo: RepoRow, ref: string, path: string, maxSide = 512) {
   const found = await blobAt(ctx, repo, ref, path);
@@ -155,19 +171,78 @@ export async function rasterThumbnail(ctx: Ctx, repo: RepoRow, ref: string, path
     const g = await gridOf(ctx, found.blob, found.id, maxSide);
     const shade = hillshade(g);
     const { min, max } = range(g.values);
-    const rgba = new Uint8Array(g.width * g.height * 4);
-    for (let i = 0; i < g.values.length; i++) {
-      const v = g.values[i];
-      if (Number.isNaN(v)) continue; // transparent nodata
-      const t = max > min ? (v - min) / (max - min) : 0.5;
-      const s = 0.35 + 0.65 * shade[i];
-      rgba[i * 4] = Math.min(255, mix(LOW[0], HIGH[0], t) * s);
-      rgba[i * 4 + 1] = Math.min(255, mix(LOW[1], HIGH[1], t) * s);
-      rgba[i * 4 + 2] = Math.min(255, mix(LOW[2], HIGH[2], t) * s);
-      rgba[i * 4 + 3] = 255;
-    }
-    return { png: encodePng(g.width, g.height, rgba), width: g.width, height: g.height, min, max, sourceWidth: g.sourceWidth, sourceHeight: g.sourceHeight };
+    return { png: encodePng(g.width, g.height, colorize(g, shade, min, max)), width: g.width, height: g.height, min, max, sourceWidth: g.sourceWidth, sourceHeight: g.sourceHeight };
   });
+}
+
+// ── Zoomable raster: tiles in the image's own pixel space ───────────────────────────────────────────────────────────────────────────
+// Zoom 0 is the whole image in one 256-pixel tile; each zoom doubles the detail until the last, where a tile pixel is an image pixel.
+// Tiles are drawn from the nearest overview the file has, so a Cloud Optimized GeoTIFF reads little however far it is zoomed out.
+
+export const TILE_SIZE = 256;
+
+const tileCache = new Map<string, { at: number; png: Buffer }>();
+const openCache = new Map<string, Promise<OpenTiff>>();
+
+async function openedTiff(ctx: Ctx, blob: BlobObject, id: string) {
+  let open = openCache.get(id);
+  if (!open) {
+    open = openTiff(((reader) => (o: number, l: number) => reader.read(o, l))(new BlobReader(ctx, blob)), blob.size);
+    openCache.set(id, open);
+    open.catch(() => openCache.delete(id));
+    if (openCache.size > 50) openCache.delete(openCache.keys().next().value!);
+  }
+  return open;
+}
+
+export type RasterTileInfo = { width: number; height: number; tileSize: number; maxZoom: number; min: number; max: number; cellSize: [number, number]; geographic: boolean; epsg: number | null; overviews: number };
+
+/** How a viewer lays the raster out, and the elevation range its colours span (the same for every tile). */
+export async function rasterTileInfo(ctx: Ctx, repo: RepoRow, ref: string, path: string): Promise<RasterTileInfo> {
+  const found = await blobAt(ctx, repo, ref, path);
+  if (!found) throw notFound(`File ${path}`);
+  return cached(`tileinfo:${found.id}`, async () => {
+    const open = await openedTiff(ctx, found.blob, found.id);
+    const d = describeTiff(open);
+    const { min, max } = range((await gridOf(ctx, found.blob, found.id, 512)).values);
+    return { ...d, tileSize: TILE_SIZE, maxZoom: Math.max(0, Math.ceil(Math.log2(Math.max(d.width, d.height) / TILE_SIZE))), min, max };
+  });
+}
+
+export const tileKey = async (ctx: Ctx, repo: RepoRow, ref: string, path: string, z: number, x: number, y: number) => {
+  const found = await blobAt(ctx, repo, ref, path);
+  return found ? `v${RENDER_VERSION}:tile:${found.id}:${z}:${x}:${y}` : null;
+};
+
+/** One 256-pixel tile (smaller at the right and bottom edges): hillshade and elevation tint, coloured by the whole file's range. */
+export async function rasterTile(ctx: Ctx, repo: RepoRow, ref: string, path: string, z: number, x: number, y: number) {
+  const found = await blobAt(ctx, repo, ref, path);
+  if (!found) throw notFound(`File ${path}`);
+  const key = `${found.id}:${z}:${x}:${y}`;
+  const hit = tileCache.get(key);
+  if (hit) {
+    hit.at = Date.now();
+    return hit.png;
+  }
+  const info = await rasterTileInfo(ctx, repo, ref, path);
+  if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y) || z < 0 || z > info.maxZoom || x < 0 || y < 0) throw notFound("Tile");
+  const f = 2 ** (info.maxZoom - z); // image pixels per tile pixel
+  const x0 = x * TILE_SIZE * f, y0 = y * TILE_SIZE * f;
+  if (x0 >= info.width || y0 >= info.height) throw notFound("Tile");
+  const outW = Math.min(TILE_SIZE, Math.ceil((info.width - x0) / f));
+  const outH = Math.min(TILE_SIZE, Math.ceil((info.height - y0) / f));
+  // One extra pixel on every side, so the hillshade of an edge pixel looks at its real neighbours and tiles join without seams.
+  const open = await openedTiff(ctx, found.blob, found.id);
+  const values = await readWindow(open, { x: x0 - f, y: y0 - f, w: (outW + 2) * f, h: (outH + 2) * f }, outW + 2, outH + 2);
+  const padded: Grid = { width: outW + 2, height: outH + 2, values, cellSize: [info.cellSize[0] * f, info.cellSize[1] * f], geographic: info.geographic, sourceWidth: info.width, sourceHeight: info.height };
+  const shade = hillshade(padded);
+  const rgba = colorize(padded, shade, info.min, info.max);
+  const cropped = new Uint8Array(outW * outH * 4);
+  for (let r = 0; r < outH; r++) cropped.set(rgba.subarray(((r + 1) * (outW + 2) + 1) * 4, ((r + 1) * (outW + 2) + 1 + outW) * 4), r * outW * 4);
+  const png = encodePng(outW, outH, cropped);
+  tileCache.set(key, { at: Date.now(), png });
+  if (tileCache.size > 600) tileCache.delete([...tileCache.entries()].sort((a, b) => a[1].at - b[1].at)[0][0]);
+  return png;
 }
 
 /**

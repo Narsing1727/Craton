@@ -19,6 +19,7 @@ import { TableDiffView } from "@/components/table-diff";
 import { parseCsv, sniffDelimiter } from "@/lib/csv";
 import { describeBBox, isBBox, osmLink } from "@/lib/geo";
 import { DataPreview, PreviewDiffLegend, previewCaption, previewSrc } from "@/components/data-preview";
+import { RasterExplorerToggle } from "@/components/raster-explorer";
 import { getUnits } from "@/lib/units-server";
 import { EmbedDialog } from "@/components/embed-dialog";
 import { DataDictionary } from "@/components/data-dictionary";
@@ -428,6 +429,9 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                       )}
                     </span>
                   </div>
+                  {kind === "raster" && file && !rendered?.error && !showChange && !swipeMode && /\.tiff?$/i.test(filePath) && (
+                    <RasterExplorerToggle owner={owner} repo={repo} reference={ref} path={filePath} base={previewSrc(owner, repo, ref, filePath)} alt={`${filename} at full resolution`} />
+                  )}
                 </CardContent>
               ) : kind === "table" && file?.preview ? (
                 <>

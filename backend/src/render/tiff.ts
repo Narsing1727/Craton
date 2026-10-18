@@ -206,24 +206,23 @@ function sampleReader(ifd: Ifd): (b: Buffer, i: number) => number {
 
 export type Grid = { width: number; height: number; values: Float32Array; cellSize: [number, number]; geographic: boolean; sourceWidth: number; sourceHeight: number };
 
-/**
- * First band of the image as a grid of at most `maxSide` pixels on the long side (nodata → NaN).
- * Picks the smallest overview that's still at least `maxSide`, then point-samples it.
- */
-export async function readGrid(read: Read, size: number, maxSide = 512): Promise<Grid> {
+/** A TIFF whose directories are read: every image in it (full resolution first, then any overviews). Parsed once, then reused for every window. */
+export type OpenTiff = { read: Read; ifds: Ifd[]; full: Ifd };
+
+export async function openTiff(read: Read, size: number): Promise<OpenTiff> {
   const ifds = (await readIfds(read, size)).filter((i) => i.width > 0 && i.height > 0 && i.offsets.length);
   if (!ifds.length) throw new UnsupportedTiffError("No image data");
-  const full = ifds[0];
-  const candidates = [...ifds].sort((a, b) => a.width - b.width);
-  const ifd = candidates.find((i) => Math.max(i.width, i.height) >= maxSide) ?? candidates[candidates.length - 1];
+  return { read, ifds, full: ifds[0] };
+}
+
+function assertReadable(ifd: Ifd) {
   if (ifd.bits % 8 || ifd.bits > 64) throw new UnsupportedTiffError(`${ifd.bits}-bit samples aren't supported`);
   // Decoded samples are read little-endian ("II", what GDAL writes by default).
   if (!ifd.littleEndian && ifd.bits > 8) throw new UnsupportedTiffError("Big-endian TIFFs aren't supported for previews yet");
+}
 
-  const scale = Math.min(1, maxSide / Math.max(ifd.width, ifd.height));
-  const outW = Math.max(1, Math.round(ifd.width * scale));
-  const outH = Math.max(1, Math.round(ifd.height * scale));
-  const values = new Float32Array(outW * outH).fill(NaN);
+/** First-band values of one image, a pixel at a time, decoding each strip or tile once. */
+function sampler(ifd: Ifd, read: Read) {
   const get = sampleReader(ifd);
   const bps = ifd.bits / 8;
   const spp = ifd.planar === 1 ? ifd.samples : 1;
@@ -240,28 +239,100 @@ export async function readGrid(read: Read, size: number, maxSide = 512): Promise
     }
     return b;
   };
+  return async (x: number, y: number) => {
+    let v: number;
+    if (ifd.tileWidth && ifd.tileHeight) {
+      const across = Math.ceil(ifd.width / ifd.tileWidth);
+      const t = Math.floor(y / ifd.tileHeight) * across + Math.floor(x / ifd.tileWidth);
+      const b = await block(t, ifd.tileWidth, ifd.tileHeight);
+      v = get(b, ((y % ifd.tileHeight) * ifd.tileWidth + (x % ifd.tileWidth)) * spp);
+    } else {
+      const rps = Math.min(ifd.rowsPerStrip, ifd.height);
+      const s = Math.floor(y / rps);
+      const rows = Math.min(rps, ifd.height - s * rps);
+      const b = await block(s, ifd.width, rows);
+      v = get(b, ((y - s * rps) * ifd.width + x) * spp);
+    }
+    return ifd.nodata !== null && v === ifd.nodata ? NaN : Number.isFinite(v) ? v : NaN;
+  };
+}
 
+/**
+ * First band of the image as a grid of at most `maxSide` pixels on the long side (nodata → NaN).
+ * Picks the smallest overview that's still at least `maxSide`, then point-samples it.
+ */
+export async function readGrid(read: Read, size: number, maxSide = 512): Promise<Grid> {
+  const { ifds, full } = await openTiff(read, size);
+  const candidates = [...ifds].sort((a, b) => a.width - b.width);
+  const ifd = candidates.find((i) => Math.max(i.width, i.height) >= maxSide) ?? candidates[candidates.length - 1];
+  assertReadable(ifd);
+
+  const scale = Math.min(1, maxSide / Math.max(ifd.width, ifd.height));
+  const outW = Math.max(1, Math.round(ifd.width * scale));
+  const outH = Math.max(1, Math.round(ifd.height * scale));
+  const values = new Float32Array(outW * outH).fill(NaN);
+  const at = sampler(ifd, read);
   for (let oy = 0; oy < outH; oy++) {
     const y = Math.min(ifd.height - 1, Math.floor((oy + 0.5) / scale));
     for (let ox = 0; ox < outW; ox++) {
       const x = Math.min(ifd.width - 1, Math.floor((ox + 0.5) / scale));
-      let v: number;
-      if (ifd.tileWidth && ifd.tileHeight) {
-        const across = Math.ceil(ifd.width / ifd.tileWidth);
-        const t = Math.floor(y / ifd.tileHeight) * across + Math.floor(x / ifd.tileWidth);
-        const b = await block(t, ifd.tileWidth, ifd.tileHeight);
-        v = get(b, ((y % ifd.tileHeight) * ifd.tileWidth + (x % ifd.tileWidth)) * spp);
-      } else {
-        const rps = Math.min(ifd.rowsPerStrip, ifd.height);
-        const s = Math.floor(y / rps);
-        const rows = Math.min(rps, ifd.height - s * rps);
-        const b = await block(s, ifd.width, rows);
-        v = get(b, ((y - s * rps) * ifd.width + x) * spp);
-      }
-      values[oy * outW + ox] = ifd.nodata !== null && v === ifd.nodata ? NaN : Number.isFinite(v) ? v : NaN;
+      values[oy * outW + ox] = await at(x, y);
     }
   }
   const px = ifd.pixelScale ?? [1, 1];
   const geographic = ifd.epsg !== null && ifd.epsg >= 4000 && ifd.epsg < 5000;
   return { width: outW, height: outH, values, cellSize: [px[0] / scale, px[1] / scale], geographic, sourceWidth: full.width, sourceHeight: full.height };
+}
+
+/** What a viewer needs to lay out tiles: the size, the cell size, and how many overview levels the file carries. */
+export function describeTiff(open: OpenTiff) {
+  const px = open.full.pixelScale ?? [1, 1];
+  return {
+    width: open.full.width,
+    height: open.full.height,
+    cellSize: px as [number, number],
+    geographic: open.full.epsg !== null && open.full.epsg >= 4000 && open.full.epsg < 5000,
+    epsg: open.full.epsg,
+    overviews: open.ifds.length - 1,
+  };
+}
+
+/** A window needs more strips or tiles than a preview may read; the viewer should ask for a smaller area. */
+export class TooManyBlocksError extends UnsupportedTiffError {}
+
+/**
+ * The pixels of a rectangle of the full-resolution image (`x`, `y`, `w`, `h` in full-resolution pixels, which may run past the edges: those
+ * come back as NaN), resampled to `outW` × `outH` by taking the pixel under each output pixel's centre. Uses the smallest overview
+ * that still has at least one pixel per output pixel, so zoomed-out windows of a COG read little. `maxBlocks` bounds the strips or
+ * tiles it will decode; a file without overviews, zoomed far out, needs the viewer to ask for less.
+ */
+export async function readWindow(open: OpenTiff, win: { x: number; y: number; w: number; h: number }, outW: number, outH: number, maxBlocks = 600): Promise<Float32Array> {
+  const { full } = open;
+  const perOut = win.w / outW; // full-resolution pixels per output pixel
+  const ifd = [...open.ifds].sort((a, b) => a.width - b.width).find((i) => (i.width / full.width) * perOut >= 1) ?? full;
+  assertReadable(ifd);
+  const sx = ifd.width / full.width;
+  const sy = ifd.height / full.height;
+  // How many blocks lie under the window at that level?
+  const x0 = Math.max(0, Math.floor(win.x * sx)), x1 = Math.min(ifd.width - 1, Math.ceil((win.x + win.w) * sx));
+  const y0 = Math.max(0, Math.floor(win.y * sy)), y1 = Math.min(ifd.height - 1, Math.ceil((win.y + win.h) * sy));
+  if (x1 >= x0 && y1 >= y0) {
+    const blocks = ifd.tileWidth && ifd.tileHeight
+      ? (Math.floor(x1 / ifd.tileWidth) - Math.floor(x0 / ifd.tileWidth) + 1) * (Math.floor(y1 / ifd.tileHeight) - Math.floor(y0 / ifd.tileHeight) + 1)
+      : Math.floor(y1 / Math.min(ifd.rowsPerStrip, ifd.height)) - Math.floor(y0 / Math.min(ifd.rowsPerStrip, ifd.height)) + 1;
+    if (blocks > maxBlocks) throw new TooManyBlocksError(`This area needs ${blocks} blocks of the file; zoom in (the file has ${open.ifds.length > 1 ? "few" : "no"} overviews).`);
+  }
+  const at = sampler(ifd, open.read);
+  const values = new Float32Array(outW * outH).fill(NaN);
+  for (let oy = 0; oy < outH; oy++) {
+    const fy = win.y + ((oy + 0.5) * win.h) / outH;
+    if (fy < 0 || fy >= full.height) continue;
+    const y = Math.min(ifd.height - 1, Math.floor(fy * sy));
+    for (let ox = 0; ox < outW; ox++) {
+      const fx = win.x + ((ox + 0.5) * win.w) / outW;
+      if (fx < 0 || fx >= full.width) continue;
+      values[oy * outW + ox] = await at(Math.min(ifd.width - 1, Math.floor(fx * sx)), y);
+    }
+  }
+  return values;
 }

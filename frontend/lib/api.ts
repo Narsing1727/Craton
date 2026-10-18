@@ -452,6 +452,29 @@ export async function fetchArchive(owner: string, repo: string, ref: string, pat
   }
 }
 
+export type ApiTileInfo = { width: number; height: number; tileSize: number; maxZoom: number; min: number; max: number; cellSize: [number, number]; geographic: boolean; epsg: number | null; overviews: number };
+
+/** A raster's layout for zooming, or why it can not be zoomed. */
+export async function fetchTileInfo(owner: string, repo: string, ref: string, path: string): Promise<Response | null> {
+  try {
+    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/tileinfo/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: await authHeaders(), cache: "no-store" });
+  } catch (err) {
+    unstable_rethrow(err);
+    return null;
+  }
+}
+
+/** One 256-pixel tile of a raster, for the tile route to stream to the browser. */
+export async function fetchTile(owner: string, repo: string, ref: string, path: string, z: string, x: string, y: string, ifNoneMatch?: string): Promise<Response | null> {
+  try {
+    const headers = await authHeaders();
+    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/tiles/${encodeURIComponent(ref)}/${encodeURIComponent(z)}/${encodeURIComponent(x)}/${encodeURIComponent(y)}/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: ifNoneMatch ? { ...headers, "if-none-match": ifNoneMatch } : headers, cache: "no-store" });
+  } catch (err) {
+    unstable_rethrow(err);
+    return null;
+  }
+}
+
 /** The rendered preview itself (PNG or SVG), for the render route to stream to the browser. */
 export async function fetchRender(owner: string, repo: string, ref: string, path: string, opts: { base?: string; size?: number; ifNoneMatch?: string } = {}): Promise<Response | null> {
   try {

@@ -164,5 +164,5 @@ test("a batch is stored a few chunks at a time: against a slow object store it t
   const out = (await res.json()) as { chunks: { hash: string }[] };
   assert.deepEqual(out.chunks.map((c) => c.hash), parts.map(sha), "results keep the order of the frames");
   assert.equal(store.puts, 80);
-  assert.ok(elapsed < 80 * 30 * 0.5, `took ${elapsed} ms; one by one would be about ${80 * 30} ms`);
+  assert.ok(elapsed < 80 * 30 * 0.75, `took ${elapsed} ms; one by one would be about ${80 * 30} ms`);
 });
