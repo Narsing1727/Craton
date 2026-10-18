@@ -118,6 +118,14 @@ export async function removeSsoAction(org: string) {
   return write<null>("DELETE", `/orgs/${encodeURIComponent(org)}/sso`, undefined, [`/orgs/${org}`]);
 }
 
+// ── Organization provisioning (SCIM) tokens (owners) ──
+export async function createScimTokenAction(org: string, note: string) {
+  return write<{ id: number; note: string; token: string; baseUrl: string }>("POST", `/orgs/${encodeURIComponent(org)}/scim/tokens`, { note }, [`/orgs/${org}`]);
+}
+export async function revokeScimTokenAction(org: string, id: number) {
+  return write<null>("DELETE", `/orgs/${encodeURIComponent(org)}/scim/tokens/${id}`, undefined, [`/orgs/${org}`]);
+}
+
 // ── Organization domains (owners) ──
 const domainPath = (org: string, domain?: string) => `/orgs/${encodeURIComponent(org)}/domains${domain ? `/${encodeURIComponent(domain)}` : ""}`;
 export async function addDomainAction(org: string, domain: string) {

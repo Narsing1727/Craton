@@ -13,6 +13,7 @@ import { secureHeaders } from "hono/secure-headers";
 import type { Ctx } from "../services/context.ts";
 import { ApiError, badRequest, notFound } from "../services/context.ts";
 import * as accounts from "../services/accounts.ts";
+import * as scim from "../services/scim.ts";
 import * as repos from "../services/repos.ts";
 import { datasetJsonLd } from "../services/dataset.ts";
 import * as chunks from "../services/chunks.ts";
@@ -191,6 +192,7 @@ export function createApp(ctx: Ctx) {
   });
 
   app.onError((err, c) => {
+    if (err instanceof scim.ScimError) return c.body(JSON.stringify(err), err.status as 400, { "content-type": "application/scim+json" });
     if (err instanceof ApiError) return c.json({ error: { code: err.code, message: err.message, details: err.details } }, err.status as 400);
     console.error(err);
     return c.json({ error: { code: "internal", message: "Something went wrong on our side." } }, 500);
@@ -582,6 +584,49 @@ export function createApp(ctx: Ctx) {
     await sso.remove(ctx, c.req.param("org"), requireUser(c).id);
     return c.body(null, 204);
   });
+  // ── SCIM provisioning ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+  // Owners make the token an identity provider (Okta, Entra ID, ...) uses; the provider then manages the organization's people.
+  v1.get("/orgs/:org/scim", async (c) => (requireScope(c, "admin:org"), c.json(await scim.overview(ctx, c.req.param("org"), requireUser(c).id))));
+  v1.post("/orgs/:org/scim/tokens", async (c) => {
+    requireScope(c, "admin:org");
+    limit(c, `scim-token:${requireUser(c).id}`, { max: 10, windowMs: 10 * 60_000 }, "Too many tokens made just now. Wait a few minutes.");
+    const b = await body<{ note?: string }>(c);
+    return c.json(await scim.createToken(ctx, c.req.param("org"), requireUser(c).id, b.note), 201);
+  });
+  v1.delete("/orgs/:org/scim/tokens/:id", async (c) => {
+    requireScope(c, "admin:org");
+    await scim.revokeToken(ctx, c.req.param("org"), requireUser(c).id, Number(c.req.param("id")));
+    return c.body(null, 204);
+  });
+  // The SCIM endpoints themselves: the provisioning token is the only credential, and it works for one organization.
+  const scimJson = (c: Context<Env>, data: unknown, status = 200) => c.body(JSON.stringify(data), status as 200, { "content-type": "application/scim+json" });
+  const scimOrg = async (c: Context<Env>) => {
+    const org = await scim.authenticate(ctx, c.req.param("org") ?? "", c.req.header("authorization")?.replace(/^Bearer /i, "") ?? null);
+    const r = limits.take(`scim:${org.tokenId}`, { max: 1200, windowMs: 60_000 });
+    if (!r.allowed) throw new scim.ScimError(429, "Too many requests. Slow down and try again shortly.");
+    return org;
+  };
+  const scimBody = async (c: Context<Env>) => {
+    try {
+      const parsed = await c.req.json();
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+    throw new scim.ScimError(400, "The request body must be JSON.", "invalidSyntax");
+  };
+  v1.get("/scim/v2/:org/ServiceProviderConfig", async (c) => (await scimOrg(c), scimJson(c, scim.serviceProviderConfig())));
+  v1.get("/scim/v2/:org/ResourceTypes", async (c) => scimJson(c, scim.resourceTypes(await scimOrg(c))));
+  v1.get("/scim/v2/:org/Schemas", async (c) => (await scimOrg(c), scimJson(c, scim.schemas())));
+  v1.get("/scim/v2/:org/Users", async (c) => scimJson(c, await scim.listUsers(ctx, await scimOrg(c), { filter: c.req.query("filter"), startIndex: c.req.query("startIndex"), count: c.req.query("count") })));
+  v1.post("/scim/v2/:org/Users", async (c) => scimJson(c, await scim.createUser(ctx, await scimOrg(c), await scimBody(c)), 201));
+  v1.get("/scim/v2/:org/Users/:id", async (c) => scimJson(c, await scim.getUser(ctx, await scimOrg(c), c.req.param("id"))));
+  v1.put("/scim/v2/:org/Users/:id", async (c) => scimJson(c, await scim.replaceUser(ctx, await scimOrg(c), c.req.param("id"), await scimBody(c))));
+  v1.patch("/scim/v2/:org/Users/:id", async (c) => scimJson(c, await scim.patchUser(ctx, await scimOrg(c), c.req.param("id"), await scimBody(c))));
+  v1.delete("/scim/v2/:org/Users/:id", async (c) => {
+    await scim.deleteUser(ctx, await scimOrg(c), c.req.param("id"));
+    return c.body(null, 204);
+  });
+  // Groups are not managed here; an empty list lets providers that ask for them carry on.
+  v1.get("/scim/v2/:org/Groups", async (c) => (await scimOrg(c), scimJson(c, { schemas: ["urn:ietf:params:scim:api:messages:2.0:ListResponse"], totalResults: 0, startIndex: 1, itemsPerPage: 0, Resources: [] })));
   // ── Passkeys ───────────────────────────────────────────────────────────
   // Sign in: the browser asks the device for any passkey it holds for this site; no username is needed first.
   v1.post("/auth/passkey/options", async (c) => {

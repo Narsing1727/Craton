@@ -14,9 +14,10 @@ import { deleteOrgAction, updateOrgAction } from "@/app/actions";
 import { AuditLog } from "@/components/audit-log";
 import { OrgDomains } from "@/components/org-domains";
 import { OrgSso } from "@/components/org-sso";
-import type { ApiAuditPage, ApiOrgDomain, ApiOrgSso } from "@/lib/api";
+import { OrgScim } from "@/components/org-scim";
+import type { ApiAuditPage, ApiOrgDomain, ApiOrgScim, ApiOrgSso } from "@/lib/api";
 
-export function OrgSettingsView({ org, name, bio, role, repositories, audit, domains, sso, verified }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null; domains: ApiOrgDomain[] | null; sso: ApiOrgSso | null; verified: string[] }) {
+export function OrgSettingsView({ org, name, bio, role, repositories, audit, domains, sso, scim, verified }: { org: string; name: string; bio: string; role: string | null; repositories: number; audit: ApiAuditPage | null; domains: ApiOrgDomain[] | null; sso: ApiOrgSso | null; scim: ApiOrgScim | null; verified: string[] }) {
   const owner = role === "Owner";
   const [displayName, setDisplayName] = useState(name);
   const [description, setDescription] = useState(bio);
@@ -104,6 +105,18 @@ export function OrgSettingsView({ org, name, bio, role, repositories, audit, dom
               </CardHeader>
               <CardContent className="p-5">
                 <OrgSso org={org} initial={sso} />
+              </CardContent>
+            </Card>
+          )}
+
+          {owner && scim && (
+            <Card>
+              <CardHeader className="p-5 pb-2">
+                <CardTitle className="text-base font-semibold">User provisioning (SCIM)</CardTitle>
+                <CardDescription>Let your identity provider add and remove {org}’s people by itself, so someone who leaves the directory loses access to {org} the same day.</CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                <OrgScim org={org} initial={scim} />
               </CardContent>
             </Card>
           )}

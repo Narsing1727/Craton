@@ -417,6 +417,9 @@ Not done: NetCDF 4 / HDF5 written with the newest layout (version 4 chunk indexe
 | # | What it does | How to check |
 |---|---|---|
 | 221 | A compressed tile or HDF5 chunk that claims to expand to more than 128 MB (a few kilobytes can) is left as uploaded instead of being inflated, and a file with more than 250,000 compressed pieces is not recoded (a hostile file could otherwise keep the cold tier busy for ever, or fill its memory) | `backend/test/rezip.test.ts` (a 129 MB stream of zeros that is only a few KB) |
+| 222 | **PostgreSQL** is the database: a server (AWS RDS / Aurora through `CRATON_DATABASE_URL`) or Postgres inside the API process for development; backup/restore are an engine-neutral dump; `npm run migrate-sqlite` moves an old file across | `docker compose up -d db`, then `CRATON_TEST_PG=postgres://craton:craton@localhost:5433/craton npm test` in `backend` (the whole suite on a real server) | |
+| 223 | **S3 chunk store** beside R2: keys, or the role of an ECS task / EC2 instance, refetched before it expires | Set `CRATON_S3_BUCKET` and `CRATON_S3_REGION`; `npm test` runs `s3store.test.ts` against a local S3-shaped server | |
+| 224 | **SCIM provisioning**: an organization with a verified domain makes a token in Settings → User provisioning; its identity provider adds and removes people (owners never removed) | Org settings → User provisioning; `backend/test/scim.test.ts` plays the provider's side | |
 
 ### Turning Google on (what you need from Google)
 1. Google Cloud Console → APIs & Services → **OAuth consent screen**, then **Credentials → Create credentials → OAuth client ID → Web application**.

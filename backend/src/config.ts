@@ -58,6 +58,8 @@ export const config = {
     /** A statement that runs longer than this is cancelled by the server (0 turns it off). Stops one runaway query holding a connection. */
     statementTimeoutMs: Math.max(0, Math.floor(Number(env.CRATON_DB_STATEMENT_TIMEOUT_MS ?? 120_000)) || 0),
   },
+  /** The address identity providers reach this API at (for the SCIM base URL shown in settings). */
+  publicApiUrl: (env.CRATON_PUBLIC_API_URL ?? `http://localhost:${Number(env.PORT ?? 4000)}`).replace(/\/+$/, ""),
   /** Where the web app lives, for links the API writes (password reset). */
   webUrl: (env.CRATON_WEB_URL ?? "http://localhost:3100").replace(/\/+$/, ""),
   /** Origins allowed to call the API from a browser. */

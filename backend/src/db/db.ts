@@ -14,6 +14,7 @@ import pg from "pg";
 import { PGlite } from "@electric-sql/pglite";
 import { citext } from "@electric-sql/pglite/contrib/citext";
 import { BASELINE } from "./schema.ts";
+import { MIGRATIONS } from "./migrations.ts";
 
 export type Param = string | number | bigint | boolean | null | undefined | Uint8Array;
 
@@ -228,7 +229,7 @@ class LiteTx extends LiteQueries implements DB {
 // ---- opening ------------------------------------------------------------------------------------------------------------------
 
 /** Migrations after the baseline, each run once, in order (the baseline is version 1). */
-const migrations: string[] = [];
+const migrations = MIGRATIONS;
 
 /** The schema version this build expects. */
 export const SCHEMA_VERSION = 1 + migrations.length;
