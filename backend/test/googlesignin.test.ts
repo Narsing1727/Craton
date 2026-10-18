@@ -71,7 +71,7 @@ before(async () => {
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   Object.assign(config.google, { clientId: CLIENT_ID, clientSecret: "shh", tokenUrl: `${base}/token`, jwksUrl: `${base}/certs`, authUrl: `${base}/auth` });
   resetKeyCache();
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() } as Ctx;
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() } as Ctx;
   app = createApp(ctx);
 });
 after(() => {
@@ -157,7 +157,7 @@ test("a first sign-in asks for a username, then the account exists, verified and
 
 test("an existing account with a confirmed address is joined by email; one never confirmed is refused", async () => {
   await signUp("confirmed", "confirmed@example.org");
-  ctx.db.prepare("UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z' WHERE email = 'confirmed@example.org'").run();
+  await ctx.db.run("UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z' WHERE email = 'confirmed@example.org'");
   const joined = await viaGoogle({ sub: "g-200", email: "CONFIRMED@example.org", name: "C" });
   assert.equal(joined.res.status, 200);
   assert.ok(typeof joined.body.token === "string");
@@ -170,13 +170,13 @@ test("an existing account with a confirmed address is joined by email; one never
   const refused = await viaGoogle({ sub: "g-201", email: "victim@example.org", name: "Victim" });
   assert.equal(refused.res.status, 409);
   assert.equal(refused.body.error?.code ?? refused.body.code, "email_unverified_account");
-  const stillOwned = ctx.db.prepare("SELECT COUNT(*) AS n FROM oauth_identities WHERE subject = 'g-201'").get() as { n: number };
+  const stillOwned = await ctx.db.get("SELECT COUNT(*) AS n FROM oauth_identities WHERE subject = 'g-201'") as { n: number };
   assert.equal(stillOwned.n, 0);
 });
 
 test("two-step verification still applies after Google", async () => {
   await signUp("guarded", "guarded@example.org");
-  ctx.db.prepare("UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z', totp_enabled_at = '2026-01-02T00:00:00.000Z', totp_secret = 'not-used-here' WHERE email = 'guarded@example.org'").run();
+  await ctx.db.run("UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z', totp_enabled_at = '2026-01-02T00:00:00.000Z', totp_secret = 'not-used-here' WHERE email = 'guarded@example.org'");
   const r = await viaGoogle({ sub: "g-300", email: "guarded@example.org", name: "G" });
   assert.equal(r.res.status, 200);
   assert.equal(r.body.mfaRequired, true);
@@ -201,8 +201,8 @@ test("every way an ID token can be wrong is refused", async () => {
     assert.equal(r.res.status, c.status, `${c.name}: ${JSON.stringify(r.body)}`);
     assert.equal(r.body.error?.code ?? r.body.code, c.code, c.name);
   }
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM oauth_pending").get() as { n: number }).n, 0, "no refused attempt left a pending account behind");
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM oauth_identities WHERE subject = 'g-bad'").get() as { n: number }).n, 0, "nor a linked identity");
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM oauth_pending") as { n: number }).n, 0, "no refused attempt left a pending account behind");
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM oauth_identities WHERE subject = 'g-bad'") as { n: number }).n, 0, "nor a linked identity");
 });
 
 test("state is single use and must be one we issued; an expired sign-in is refused", async () => {
@@ -216,7 +216,7 @@ test("state is single use and must be one we issued; an expired sign-in is refus
   assert.equal(missing.status, 400);
   // Expire a stored sign-in.
   const start = (await (await post("/auth/google/start", {})).json()) as { state: string };
-  ctx.db.prepare("UPDATE oauth_flows SET expires_at = '2020-01-01T00:00:00.000Z'").run();
+  await ctx.db.run("UPDATE oauth_flows SET expires_at = '2020-01-01T00:00:00.000Z'");
   assert.equal((await post("/auth/google/callback", { code: "x", state: start.state })).status, 400);
 });
 
@@ -263,9 +263,7 @@ test("Google can be disconnected only while another way in exists", async () => 
   const change = await post("/user/password", { current: "", next: "a-brand-new-long-password" }, token);
   assert.equal(change.status, 409);
   // With a password (as "Forgot password" would set) it can be disconnected.
-  ctx.db.prepare("UPDATE users SET password_hash = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'solo')").run(
-    (await import("../src/services/accounts.ts")).hashPassword("a-brand-new-long-password"),
-  );
+  await ctx.db.run("UPDATE users SET password_hash = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'solo')", (await import("../src/services/accounts.ts")).hashPassword("a-brand-new-long-password"));
   const ok = await app.request("/v1/user/identities/google", { method: "DELETE", headers: { authorization: `Bearer ${token}` } });
   assert.equal(ok.status, 204);
   const log = (await (await get("/user/security-log", token)).json()) as { type: string }[] | { events: { type: string }[] };
@@ -281,7 +279,7 @@ test("a Google-only account is deleted by typing its username, no password", asy
   assert.equal(wrong.status, 400);
   const gone = await app.request("/v1/user", { method: "DELETE", headers: { ...json, authorization: `Bearer ${token}` }, body: JSON.stringify({ handle: "leaver", password: "" }) });
   assert.equal(gone.status, 204);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM oauth_identities WHERE subject = 'g-800'").get() as { n: number }).n, 0, "the link goes with the account");
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM oauth_identities WHERE subject = 'g-800'") as { n: number }).n, 0, "the link goes with the account");
 });
 
 test("with no client id the button is off and the routes say so", async () => {

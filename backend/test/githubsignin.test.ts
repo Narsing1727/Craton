@@ -56,7 +56,7 @@ before(async () => {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   Object.assign(config.github, { clientId: CLIENT_ID, clientSecret: "shh", tokenUrl: `${base}/token`, apiUrl: base, authUrl: `${base}/authorize` });
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() } as Ctx;
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() } as Ctx;
   app = createApp(ctx);
 });
 after(() => {
@@ -87,7 +87,7 @@ async function viaGithub(who: Account, opts: { token?: string; link?: boolean; n
 async function signUp(handle: string, email: string) {
   const res = await post("/auth/signup", { username: handle, email, password: "a-very-long-password" });
   assert.equal(res.status, 201);
-  ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE lower(email) = lower(?)").run(new Date().toISOString(), email);
+  await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE lower(email) = lower(?)", new Date().toISOString(), email);
   return ((await res.json()) as { token: string }).token;
 }
 
@@ -206,7 +206,7 @@ test("with both providers connected, either can go while the other remains", asy
   try {
     const solo = (await viaGithub(account(1009, "both", verifiedPrimary("both@example.org")))).body;
     const made = (await (await post("/auth/github/complete", { ticket: solo.ticket, username: "both" })).json()) as { token: string };
-    ctx.db.prepare("INSERT INTO oauth_identities (provider, subject, user_id, email) VALUES ('google', 'g-1', (SELECT owner_id FROM users WHERE email = 'both@example.org'), 'both@example.org')").run();
+    await ctx.db.run("INSERT INTO oauth_identities (provider, subject, user_id, email) VALUES ('google', 'g-1', (SELECT owner_id FROM users WHERE email = 'both@example.org'), 'both@example.org')");
     assert.equal((await app.request("/v1/user/identities/github", { method: "DELETE", headers: { authorization: `Bearer ${made.token}` } })).status, 204);
     assert.equal((await app.request("/v1/user/identities/google", { method: "DELETE", headers: { authorization: `Bearer ${made.token}` } })).status, 409, "now Google is the last way in");
   } finally {

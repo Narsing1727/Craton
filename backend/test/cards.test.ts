@@ -22,7 +22,7 @@ async function call(method: string, path: string, body?: unknown) {
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "mira", email: "mira@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;

@@ -78,7 +78,7 @@ export async function commitUpload(
     seen.add(f.path);
   }
 
-  const existing = ctx.db.prepare("SELECT commit_id FROM refs WHERE repo_id = ? AND kind = 'branch' AND name = ?").get(repo.id, input.branch) as { commit_id: string } | undefined;
+  const existing = await ctx.db.get("SELECT commit_id FROM refs WHERE repo_id = ? AND kind = 'branch' AND name = ?", repo.id, input.branch) as { commit_id: string } | undefined;
   // The browser says which version it was looking at; if the branch has moved since, don't stack
   // a commit on something the person never saw.
   if (existing && input.expected && !existing.commit_id.startsWith(input.expected)) {
@@ -90,15 +90,15 @@ export async function commitUpload(
     // A new branch starts from where another one is now (the default branch unless told otherwise).
     const from = input.from || repo.default_branch;
     try {
-      parent = resolveRef(ctx, repo, from);
+      parent = await resolveRef(ctx, repo, from);
     } catch {
       // An empty repository has nothing to start from, which is fine for its first commit.
-      if (ctx.db.prepare("SELECT 1 FROM refs WHERE repo_id = ? AND kind = 'branch' LIMIT 1").get(repo.id)) throw badRequest(`There’s no branch “${from}” to start “${input.branch}” from.`);
+      if (await ctx.db.get("SELECT 1 FROM refs WHERE repo_id = ? AND kind = 'branch' LIMIT 1", repo.id)) throw badRequest(`There’s no branch “${from}” to start “${input.branch}” from.`);
       parent = null;
     }
   }
 
-  const base = parent ? getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, parent, "commit").tree, "tree") : null;
+  const base = parent ? await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, parent, "commit")).tree, "tree") : null;
   const entries = new Map<string, TreeEntry>((base?.entries ?? []).map((e) => [e.path, e]));
 
   // Work out everything first (chunks, blobs, what actually changes), then check the rules, and
@@ -115,21 +115,21 @@ export async function commitUpload(
   const unchanged = planned.filter((p) => entries.get(p.f.path)?.blob === p.id).map((p) => p.f.path);
   if (!changedPlan.length) throw new ApiError(409, "nothing_changed", "Those files are already in the repository exactly as they are, so there’s nothing to commit.");
 
-  assertNotLockedByOthers(ctx, repo, actor, changedPlan.map((p) => p.f.path));
-  assertLockedWhenRequired(ctx, repo, actor, changedPlan.map((p) => p.f.path));
+  await assertNotLockedByOthers(ctx, repo, actor, changedPlan.map((p) => p.f.path));
+  await assertLockedWhenRequired(ctx, repo, actor, changedPlan.map((p) => p.f.path));
   // A credential in what is about to be committed stops the upload before anything is stored.
   const scan = await secretscan.scanFiles(ctx, changedPlan.map((p) => ({ path: p.f.path, size: p.f.data.length, load: async () => p.f.data })));
-  secretscan.enforce(ctx, repo, input.secrets.who, scan.findings, input.secrets.bypass, "/repos/:owner/:repo/upload");
+  await secretscan.enforce(ctx, repo, input.secrets.who, scan.findings, input.secrets.bypass, "/repos/:owner/:repo/upload");
   let wanted = 0;
   const counted = new Set<string>();
   for (const p of changedPlan) {
     for (const c of p.pieces) {
-      if (counted.has(c.hash) || visibleToRepo(ctx, repo, c.hash)) continue;
+      if (counted.has(c.hash) || await visibleToRepo(ctx, repo, c.hash)) continue;
       counted.add(c.hash);
       wanted += c.size;
     }
   }
-  if (wanted > 0) assertStorageAvailable(ctx, repo, wanted);
+  if (wanted > 0) await assertStorageAvailable(ctx, repo, wanted);
 
   const objects: (BlobObject | TreeObject | CommitObject)[] = [];
   const changed: UploadResult["files"] = [];
@@ -161,8 +161,8 @@ export async function commitUpload(
   const message = (input.message ?? "").trim() || `Upload ${noun}`;
   const commit = makeCommit({ tree: objectId(tree), parents: parent ? [parent] : [], author: actor, message: message.slice(0, 500), timestamp: new Date().toISOString() }, tree);
   objects.push(tree, commit);
-  registerObjects(ctx, repo, objects);
+  await registerObjects(ctx, repo, objects);
   const id = objectId(commit);
-  updateBranch(ctx, repo, input.branch, id, existing?.commit_id ?? null, actor, "push");
+  await updateBranch(ctx, repo, input.branch, id, existing?.commit_id ?? null, actor, "push");
   return { commit: id, branch: input.branch, before: existing?.commit_id ?? null, created, files: changed, unchanged, bytes: changed.reduce((n, c) => n + c.size, 0), newBytes, storedBytes };
 }

@@ -51,7 +51,7 @@ async function download(path: string, who: string | null) {
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "ines"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
@@ -65,8 +65,8 @@ before(async () => {
   files["model/plan.p01"] = Buffer.from("Plan Title=Calibration run 4\n".repeat(40));
   files["notes/empty.txt"] = Buffer.alloc(0);
   files["notes/réseau.csv"] = Buffer.from("gauge,level\nG3,4.2\n");
-  const owner = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number };
-  await commitFiles(ctx, getRepoFor(ctx, "rhea", "basin", owner.id), { branch: "main", author: "rhea", message: "Initial", timestamp: new Date("2026-09-30T10:20:30Z"), changes: files });
+  const owner = await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number };
+  await commitFiles(ctx, await getRepoFor(ctx, "rhea", "basin", owner.id), { branch: "main", author: "rhea", message: "Initial", timestamp: new Date("2026-09-30T10:20:30Z"), changes: files });
 });
 
 test("the whole repository downloads as a valid ZIP that reproduces every file exactly", async () => {

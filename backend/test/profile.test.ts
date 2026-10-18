@@ -27,7 +27,7 @@ async function call(method: string, path: string, who: string | null, body?: unk
 }
 
 before(async () => {
-  app = createApp({ db: openDb(":memory:"), store: new MemoryStore() } as Ctx);
+  app = createApp({ db: await openDb(":memory:"), store: new MemoryStore() } as Ctx);
   for (const u of ["alice", "bob"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;

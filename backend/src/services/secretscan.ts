@@ -42,7 +42,7 @@ export type Finding = {
 };
 
 type Hit = { kind: string; match: string; index: number; live?: boolean; tokenId?: number; preview?: string };
-type Detector = { kind: string; re: RegExp; check?: (m: RegExpExecArray, ctx: Ctx) => Omit<Hit, "kind" | "match" | "index"> | null };
+type Detector = { kind: string; re: RegExp; check?: (m: RegExpExecArray, ctx: Ctx) => Promise<Omit<Hit, "kind" | "match" | "index"> | null> | Omit<Hit, "kind" | "match" | "index"> | null };
 
 const PLACEHOLDER_PASSWORD = /^(?:password|passwd|pass|secret|changeme|change-me|example|your[-_ ]?password|xxx+|\*+|\.{3}|0+|1234\d*|test|admin|root)$/i;
 const LOCAL_HOST = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|(?:[a-z0-9-]+\.)?example\.(?:com|org|net))(?::\d+)?$/i;
@@ -51,9 +51,9 @@ const DETECTORS: Detector[] = [
   {
     kind: "Craton access token",
     re: new RegExp(TOKEN_IN_TEXT.source, "g"),
-    check: (m, ctx) => {
+    check: async (m, ctx) => {
       if (!checksumValid(m[2])) return null;
-      const live = liveToken(ctx, m[0]);
+      const live = await liveToken(ctx, m[0]);
       // A token that no longer works is not a secret any more.
       return live ? { live: true, tokenId: live.id, preview: `crt_${m[1]}_…` } : null;
     },
@@ -61,8 +61,8 @@ const DETECTORS: Detector[] = [
   {
     kind: "Craton access token",
     re: new RegExp(LEGACY_TOKEN_IN_TEXT.source, "g"),
-    check: (m, ctx) => {
-      const live = liveToken(ctx, m[0]);
+    check: async (m, ctx) => {
+      const live = await liveToken(ctx, m[0]);
       return live ? { live: true, tokenId: live.id, preview: "bcn_…" } : null;
     },
   },
@@ -93,7 +93,7 @@ const DETECTORS: Detector[] = [
 ];
 
 /** Every credential in one file's text. `path` only labels the findings. */
-export function scanText(ctx: Ctx, path: string, text: string): Finding[] {
+export async function scanText(ctx: Ctx, path: string, text: string): Promise<Finding[]> {
   const found: Finding[] = [];
   let starts: number[] | null = null;
   const lineOf = (index: number) => {
@@ -113,7 +113,7 @@ export function scanText(ctx: Ctx, path: string, text: string): Finding[] {
   for (const d of DETECTORS) {
     d.re.lastIndex = 0;
     for (let m = d.re.exec(text); m; m = d.re.exec(text)) {
-      const hit = d.check ? d.check(m, ctx) : {};
+      const hit = d.check ? await d.check(m, ctx) : {};
       if (!hit) continue;
       const line = lineOf(m.index);
       const lineStart = starts![line];
@@ -146,7 +146,7 @@ export async function scanFiles(ctx: Ctx, files: Candidate[]): Promise<{ finding
     const data = await f.load();
     if (!looksLikeText(data)) continue;
     scanned++;
-    for (const hit of scanText(ctx, f.path, data.toString("utf8"))) {
+    for (const hit of await scanText(ctx, f.path, data.toString("utf8"))) {
       findings.push(f.commit ? { ...hit, commit: f.commit } : hit);
       if (findings.length >= MAX_FINDINGS) return { findings, scanned };
     }
@@ -157,19 +157,19 @@ export async function scanFiles(ctx: Ctx, files: Candidate[]): Promise<{ finding
 /** What moving `branch` to `to` would add: every file added or changed by a commit the repository does not have on that branch yet. */
 export async function scanPush(ctx: Ctx, repo: RepoRow, from: string | null, to: string) {
   if (!config.secretScan.enabled) return { findings: [] as Finding[], scanned: 0 };
-  const commits = commitsBetween(ctx, repo, from, to);
+  const commits = await commitsBetween(ctx, repo, from, to);
   const seen = new Set<string>();
   const files: Candidate[] = [];
   for (const id of commits) {
-    const commit = getObject<CommitObject>(ctx, repo, id, "commit");
-    const after = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
-    const parent = commit.parents[0] ? getObject<CommitObject>(ctx, repo, commit.parents[0], "commit") : null;
-    const before = parent ? getObject<TreeObject>(ctx, repo, parent.tree, "tree") : null;
+    const commit = await getObject<CommitObject>(ctx, repo, id, "commit");
+    const after = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+    const parent = commit.parents[0] ? await getObject<CommitObject>(ctx, repo, commit.parents[0], "commit") : null;
+    const before = parent ? await getObject<TreeObject>(ctx, repo, parent.tree, "tree") : null;
     for (const ch of diffTrees(before, after)) {
       if (ch.change === "removed" || !ch.newBlob || seen.has(ch.newBlob)) continue;
       seen.add(ch.newBlob);
       const blobId = ch.newBlob;
-      files.push({ path: ch.path, size: ch.sizeAfter, commit: commits.length > 1 ? id.slice(0, 7) : undefined, load: () => new BlobReader(ctx, getObject<BlobObject>(ctx, repo, blobId, "blob")).readAll() });
+      files.push({ path: ch.path, size: ch.sizeAfter, commit: commits.length > 1 ? id.slice(0, 7) : undefined, load: async () => new BlobReader(ctx, await getObject<BlobObject>(ctx, repo, blobId, "blob")).readAll() });
     }
   }
   return scanFiles(ctx, files);
@@ -178,10 +178,10 @@ export async function scanPush(ctx: Ctx, repo: RepoRow, from: string | null, to:
 /** Scan what moving `branch` to commit `next` would add. A commit the repository does not have is left for the update itself to refuse. */
 export async function scanBranchUpdate(ctx: Ctx, repo: RepoRow, branch: string, next: string) {
   const none = { findings: [] as Finding[], scanned: 0 };
-  if (!config.secretScan.enabled || !ctx.db.prepare("SELECT 1 FROM commits WHERE repo_id = ? AND id = ?").get(repo.id, next)) return none;
-  const tipOf = (name: string) => (ctx.db.prepare("SELECT commit_id FROM refs WHERE repo_id = ? AND kind = 'branch' AND name = ?").get(repo.id, name) as { commit_id: string } | undefined)?.commit_id ?? null;
+  if (!config.secretScan.enabled || !await ctx.db.get("SELECT 1 FROM commits WHERE repo_id = ? AND id = ?", repo.id, next)) return none;
+  const tipOf = async (name: string) => (await ctx.db.get("SELECT commit_id FROM refs WHERE repo_id = ? AND kind = 'branch' AND name = ?", repo.id, name) as { commit_id: string } | undefined)?.commit_id ?? null;
   // An existing branch: what is new since its tip. A new one: what is new since the default branch.
-  const from = tipOf(branch) ?? tipOf(repo.default_branch);
+  const from = await tipOf(branch) ?? await tipOf(repo.default_branch);
   if (from === next) return none;
   return scanPush(ctx, repo, from, next);
 }
@@ -205,12 +205,12 @@ function describe(findings: Finding[]): string {
  * each place (never the secret), unless a repository administrator gave a reason to go ahead, in which case the push
  * is let through, the reason goes into the audit log, and a live Craton token in a public repository is revoked.
  */
-export function enforce(ctx: Ctx, repo: RepoRow, who: Who, findings: Finding[], bypass: string | null, route: string): { bypassed: boolean; revoked: number } {
+export async function enforce(ctx: Ctx, repo: RepoRow, who: Who, findings: Finding[], bypass: string | null, route: string): Promise<{ bypassed: boolean; revoked: number }> {
   if (!findings.length) return { bypassed: false, revoked: 0 };
   const kinds = uniqueKinds(findings).join(", ");
   const note = { repo, ownerId: repo.owner_id, actor: who, route };
   if (!bypass) {
-    audit.recordNote(ctx, { ...note, action: "Push stopped: a credential was found", params: { findings: findings.length, kinds }, status: 422 });
+    await audit.recordNote(ctx, { ...note, action: "Push stopped: a credential was found", params: { findings: findings.length, kinds }, status: 422 });
     const clean = findings.map(({ tokenId: _unused, ...f }) => f);
     throw new ApiError(
       422,
@@ -221,9 +221,9 @@ export function enforce(ctx: Ctx, repo: RepoRow, who: Who, findings: Finding[], 
   }
   let revoked = 0;
   if (repo.visibility === "public") {
-    for (const f of findings) if (f.live && f.tokenId) revoked += revokeExposedToken(ctx, f.tokenId);
+    for (const f of findings) if (f.live && f.tokenId) revoked += await revokeExposedToken(ctx, f.tokenId);
   }
-  audit.recordNote(ctx, { ...note, action: "Pushed past the secret scan", params: { reason: bypass, findings: findings.length, kinds, ...(revoked ? { revoked } : {}) }, status: 200 });
+  await audit.recordNote(ctx, { ...note, action: "Pushed past the secret scan", params: { reason: bypass, findings: findings.length, kinds, ...(revoked ? { revoked } : {}) }, status: 200 });
   return { bypassed: true, revoked };
 }
 

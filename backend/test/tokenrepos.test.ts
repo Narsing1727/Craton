@@ -27,11 +27,11 @@ async function call(method: string, path: string, token?: string, body?: unknown
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "mira", email: "mira@example.org", password: "a-very-long-password" }) });
   session = ((await res.json()) as { token: string }).token;
-  ctx.db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = 'mira')").run();
+  await ctx.db.run("UPDATE users SET email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = 'mira')");
   for (const [name, visibility] of [["alpha", "private"], ["beta", "private"], ["gamma", "public"]] as const) {
     const r = await call("POST", "/repos", session, { name, visibility, sample: true });
     assert.equal(r.status, 201, r.text);

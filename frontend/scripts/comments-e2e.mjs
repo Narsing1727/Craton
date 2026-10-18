@@ -1,6 +1,6 @@
 // A real browser against a running stack, on throwaway accounts (start the API with a throwaway CRATON_DATA_DIR): react to
 // a comment, edit and delete your own, and see that someone else's cannot be edited.
-//   CRATON_E2E_DB=<throwaway craton.db> node scripts/comments-e2e.mjs [shots-dir]
+//   CRATON_E2E_DATABASE_URL=<postgres address> node scripts/comments-e2e.mjs [shots-dir]
 
 import { chromium } from "playwright-core";
 
@@ -23,12 +23,10 @@ async function account(name) {
 const owner = await account("own");
 const guest = await account("gst");
 // A public repository needs a confirmed email; confirm it in the throwaway database, as the sign-in scripts do.
-const dbFile = process.env.CRATON_E2E_DB;
-if (!dbFile) throw new Error("Set CRATON_E2E_DB to the throwaway API's craton.db (it confirms the owner's email).");
-const { DatabaseSync } = await import("node:sqlite");
-const db = new DatabaseSync(dbFile);
-db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(owner.handle);
-db.close();
+const { openE2eDb } = await import("./e2e-db.mjs");
+const db = await openE2eDb();
+await db.prepare("UPDATE users SET email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(owner.handle);
+await db.close();
 const made = await fetch(`${API}/v1/repos`, { method: "POST", headers: owner.h, body: JSON.stringify({ name: "basin", visibility: "public" }) });
 if (!made.ok) throw new Error(`repo create failed: ${made.status} ${await made.text()}`);
 await fetch(`${API}/v1/repos/${owner.handle}/basin/issues`, { method: "POST", headers: owner.h, body: JSON.stringify({ title: "Gauge 4 reads high" }) });

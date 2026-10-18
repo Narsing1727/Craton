@@ -1,8 +1,9 @@
 # Craton backend
 
 The API, storage engine, checks runner and CLI behind Craton. TypeScript on Node.js 23.6+
-(run directly with type stripping, no build step), Hono for HTTP, SQLite (`node:sqlite`) for
-metadata, and a content-addressed chunk store on local disk or Cloudflare R2.
+(run directly with type stripping, no build step), Hono for HTTP, PostgreSQL for
+metadata (a server such as AWS RDS, or Postgres inside the process for development), and a content-addressed chunk
+store on local disk or Cloudflare R2.
 
 ## Run it
 
@@ -30,7 +31,8 @@ Everything is in [`src/config.ts`](src/config.ts) and can be overridden with env
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `PORT` | `4000` | HTTP port |
-| `CRATON_DATA_DIR` | `data/` | SQLite database and local chunk store |
+| `CRATON_DATA_DIR` | `data/` | Local chunk store, secret key file, and the development database |
+| `CRATON_DATABASE_URL` | unset | PostgreSQL address, e.g. `postgres://craton:craton@localhost:5433/craton`; unset runs Postgres inside the process (see OPERATING.md) |
 | `CRATON_CORS_ORIGINS` | `http://localhost:3100` | Comma-separated browser origins |
 | `CRATON_WEB_URL` | `http://localhost:3100` | Where the web app lives, for password reset links |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | unset | When all four are set, chunks go to Cloudflare R2 instead of disk |
@@ -74,7 +76,7 @@ missing approval block the merge.
 src/
   api/app.ts          REST API (Hono), mounted at /v1: 61 routes
   core/               FastCDC, zstd, Merkle trees, objects and diffs, data-type detection
-  db/db.ts            SQLite schema and migrations
+  db/                 PostgreSQL access (pg and PGlite), schema, logical dump and restore
   storage/            Chunk stores: memory, local disk (atomic rename), R2 (hand-written SigV4)
   services/           Accounts, repos, chunks, history, collaboration, releases, stats,
                       activity, per-file detail

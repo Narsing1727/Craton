@@ -28,13 +28,13 @@ const R = "/repos/alice/open";
 const thread = async (who: string | null) => (await call("GET", `${R}/issues/1`, who)).json.thread as any[];
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol", "dave"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
   }
-  ctx.db.prepare("UPDATE users SET plan = 'team', email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')").run();
+  await ctx.db.run("UPDATE users SET plan = 'team', email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')");
   assert.equal((await call("POST", "/repos", "alice", { name: "open", visibility: "private" })).status, 201);
   assert.equal((await call("PUT", `${R}/collaborators/bob`, "alice", { role: "Write" })).status, 201);
   assert.equal((await call("PUT", `${R}/collaborators/carol`, "alice", { role: "Read" })).status, 201);
@@ -99,7 +99,7 @@ test("the author or an administrator deletes a comment; nobody else, and its rea
 });
 
 test("a pull request's comments work the same way", async () => {
-  ctx.db.prepare("INSERT INTO pulls (repo_id, number, title, author_id, source, target) SELECT r.id, 1, 'Fix datum', o.id, 'fix', 'main' FROM repos r, owners o WHERE r.name = 'open' AND o.handle = 'alice'").run();
+  await ctx.db.run("INSERT INTO pulls (repo_id, number, title, author_id, source, target) SELECT r.id, 1, 'Fix datum', o.id, 'fix', 'main' FROM repos r, owners o WHERE r.name = 'open' AND o.handle = 'alice'");
   const made = await call("POST", `${R}/pulls/1/comments`, "bob", { body: "Reviewed the geometry." });
   assert.equal(made.status, 201);
   assert.equal((await call("PUT", `${R}/comments/${made.json.id}/reactions/hooray`, "alice")).json.reactions.hooray.count, 1);

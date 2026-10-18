@@ -358,7 +358,7 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 
 | # | What it does | How to check |
 |---|---|---|
-| 201 | **Reactions** on issue and pull request comments: thumbs up and down, laugh, hooray, confused, heart, rocket, eyes. One per person per emoji, counted, hover to see who; the picker is the smiley under a comment | Any issue thread; `npm run e2e:comments` (needs `CRATON_E2E_DB`) |
+| 201 | **Reactions** on issue and pull request comments: thumbs up and down, laugh, hooray, confused, heart, rocket, eyes. One per person per emoji, counted, hover to see who; the picker is the smiley under a comment | Any issue thread; `npm run e2e:comments` (needs `CRATON_E2E_DATABASE_URL`) |
 | 202 | **Edit** your own comment (it then says "(edited)"); **Delete** your own, or anyone's if you administer the repository (its reactions go with it) | Under a comment |
 | 203 | API: `PATCH` and `DELETE /repos/{owner}/{repo}/comments/{id}`, `PUT` and `DELETE …/comments/{id}/reactions/{emoji}`; threads now carry `id`, `editedAt` and `reactions` (with `mine` for the caller); comments are limited to 64 KB; migration 34 | API reference; `backend/test/comments.test.ts` (5 tests) |
 
@@ -367,7 +367,7 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 | # | What it does | How to check |
 |---|---|---|
 | 204 | A release can say **which model run it came from**: software, version, plan or scenario, run time, when it finished, notes, and the commits of the inputs (`owner/name@commit`). Every field is optional and checked (unknown fields, bad times, a branch name where a commit id belongs, more than 50 inputs are all refused) | `POST /repos/{owner}/{repo}/releases` with `run`; `backend/test/releaserun.test.ts` (4 tests) |
-| 205 | The release form has an optional **Model run** section (software, version, plan, run time in minutes, notes); the releases page shows it under the notes; the STAC collection carries it as `craton:run` | Releases → New release; `npm run e2e:release-run` in `frontend` (needs `CRATON_E2E_DB`) |
+| 205 | The release form has an optional **Model run** section (software, version, plan, run time in minutes, notes); the releases page shows it under the notes; the STAC collection carries it as `craton:run` | Releases → New release; `npm run e2e:release-run` in `frontend` (needs `CRATON_E2E_DATABASE_URL`) |
 
 ### 29. Changed rasters stored as differences (bit-for-bit exact)
 
@@ -378,7 +378,7 @@ Run the browser check against a throwaway API (start it with its own `CRATON_DAT
 | 208 | Clients are always sent a chunk in an encoding that stands alone (the server decodes the difference first), so the CLI, clone and pull are unchanged; a client cannot upload a difference; a damaged one is never read as the chunk; `npm run gc` keeps the chunks a difference is built on (new table `chunk_refs`, migration 36); a chunk that is itself a difference is never a base, so there are no chains | `backend/test/repack.test.ts` (10 tests), `backend/test/refdelta.test.ts` (4) |
 | 209 | On for new commits unless `CRATON_REPACK=0` (done after the push or upload is answered, one commit at a time; a failure leaves the chunk as it was); documented in OPERATING.md | OPERATING.md → Storing changes as differences |
 
-| 210 | **Light theme contrast**: blue links and the Open badge were 3.3 to 3.7:1 on the light page (AA needs 4.5:1); they are darker in Light only. The contrast scan and keyboard walk now run on a throwaway account (`CRATON_SESSION_TOKEN`), so they no longer write to the demo user's security log; `npm run audit` builds a repository with an issue, a comment and a release and scans 14 pages in both themes | `CRATON_E2E_DB=<throwaway craton.db> npm run audit` |
+| 210 | **Light theme contrast**: blue links and the Open badge were 3.3 to 3.7:1 on the light page (AA needs 4.5:1); they are darker in Light only. The contrast scan and keyboard walk now run on a throwaway account (`CRATON_SESSION_TOKEN`), so they no longer write to the demo user's security log; `npm run audit` builds a repository with an issue, a comment and a release and scans 14 pages in both themes | `CRATON_E2E_DATABASE_URL=<throwaway craton.db> npm run audit` |
 
 ### 30. The cold tier: old versions of DEFLATE GeoTIFFs kept as pixels (bit-for-bit exact, off by default)
 
@@ -423,7 +423,7 @@ Not done: NetCDF 4 / HDF5 written with the newest layout (version 4 chunk indexe
 2. **Authorized redirect URI**: `http://localhost:3100/auth/google/callback` for local use; for production `https://craton.nerolith.in/auth/google/callback`.
 3. Start the API with `CRATON_GOOGLE_CLIENT_ID=<id>` and `CRATON_GOOGLE_CLIENT_SECRET=<secret>` (and `CRATON_WEB_URL` set to the site's address in production).
 4. Reload `/login`: the button appears. In a consent screen still in "Testing" mode only the test users you list can sign in.
-5. Without Google credentials you can still exercise the whole flow: `node frontend/scripts/mock-google.mjs`, start a throwaway API with the `CRATON_GOOGLE_*_URL` settings (see the header of that script), then `CRATON_E2E_DB=<its craton.db> npm run e2e:google` in `frontend`.
+5. Without Google credentials you can still exercise the whole flow: `node frontend/scripts/mock-google.mjs`, start a throwaway API with the `CRATON_GOOGLE_*_URL` settings (see the header of that script), then `CRATON_E2E_DATABASE_URL=<its postgres address> npm run e2e:google` in `frontend`.
 
 ---
 

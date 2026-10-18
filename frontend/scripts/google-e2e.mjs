@@ -2,19 +2,17 @@
 // pointed at scripts/mock-google.mjs (:9099). Uses a Chromium-based browser already on the machine (set CRATON_BROWSER
 // to its path if it is not found). Start the API with a THROWAWAY data folder: this creates accounts.
 //
-//   CRATON_E2E_DB=<that folder>/craton.db npm run e2e:google
+//   CRATON_E2E_DATABASE_URL=<postgres address> npm run e2e:google
 //
 // Covers: the button appears only when configured; first sign-in -> username step -> account; returning sign-in;
 // cancelling at Google; a forged callback; an account whose address was never confirmed; two-step verification after
 // Google; connecting and disconnecting Google from Settings.
 import fs from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { openE2eDb } from "./e2e-db.mjs";
 import { chromium } from "playwright-core";
 
 const WEB = "http://localhost:3100", API = "http://localhost:4000/v1", MOCK = "http://localhost:9099";
 const SHOTS = process.env.CRATON_E2E_SHOTS ?? "e2e-shots";
-const DB = process.env.CRATON_E2E_DB;
-if (!DB) throw new Error("Set CRATON_E2E_DB to the craton.db of the throwaway API (the test marks two accounts verified and two-step-enabled directly).");
 fs.mkdirSync(SHOTS, { recursive: true });
 const edge = [process.env.CRATON_BROWSER, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"].find((p) => p && fs.existsSync(p));
 if (!edge) throw new Error("No Chrome or Edge found. Set CRATON_BROWSER.");
@@ -126,9 +124,9 @@ const cookieNames = async (ctx) => (await ctx.cookies()).map((c) => c.name);
 // 7. Two-step verification: Google answers who, the code is still required.
 {
   const r = await (await j("/auth/signup", { username: `guarded${RUN}`, email: `guarded${RUN}@example.org`, password: "a-very-long-password" })).json();
-  const db = new DatabaseSync(DB);
-  db.prepare(`UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z', totp_secret = 'x', totp_enabled_at = '2026-01-01T00:00:00.000Z' WHERE email = 'guarded${RUN}@example.org'`).run();
-  db.close();
+  const db = await openE2eDb();
+  await db.prepare(`UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z', totp_secret = 'x', totp_enabled_at = '2026-01-01T00:00:00.000Z' WHERE email = 'guarded${RUN}@example.org'`).run();
+  await db.close();
   const { ctx, page } = await fresh();
   await who({ sub: `g-10-${RUN}`, email: `guarded${RUN}@example.org`, name: "Guarded", verified: "1" });
   await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
@@ -145,9 +143,9 @@ const cookieNames = async (ctx) => (await ctx.cookies()).map((c) => c.name);
 // 8. Connect Google from settings to an existing password account.
 {
   await j("/auth/signup", { username: `linker${RUN}`, email: `linker${RUN}@example.org`, password: "a-very-long-password" });
-  const db = new DatabaseSync(DB);
-  db.prepare(`UPDATE users SET onboarded_at = '2026-01-01T00:00:00.000Z', email_verified_at = '2026-01-01T00:00:00.000Z' WHERE email = 'linker${RUN}@example.org'`).run();
-  db.close();
+  const db = await openE2eDb();
+  await db.prepare(`UPDATE users SET onboarded_at = '2026-01-01T00:00:00.000Z', email_verified_at = '2026-01-01T00:00:00.000Z' WHERE email = 'linker${RUN}@example.org'`).run();
+  await db.close();
   const { ctx, page, errors } = await fresh();
   await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
   await page.getByLabel(/email or username/i).fill(`linker${RUN}`);

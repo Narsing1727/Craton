@@ -19,52 +19,46 @@ function cleanRole(input: unknown): CollaboratorRole {
   return role;
 }
 
-export function listCollaborators(ctx: Ctx, repo: RepoRow): Collaborator[] {
-  return ctx.db
-    .prepare("SELECT o.handle, o.name, c.role FROM collaborators c JOIN owners o ON o.id = c.user_id WHERE c.repo_id = ? AND c.role IN ('Read','Write','Admin') ORDER BY o.handle")
-    .all(repo.id) as Collaborator[];
+export async function listCollaborators(ctx: Ctx, repo: RepoRow): Promise<Collaborator[]> {
+  return await ctx.db.all("SELECT o.handle, o.name, c.role FROM collaborators c JOIN owners o ON o.id = c.user_id WHERE c.repo_id = ? AND c.role IN ('Read','Write','Admin') ORDER BY o.handle", repo.id) as Collaborator[];
 }
 
-function person(ctx: Ctx, repo: RepoRow, handle: unknown) {
-  const owner = getOwner(ctx, String(handle ?? "").replace(/^@/, "").trim().toLowerCase());
+async function person(ctx: Ctx, repo: RepoRow, handle: unknown) {
+  const owner = await getOwner(ctx, String(handle ?? "").replace(/^@/, "").trim().toLowerCase());
   if (owner.kind !== "user") throw badRequest(`${owner.handle} is an organization, not a person. Add its members to the organization instead.`);
   if (owner.id === repo.owner_id) throw badRequest(`${owner.handle} owns this repository already.`);
   return owner;
 }
 
 /** Add someone, or change their role. Returns the list and whether they were new. */
-export function setCollaborator(ctx: Ctx, repo: RepoRow, input: { handle: string; role?: string }, mustBeNew = false) {
+export async function setCollaborator(ctx: Ctx, repo: RepoRow, input: { handle: string; role?: string }, mustBeNew = false) {
   const role = cleanRole(input.role);
-  const who = person(ctx, repo, input.handle);
-  const existing = ctx.db.prepare("SELECT role FROM collaborators WHERE repo_id = ? AND user_id = ?").get(repo.id, who.id) as { role: string } | undefined;
+  const who = await person(ctx, repo, input.handle);
+  const existing = await ctx.db.get("SELECT role FROM collaborators WHERE repo_id = ? AND user_id = ?", repo.id, who.id) as { role: string } | undefined;
   if (existing && mustBeNew) throw conflict("already_collaborator", `${who.handle} already has access to this repository.`);
-  ctx.db.prepare("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, ?, ?) ON CONFLICT (repo_id, user_id) DO UPDATE SET role = excluded.role").run(repo.id, who.id, role);
-  return { collaborators: listCollaborators(ctx, repo), added: !existing, handle: who.handle, role };
+  await ctx.db.run("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, ?, ?) ON CONFLICT (repo_id, user_id) DO UPDATE SET role = excluded.role", repo.id, who.id, role);
+  return { collaborators: await listCollaborators(ctx, repo), added: !existing, handle: who.handle, role };
 }
 
-export function removeCollaborator(ctx: Ctx, repo: RepoRow, handle: string) {
-  const who = getOwner(ctx, handle.replace(/^@/, "").trim().toLowerCase());
-  const info = ctx.db.prepare("DELETE FROM collaborators WHERE repo_id = ? AND user_id = ?").run(repo.id, who.id);
+export async function removeCollaborator(ctx: Ctx, repo: RepoRow, handle: string) {
+  const who = await getOwner(ctx, handle.replace(/^@/, "").trim().toLowerCase());
+  const info = await ctx.db.run("DELETE FROM collaborators WHERE repo_id = ? AND user_id = ?", repo.id, who.id);
   if (!info.changes) throw notFound(`${who.handle} among this repository's collaborators`);
   // Their locks would otherwise stay held by someone who can no longer release them.
-  ctx.db.prepare("DELETE FROM file_locks WHERE repo_id = ? AND user_id = ?").run(repo.id, who.id);
+  await ctx.db.run("DELETE FROM file_locks WHERE repo_id = ? AND user_id = ?", repo.id, who.id);
   return listCollaborators(ctx, repo);
 }
 
 /** Leaving is always allowed: you can drop your own access to a repository someone shared with you. */
-export function leave(ctx: Ctx, repo: RepoRow, userId: number) {
-  const info = ctx.db.prepare("DELETE FROM collaborators WHERE repo_id = ? AND user_id = ?").run(repo.id, userId);
+export async function leave(ctx: Ctx, repo: RepoRow, userId: number) {
+  const info = await ctx.db.run("DELETE FROM collaborators WHERE repo_id = ? AND user_id = ?", repo.id, userId);
   if (!info.changes) throw badRequest("You aren't a collaborator on this repository.");
-  ctx.db.prepare("DELETE FROM file_locks WHERE repo_id = ? AND user_id = ?").run(repo.id, userId);
+  await ctx.db.run("DELETE FROM file_locks WHERE repo_id = ? AND user_id = ?", repo.id, userId);
 }
 
 /** Repositories other people shared with this person, with the role they were given. */
-export function sharedWith(ctx: Ctx, userId: number): { owner: string; name: string; role: CollaboratorRole }[] {
-  return ctx.db
-    .prepare(
-      `SELECT o.handle AS owner, r.name, c.role FROM collaborators c
+export async function sharedWith(ctx: Ctx, userId: number): Promise<{ owner: string; name: string; role: CollaboratorRole }[]> {
+  return await ctx.db.all(`SELECT o.handle AS owner, r.name, c.role FROM collaborators c
        JOIN repos r ON r.id = c.repo_id JOIN owners o ON o.id = r.owner_id
-       WHERE c.user_id = ? AND c.role IN ('Read','Write','Admin') ORDER BY r.updated_at DESC`,
-    )
-    .all(userId) as { owner: string; name: string; role: CollaboratorRole }[];
+       WHERE c.user_id = ? AND c.role IN ('Read','Write','Admin') ORDER BY r.updated_at DESC`, userId) as { owner: string; name: string; role: CollaboratorRole }[];
 }

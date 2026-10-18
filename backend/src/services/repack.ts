@@ -9,6 +9,7 @@
 // request, one commit at a time; a failure leaves the chunk as it was. Run `npm run repack` to do it for history that
 // already exists.
 
+import { statement } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { branchMovedListeners, getObject } from "./history.ts";
@@ -59,32 +60,32 @@ async function layoutOf(path: string, blob: BlobObject, ctx: Ctx): Promise<Layou
 export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, opts: { apply?: boolean } = {}): Promise<RepackResult> {
   const apply = opts.apply ?? true;
   const result: RepackResult = { files: 0, chunks: 0, savedBytes: 0 };
-  const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
+  const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
   if (!commit.parents.length) return result;
-  const tree = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+  const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
   // The earlier versions of each file, nearest first: the parent's, then its parent's, and so on a few steps back. A
   // version whose chunks are themselves stored as differences cannot be a base, so a later one may use an earlier one.
   const trees = new Map<string, Map<string, string>>();
-  const entriesAt = (id: string) => {
+  const entriesAt = async (id: string) => {
     let m = trees.get(id);
-    if (!m) trees.set(id, (m = new Map(getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, id, "commit").tree, "tree").entries.map((e) => [e.path, e.blob]))));
+    if (!m) trees.set(id, (m = new Map((await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, id, "commit")).tree, "tree")).entries.map((e) => [e.path, e.blob]))));
     return m;
   };
   const ancestors: string[] = [];
-  for (let id: string | undefined = commit.parents[0]; id && ancestors.length < LOOK_BACK; id = getObject<CommitObject>(ctx, repo, id, "commit").parents[0]) ancestors.push(id);
-  const row = ctx.db.prepare("SELECT codec, stored_size FROM chunks WHERE hash = ?");
-  const isBase = ctx.db.prepare("SELECT 1 FROM chunk_refs WHERE ref_hash = ?");
+  for (let id: string | undefined = commit.parents[0]; id && ancestors.length < LOOK_BACK; id = (await getObject<CommitObject>(ctx, repo, id, "commit")).parents[0]) ancestors.push(id);
+  const row = statement(ctx.db, "SELECT codec, stored_size FROM chunks WHERE hash = ?");
+  const isBase = statement(ctx.db, "SELECT 1 FROM chunk_refs WHERE ref_hash = ?");
 
   for (const entry of tree.entries) {
-    const blob = getObject<BlobObject>(ctx, repo, entry.blob, "blob");
-    const olderIds = [...new Set(ancestors.map((id) => entriesAt(id).get(entry.path)).filter((id): id is string => Boolean(id) && id !== entry.blob))];
+    const blob = await getObject<BlobObject>(ctx, repo, entry.blob, "blob");
+    const olderIds = [...new Set((await Promise.all(ancestors.map(async (id) => (await entriesAt(id)).get(entry.path)))).filter((id): id is string => Boolean(id) && id !== entry.blob))];
     if (!olderIds.length || !blob.size) continue;
     const layout = await layoutOf(entry.path, blob, ctx);
     if (!layout) continue;
     const olders: { blob: BlobObject; starts: number[]; shift: number }[] = [];
     for (const id of olderIds) {
       try {
-        const old = getObject<BlobObject>(ctx, repo, id, "blob");
+        const old = await getObject<BlobObject>(ctx, repo, id, "blob");
         if (!old.size) continue;
         const starts: number[] = [];
         let at = 0;
@@ -110,9 +111,9 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
       const start = offset;
       offset += c.size;
       if (known.has(c.hash)) continue;
-      const stored = row.get(c.hash) as { codec: string; stored_size: number } | undefined;
+      const stored = await row.get(c.hash) as { codec: string; stored_size: number } | undefined;
       // Only whole chunks become differences, and a chunk another difference is built on stays whole.
-      if (!stored || stored.codec === "ref-delta" || stored.codec === "tiles" || stored.codec === "none" || stored.stored_size < SMALLEST || isBase.get(c.hash)) continue;
+      if (!stored || stored.codec === "ref-delta" || stored.codec === "tiles" || stored.codec === "none" || stored.stored_size < SMALLEST || await isBase.get(c.hash)) continue;
 
       if (layout.kind === "las" && start < layout.dataStart) continue; // the header's own chunk is not point records
       let data: Buffer | null = null;
@@ -127,7 +128,7 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
           const from = Math.max(there, starts[i]);
           const to = Math.min(end, starts[i] + old.chunks[i].size);
           if (to <= from) continue;
-          const kind = (row.get(old.chunks[i].hash) as { codec: string } | undefined)?.codec;
+          const kind = (await row.get(old.chunks[i].hash) as { codec: string } | undefined)?.codec;
           if (!kind || kind === "ref-delta" || kind === "tiles" || refs.length >= MAX_REFS) usable = false;
           else refs.push({ hash: old.chunks[i].hash, from: from - starts[i], to: to - starts[i] });
         }
@@ -150,9 +151,9 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
         result.savedBytes += stored.stored_size - next.length;
         touched = true;
         if (apply) {
-          for (const r of refs) ctx.db.prepare("INSERT OR IGNORE INTO chunk_refs (chunk_hash, ref_hash) VALUES (?, ?)").run(c.hash, r.hash);
+          for (const r of refs) await ctx.db.run("INSERT INTO chunk_refs (chunk_hash, ref_hash) VALUES (?, ?) ON CONFLICT DO NOTHING", c.hash, r.hash);
           await ctx.store.replace(c.hash, next);
-          ctx.db.prepare("UPDATE chunks SET stored_size = ?, codec = 'ref-delta' WHERE hash = ?").run(next.length, c.hash);
+          await ctx.db.run("UPDATE chunks SET stored_size = ?, codec = 'ref-delta' WHERE hash = ?", next.length, c.hash);
         }
         break;
       }
@@ -165,7 +166,7 @@ export async function repackCommit(ctx: Ctx, repo: RepoRow, commitId: string, op
 /** Every commit of a repository, oldest first (each one is compared with its own first parent). */
 export async function repackRepository(ctx: Ctx, repo: RepoRow, opts: { apply?: boolean } = {}): Promise<RepackResult> {
   const total: RepackResult = { files: 0, chunks: 0, savedBytes: 0 };
-  const ids = ctx.db.prepare("SELECT id FROM commits WHERE repo_id = ? ORDER BY timestamp, id").all(repo.id) as { id: string }[];
+  const ids = await ctx.db.all("SELECT id FROM commits WHERE repo_id = ? ORDER BY timestamp, id", repo.id) as { id: string }[];
   for (const { id } of ids) {
     const r = await repackCommit(ctx, repo, id, opts);
     total.files += r.files;
@@ -177,7 +178,7 @@ export async function repackRepository(ctx: Ctx, repo: RepoRow, opts: { apply?: 
 
 /** Verify that every chunk stored as a difference still decodes to its own hash (used by `craton doctor`-style checks and tests). */
 export async function verifyDifferences(ctx: Ctx): Promise<{ checked: number; bad: string[] }> {
-  const rows = ctx.db.prepare("SELECT hash FROM chunks WHERE codec = 'ref-delta'").all() as { hash: string }[];
+  const rows = await ctx.db.all("SELECT hash FROM chunks WHERE codec = 'ref-delta'") as { hash: string }[];
   const bad: string[] = [];
   for (const { hash } of rows) {
     try {

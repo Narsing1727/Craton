@@ -69,7 +69,7 @@ export async function readGeoTiff(read: Read, size: number): Promise<GeoTiffInfo
 
   const valueBytes = async (e: Entry) => {
     const len = (TYPE_SIZE[e.type] ?? 1) * e.count;
-    return len <= (big ? 8 : 4) ? e.inline.subarray(0, len) : read(e.offset, len);
+    return len <= (big ? 8 : 4) ? e.inline.subarray(0, len) : await read(e.offset, len);
   };
   const numbers = async (tag: number): Promise<number[] | null> => {
     const e = byTag.get(tag);

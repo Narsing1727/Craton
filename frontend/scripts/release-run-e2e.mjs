@@ -19,12 +19,10 @@ const { token } = await signup.json();
 const h = { authorization: `Bearer ${token}`, "content-type": "application/json" };
 await fetch(`${API}/v1/user`, { method: "PATCH", headers: h, body: JSON.stringify({ onboarded: true }) });
 // The sample project gives the repository files to release; a private one needs a plan, so confirm the email and go public.
-const { DatabaseSync } = await import("node:sqlite");
-const dbFile = process.env.CRATON_E2E_DB;
-if (!dbFile) throw new Error("Set CRATON_E2E_DB to the throwaway API's craton.db (it confirms the email).");
-const db = new DatabaseSync(dbFile);
-db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(handle);
-db.close();
+const { openE2eDb } = await import("./e2e-db.mjs");
+const db = await openE2eDb();
+await db.prepare("UPDATE users SET email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(handle);
+await db.close();
 const made = await fetch(`${API}/v1/repos`, { method: "POST", headers: h, body: JSON.stringify({ name: "basin", visibility: "public", sample: true }) });
 if (!made.ok) throw new Error(`repo create failed: ${made.status} ${await made.text()}`);
 

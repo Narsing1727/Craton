@@ -45,24 +45,22 @@ export function verifyPassword(password: string, stored: string): boolean {
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 
-export function getOwner(ctx: Ctx, handle: string): Owner {
-  const row = ctx.db.prepare("SELECT * FROM owners WHERE handle = ?").get(handle) as Owner | undefined;
+export async function getOwner(ctx: Ctx, handle: string): Promise<Owner> {
+  const row = await ctx.db.get("SELECT * FROM owners WHERE handle = ?", handle) as Owner | undefined;
   if (!row) throw notFound(`@${handle}`);
   return row;
 }
 
-export function createUser(ctx: Ctx, input: { handle: string; email: string; password: string; name?: string; bio?: string }): User {
+export async function createUser(ctx: Ctx, input: { handle: string; email: string; password: string; name?: string; bio?: string }): Promise<User> {
   const handle = input.handle.trim().toLowerCase();
   if (!HANDLE.test(handle)) throw badRequest("Usernames use lowercase letters, numbers and single dashes.");
   if (RESERVED_HANDLES.has(handle)) throw conflict("handle_taken", `@${handle} is reserved.`);
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(input.email)) throw badRequest("Enter a valid email address.");
   if (input.password.length < 12) throw badRequest("Passwords need at least 12 characters.");
-  if (ctx.db.prepare("SELECT 1 FROM owners WHERE handle = ?").get(handle)) throw conflict("handle_taken", `@${handle} is taken.`);
-  if (ctx.db.prepare("SELECT 1 FROM users WHERE email = ?").get(input.email)) throw conflict("email_taken", "An account with this email already exists.");
-  const { lastInsertRowid } = ctx.db
-    .prepare("INSERT INTO owners (handle, kind, name, bio) VALUES (?, 'user', ?, ?)")
-    .run(handle, input.name ?? handle, input.bio ?? "");
-  ctx.db.prepare("INSERT INTO users (owner_id, email, password_hash) VALUES (?, ?, ?)").run(lastInsertRowid, input.email, hashPassword(input.password));
+  if (await ctx.db.get("SELECT 1 FROM owners WHERE handle = ?", handle)) throw conflict("handle_taken", `@${handle} is taken.`);
+  if (await ctx.db.get("SELECT 1 FROM users WHERE email = ?", input.email)) throw conflict("email_taken", "An account with this email already exists.");
+  const lastInsertRowid = await ctx.db.insert("INSERT INTO owners (handle, kind, name, bio) VALUES (?, 'user', ?, ?)", handle, input.name ?? handle, input.bio ?? "");
+  await ctx.db.run("INSERT INTO users (owner_id, email, password_hash) VALUES (?, ?, ?)", lastInsertRowid, input.email, hashPassword(input.password));
   return getUserById(ctx, Number(lastInsertRowid));
 }
 
@@ -70,8 +68,8 @@ export function createUser(ctx: Ctx, input: { handle: string; email: string; pas
 const NO_PASSWORD = "oauth$";
 
 /** Whether this account has a password it can sign in with (a Google-only account does not until it sets one). */
-export function hasPassword(ctx: Ctx, userId: number): boolean {
-  const row = ctx.db.prepare("SELECT password_hash FROM users WHERE owner_id = ?").get(userId) as { password_hash: string } | undefined;
+export async function hasPassword(ctx: Ctx, userId: number): Promise<boolean> {
+  const row = await ctx.db.get("SELECT password_hash FROM users WHERE owner_id = ?", userId) as { password_hash: string } | undefined;
   return Boolean(row && row.password_hash.startsWith("scrypt$"));
 }
 
@@ -79,52 +77,48 @@ export function hasPassword(ctx: Ctx, userId: number): boolean {
  * An account made from a Google sign-in. The address was confirmed by Google, so it counts as verified, and there is no
  * password until the person asks for one ("Forgot password" sets it by email).
  */
-export function createOAuthUser(ctx: Ctx, input: { handle: string; email: string; name?: string }): User {
+export async function createOAuthUser(ctx: Ctx, input: { handle: string; email: string; name?: string }): Promise<User> {
   const handle = input.handle.trim().toLowerCase();
   if (!HANDLE.test(handle)) throw badRequest("Usernames use lowercase letters, numbers and single dashes.");
   if (RESERVED_HANDLES.has(handle)) throw conflict("handle_taken", `@${handle} is reserved.`);
-  if (ctx.db.prepare("SELECT 1 FROM owners WHERE handle = ?").get(handle)) throw conflict("handle_taken", `@${handle} is taken.`);
-  if (ctx.db.prepare("SELECT 1 FROM users WHERE lower(email) = lower(?)").get(input.email)) throw conflict("email_taken", "An account with this email already exists.");
-  const { lastInsertRowid } = ctx.db.prepare("INSERT INTO owners (handle, kind, name, bio) VALUES (?, 'user', ?, '')").run(handle, (input.name ?? "").trim().slice(0, 80) || handle);
-  ctx.db
-    .prepare("INSERT INTO users (owner_id, email, password_hash, email_verified_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))")
-    .run(lastInsertRowid, input.email, NO_PASSWORD);
+  if (await ctx.db.get("SELECT 1 FROM owners WHERE handle = ?", handle)) throw conflict("handle_taken", `@${handle} is taken.`);
+  if (await ctx.db.get("SELECT 1 FROM users WHERE lower(email) = lower(?)", input.email)) throw conflict("email_taken", "An account with this email already exists.");
+  const lastInsertRowid = await ctx.db.insert("INSERT INTO owners (handle, kind, name, bio) VALUES (?, 'user', ?, '')", handle, (input.name ?? "").trim().slice(0, 80) || handle);
+  await ctx.db.run("INSERT INTO users (owner_id, email, password_hash, email_verified_at) VALUES (?, ?, ?, now_iso())", lastInsertRowid, input.email, NO_PASSWORD);
   return getUserById(ctx, Number(lastInsertRowid));
 }
 
-export function createOrg(ctx: Ctx, input: { handle: string; name?: string; bio?: string }, creatorId: number): Owner {
+export async function createOrg(ctx: Ctx, input: { handle: string; name?: string; bio?: string }, creatorId: number): Promise<Owner> {
   const handle = input.handle.trim().toLowerCase();
   if (!HANDLE.test(handle)) throw badRequest("Organization names use lowercase letters, numbers and single dashes.");
   if (RESERVED_HANDLES.has(handle)) throw conflict("handle_taken", `@${handle} is reserved.`);
-  if (ctx.db.prepare("SELECT 1 FROM owners WHERE handle = ?").get(handle)) throw conflict("handle_taken", `@${handle} is taken.`);
-  const { lastInsertRowid } = ctx.db.prepare("INSERT INTO owners (handle, kind, name, bio) VALUES (?, 'org', ?, ?)").run(handle, input.name ?? handle, input.bio ?? "");
-  ctx.db.prepare("INSERT INTO memberships (org_id, user_id, role) VALUES (?, ?, 'Owner')").run(lastInsertRowid, creatorId);
+  if (await ctx.db.get("SELECT 1 FROM owners WHERE handle = ?", handle)) throw conflict("handle_taken", `@${handle} is taken.`);
+  const lastInsertRowid = await ctx.db.insert("INSERT INTO owners (handle, kind, name, bio) VALUES (?, 'org', ?, ?)", handle, input.name ?? handle, input.bio ?? "");
+  await ctx.db.run("INSERT INTO memberships (org_id, user_id, role) VALUES (?, ?, 'Owner')", lastInsertRowid, creatorId);
   return getOwner(ctx, handle);
 }
 
-export function addMember(ctx: Ctx, orgId: number, userId: number, role: Role) {
-  ctx.db.prepare("INSERT INTO memberships (org_id, user_id, role) VALUES (?, ?, ?) ON CONFLICT (org_id, user_id) DO UPDATE SET role = excluded.role").run(orgId, userId, role);
+export async function addMember(ctx: Ctx, orgId: number, userId: number, role: Role) {
+  await ctx.db.run("INSERT INTO memberships (org_id, user_id, role) VALUES (?, ?, ?) ON CONFLICT (org_id, user_id) DO UPDATE SET role = excluded.role", orgId, userId, role);
 }
 
-export function getUserById(ctx: Ctx, id: number): User {
-  const row = ctx.db.prepare("SELECT o.*, u.email, u.plan, u.role, u.onboarded_at, u.email_verified_at, u.totp_enabled_at, u.digest, u.notify, u.default_visibility FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.id = ?").get(id) as User | undefined;
+export async function getUserById(ctx: Ctx, id: number): Promise<User> {
+  const row = await ctx.db.get("SELECT o.*, u.email, u.plan, u.role, u.onboarded_at, u.email_verified_at, u.totp_enabled_at, u.digest, u.notify, u.default_visibility FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.id = ?", id) as User | undefined;
   if (!row) throw notFound("User");
   return row;
 }
 
 /** The user id for a correct username/email and password; the same error whether the account exists or not. */
-export function checkPassword(ctx: Ctx, loginName: string, password: string): number {
-  const row = ctx.db
-    .prepare("SELECT o.id, u.password_hash FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.handle = ? OR u.email = ?")
-    .get(loginName.toLowerCase(), loginName) as { id: number; password_hash: string } | undefined;
+export async function checkPassword(ctx: Ctx, loginName: string, password: string): Promise<number> {
+  const row = await ctx.db.get("SELECT o.id, u.password_hash FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.handle = ? OR u.email = ?", loginName.toLowerCase(), loginName) as { id: number; password_hash: string } | undefined;
   // Same error for unknown user and wrong password, so logins don't reveal which accounts exist.
   if (!row || !verifyPassword(password, row.password_hash)) throw new ApiError(401, "invalid_credentials", "Wrong username or password.");
   return row.id;
 }
 
 /** The id of the account a sign-in name or email belongs to, or null. Only for filing a failed attempt under that account. */
-export function findUserId(ctx: Ctx, loginName: string): number | null {
-  const row = ctx.db.prepare("SELECT o.id FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.handle = ? OR u.email = ?").get(loginName.toLowerCase(), loginName) as { id: number } | undefined;
+export async function findUserId(ctx: Ctx, loginName: string): Promise<number | null> {
+  const row = await ctx.db.get("SELECT o.id FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.handle = ? OR u.email = ?", loginName.toLowerCase(), loginName) as { id: number } | undefined;
   return row?.id ?? null;
 }
 
@@ -132,84 +126,78 @@ export function startSession(ctx: Ctx, userId: number) {
   return issueToken(ctx, userId, { kind: "session", note: "web session", expiresInDays: 30 });
 }
 
-export function login(ctx: Ctx, loginName: string, password: string) {
-  return startSession(ctx, checkPassword(ctx, loginName, password));
+export async function login(ctx: Ctx, loginName: string, password: string) {
+  return startSession(ctx, await checkPassword(ctx, loginName, password));
 }
 
-export function issueToken(
+export async function issueToken(
   ctx: Ctx,
   userId: number,
   opts: { kind: "session" | "pat"; note: string; scopes?: string[]; expiresInDays?: number | null; repos?: string[] | null; client?: { userAgent?: string | null; ip?: string | null } },
 ) {
   const token = makeToken(opts.kind === "pat" ? "pat" : "ses");
   const expires = opts.expiresInDays ? new Date(Date.now() + opts.expiresInDays * 86_400_000).toISOString() : null;
-  const { lastInsertRowid } = ctx.db
-    .prepare("INSERT INTO tokens (user_id, token_hash, kind, note, scopes, expires_at, user_agent, ip, repos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(userId, tokenHash(token), opts.kind, opts.note, (opts.scopes ?? ["repo"]).join(","), expires, opts.client?.userAgent?.slice(0, 300) ?? null, opts.client?.ip?.slice(0, 64) ?? null, opts.repos?.length ? JSON.stringify(opts.repos.map((r) => r.toLowerCase())) : null);
+  const lastInsertRowid = await ctx.db.insert("INSERT INTO tokens (user_id, token_hash, kind, note, scopes, expires_at, user_agent, ip, repos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", userId, tokenHash(token), opts.kind, opts.note, (opts.scopes ?? ["repo"]).join(","), expires, opts.client?.userAgent?.slice(0, 300) ?? null, opts.client?.ip?.slice(0, 64) ?? null, opts.repos?.length ? JSON.stringify(opts.repos.map((r) => r.toLowerCase())) : null);
   return { token, id: Number(lastInsertRowid), expiresAt: expires };
 }
 
 /** Resolve a bearer token to its user, or null. Updates last-used time. */
 export type AuthedUser = User & { scopes: string[]; tokenKind: "session" | "pat"; tokenId: number; /** "owner/name" this token is limited to, or null for every repository the person can reach. */ repos: string[] | null };
-export function authenticate(ctx: Ctx, token: string | undefined | null): AuthedUser | null {
+export async function authenticate(ctx: Ctx, token: string | undefined | null): Promise<AuthedUser | null> {
   if (!token) return null;
-  const row = ctx.db.prepare("SELECT id, user_id, scopes, expires_at, kind, repos FROM tokens WHERE token_hash = ?").get(tokenHash(token)) as
+  const row = await ctx.db.get("SELECT id, user_id, scopes, expires_at, kind, repos FROM tokens WHERE token_hash = ?", tokenHash(token)) as
     | { id: number; user_id: number; scopes: string; expires_at: string | null; kind: "session" | "pat"; repos: string | null }
     | undefined;
   if (!row) return null;
   if (row.expires_at && row.expires_at < new Date().toISOString()) return null;
-  ctx.db.prepare("UPDATE tokens SET last_used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(row.id);
-  return { ...getUserById(ctx, row.user_id), scopes: row.scopes.split(","), tokenKind: row.kind, tokenId: row.id, repos: row.repos ? (JSON.parse(row.repos) as string[]) : null };
+  await ctx.db.run("UPDATE tokens SET last_used_at = now_iso() WHERE id = ?", row.id);
+  return { ...await getUserById(ctx, row.user_id), scopes: row.scopes.split(","), tokenKind: row.kind, tokenId: row.id, repos: row.repos ? (JSON.parse(row.repos) as string[]) : null };
 }
 
 /** Whether `token` is a working credential right now, without counting as a use of it. Used by the secret scan. */
-export function liveToken(ctx: Ctx, token: string): { id: number; kind: "session" | "pat" } | null {
-  const row = ctx.db.prepare("SELECT id, kind, expires_at FROM tokens WHERE token_hash = ?").get(tokenHash(token)) as { id: number; kind: "session" | "pat"; expires_at: string | null } | undefined;
+export async function liveToken(ctx: Ctx, token: string): Promise<{ id: number; kind: "session" | "pat" } | null> {
+  const row = await ctx.db.get("SELECT id, kind, expires_at FROM tokens WHERE token_hash = ?", tokenHash(token)) as { id: number; kind: "session" | "pat"; expires_at: string | null } | undefined;
   if (!row || (row.expires_at && row.expires_at < new Date().toISOString())) return null;
   return { id: row.id, kind: row.kind };
 }
 
 /** Remove one credential by id, whoever it belongs to (for a token found exposed in a public repository). */
-export function revokeExposedToken(ctx: Ctx, id: number): number {
-  return Number(ctx.db.prepare("DELETE FROM tokens WHERE id = ?").run(id).changes);
+export async function revokeExposedToken(ctx: Ctx, id: number): Promise<number> {
+  return Number((await ctx.db.run("DELETE FROM tokens WHERE id = ?", id)).changes);
 }
 
 /** A user's personal access tokens; `current` marks the one making this request. */
-export function listTokens(ctx: Ctx, userId: number, requestToken?: string | null) {
+export async function listTokens(ctx: Ctx, userId: number, requestToken?: string | null) {
   const current = requestToken ? tokenHash(requestToken) : null;
-  const rows = ctx.db
-    .prepare("SELECT id, note, scopes, kind, created_at, expires_at, last_used_at, token_hash, repos FROM tokens WHERE user_id = ? AND kind = 'pat' ORDER BY id DESC")
-    .all(userId) as { id: number; note: string; scopes: string; kind: string; created_at: string; expires_at: string | null; last_used_at: string | null; token_hash: string; repos: string | null }[];
+  const rows = await ctx.db.all("SELECT id, note, scopes, kind, created_at, expires_at, last_used_at, token_hash, repos FROM tokens WHERE user_id = ? AND kind = 'pat' ORDER BY id DESC", userId) as { id: number; note: string; scopes: string; kind: string; created_at: string; expires_at: string | null; last_used_at: string | null; token_hash: string; repos: string | null }[];
   return rows.map(({ token_hash, repos, ...row }) => ({ ...row, repos: repos ? (JSON.parse(repos) as string[]) : null, current: token_hash === current }));
 }
 
-export function revokeToken(ctx: Ctx, userId: number, id: number) {
-  const res = ctx.db.prepare("DELETE FROM tokens WHERE id = ? AND user_id = ?").run(id, userId);
+export async function revokeToken(ctx: Ctx, userId: number, id: number) {
+  const res = await ctx.db.run("DELETE FROM tokens WHERE id = ? AND user_id = ?", id, userId);
   if (res.changes === 0) throw notFound("Token");
 }
 
-export function orgRole(ctx: Ctx, orgId: number, userId: number): Role | null {
-  const row = ctx.db.prepare("SELECT role FROM memberships WHERE org_id = ? AND user_id = ?").get(orgId, userId) as { role: Role } | undefined;
+export async function orgRole(ctx: Ctx, orgId: number, userId: number): Promise<Role | null> {
+  const row = await ctx.db.get("SELECT role FROM memberships WHERE org_id = ? AND user_id = ?", orgId, userId) as { role: Role } | undefined;
   return row?.role ?? null;
 }
 
-export function listMembers(ctx: Ctx, orgId: number) {
-  return ctx.db
-    .prepare("SELECT o.handle, o.name, m.role FROM memberships m JOIN owners o ON o.id = m.user_id WHERE m.org_id = ? ORDER BY o.handle")
-    .all(orgId) as { handle: string; name: string; role: Role }[];
+export async function listMembers(ctx: Ctx, orgId: number) {
+  return await ctx.db.all("SELECT o.handle, o.name, m.role FROM memberships m JOIN owners o ON o.id = m.user_id WHERE m.org_id = ? ORDER BY o.handle", orgId) as { handle: string; name: string; role: Role }[];
 }
 
 export type Access = "none" | "read" | "write" | "admin";
 type RepoAccessRow = { id: number; owner_id: number; visibility: string };
 
 /** What `userId` may do with a repository. */
-export function repoAccess(ctx: Ctx, repo: RepoAccessRow, userId: number | null): Access {
+export async function repoAccess(ctx: Ctx, repo: RepoAccessRow, userId: number | null): Promise<Access> {
   if (userId !== null) {
     if (repo.owner_id === userId) return "admin";
-    const role = orgRole(ctx, repo.owner_id, userId);
+    const role = await orgRole(ctx, repo.owner_id, userId);
     if (role === "Owner") return "admin";
     if (role === "Maintainer" || role === "Member") return "write";
-    const collab = ctx.db.prepare("SELECT role FROM collaborators WHERE repo_id = ? AND user_id = ?").get(repo.id, userId) as { role: string } | undefined;
+    const collab = await ctx.db.get("SELECT role FROM collaborators WHERE repo_id = ? AND user_id = ?", repo.id, userId) as { role: string } | undefined;
     if (collab?.role === "Admin") return "admin";
     if (collab?.role === "Write") return "write";
     if (collab) return "read";
@@ -219,8 +207,8 @@ export function repoAccess(ctx: Ctx, repo: RepoAccessRow, userId: number | null)
 
 const rank: Record<Access, number> = { none: 0, read: 1, write: 2, admin: 3 };
 
-export function requireAccess(ctx: Ctx, repo: RepoAccessRow, userId: number | null, needed: Exclude<Access, "none">) {
-  const access = repoAccess(ctx, repo, userId);
+export async function requireAccess(ctx: Ctx, repo: RepoAccessRow, userId: number | null, needed: Exclude<Access, "none">) {
+  const access = await repoAccess(ctx, repo, userId);
   // Private repositories you can't see are reported as missing, not forbidden, so they can't be probed.
   if (access === "none") throw notFound("Repository");
   if (rank[access] < rank[needed]) throw userId === null ? new ApiError(401, "unauthenticated", "Sign in to do this.") : forbidden();
@@ -233,17 +221,17 @@ export function requireAccess(ctx: Ctx, repo: RepoAccessRow, userId: number | nu
 
 const ROLES: Role[] = ["Owner", "Maintainer", "Member"];
 
-function orgFor(ctx: Ctx, handle: string, actorId: number, needed: "Maintainer" | "Owner") {
-  const org = getOwner(ctx, handle);
+async function orgFor(ctx: Ctx, handle: string, actorId: number, needed: "Maintainer" | "Owner") {
+  const org = await getOwner(ctx, handle);
   if (org.kind !== "org") throw notFound(`Organization ${handle}`);
-  const role = orgRole(ctx, org.id, actorId);
+  const role = await orgRole(ctx, org.id, actorId);
   if (!role) throw notFound(`Organization ${handle}`);
   if (needed === "Owner" ? role !== "Owner" : role === "Member") throw forbidden(`Only ${needed === "Owner" ? "owners" : "owners and maintainers"} of ${handle} can do this.`);
   return org;
 }
 
-function ownerCount(ctx: Ctx, orgId: number) {
-  return (ctx.db.prepare("SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'Owner'").get(orgId) as { n: number }).n;
+async function ownerCount(ctx: Ctx, orgId: number) {
+  return (await ctx.db.get("SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'Owner'", orgId) as { n: number }).n;
 }
 
 function checkRole(role: string): Role {
@@ -251,48 +239,48 @@ function checkRole(role: string): Role {
   return role as Role;
 }
 
-export function inviteMember(ctx: Ctx, orgHandle: string, actorId: number, input: { handle: string; role?: string }) {
+export async function inviteMember(ctx: Ctx, orgHandle: string, actorId: number, input: { handle: string; role?: string }) {
   const role = checkRole(input.role ?? "Member");
-  const org = orgFor(ctx, orgHandle, actorId, role === "Owner" ? "Owner" : "Maintainer");
-  const person = getOwner(ctx, (input.handle ?? "").replace(/^@/, ""));
+  const org = await orgFor(ctx, orgHandle, actorId, role === "Owner" ? "Owner" : "Maintainer");
+  const person = await getOwner(ctx, (input.handle ?? "").replace(/^@/, ""));
   if (person.kind !== "user") throw badRequest(`${person.handle} is an organization, not a person.`);
-  if (orgRole(ctx, org.id, person.id)) throw conflict("already_member", `${person.handle} is already a member of ${org.handle}.`);
-  addMember(ctx, org.id, person.id, role);
+  if (await orgRole(ctx, org.id, person.id)) throw conflict("already_member", `${person.handle} is already a member of ${org.handle}.`);
+  await addMember(ctx, org.id, person.id, role);
   return listMembers(ctx, org.id);
 }
 
-export function setMemberRole(ctx: Ctx, orgHandle: string, actorId: number, handle: string, role: string) {
+export async function setMemberRole(ctx: Ctx, orgHandle: string, actorId: number, handle: string, role: string) {
   const next = checkRole(role);
-  const org = orgFor(ctx, orgHandle, actorId, "Owner");
-  const person = getOwner(ctx, handle);
-  const current = orgRole(ctx, org.id, person.id);
+  const org = await orgFor(ctx, orgHandle, actorId, "Owner");
+  const person = await getOwner(ctx, handle);
+  const current = await orgRole(ctx, org.id, person.id);
   if (!current) throw notFound(`${handle} in ${org.handle}`);
-  if (current === "Owner" && next !== "Owner" && ownerCount(ctx, org.id) === 1) throw conflict("last_owner", `${org.handle} needs at least one owner. Make someone else an owner first.`);
-  addMember(ctx, org.id, person.id, next);
+  if (current === "Owner" && next !== "Owner" && await ownerCount(ctx, org.id) === 1) throw conflict("last_owner", `${org.handle} needs at least one owner. Make someone else an owner first.`);
+  await addMember(ctx, org.id, person.id, next);
   return listMembers(ctx, org.id);
 }
 
-export function removeMember(ctx: Ctx, orgHandle: string, actorId: number, handle: string) {
-  const org = orgFor(ctx, orgHandle, actorId, "Owner");
-  const person = getOwner(ctx, handle);
-  const current = orgRole(ctx, org.id, person.id);
+export async function removeMember(ctx: Ctx, orgHandle: string, actorId: number, handle: string) {
+  const org = await orgFor(ctx, orgHandle, actorId, "Owner");
+  const person = await getOwner(ctx, handle);
+  const current = await orgRole(ctx, org.id, person.id);
   if (!current) throw notFound(`${handle} in ${org.handle}`);
-  if (current === "Owner" && ownerCount(ctx, org.id) === 1) throw conflict("last_owner", `${org.handle} needs at least one owner.`);
-  ctx.db.prepare("DELETE FROM memberships WHERE org_id = ? AND user_id = ?").run(org.id, person.id);
+  if (current === "Owner" && await ownerCount(ctx, org.id) === 1) throw conflict("last_owner", `${org.handle} needs at least one owner.`);
+  await ctx.db.run("DELETE FROM memberships WHERE org_id = ? AND user_id = ?", org.id, person.id);
   return listMembers(ctx, org.id);
 }
 
 /** Rename or re-describe an organization (owners only). */
-export function updateOrg(ctx: Ctx, orgHandle: string, actorId: number, patch: { name?: string; bio?: string }) {
-  const org = orgFor(ctx, orgHandle, actorId, "Owner");
+export async function updateOrg(ctx: Ctx, orgHandle: string, actorId: number, patch: { name?: string; bio?: string }) {
+  const org = await orgFor(ctx, orgHandle, actorId, "Owner");
   if (patch.name !== undefined) {
     const name = patch.name.trim();
     if (!name || name.length > 80) throw badRequest("The name needs 1 to 80 characters.");
-    ctx.db.prepare("UPDATE owners SET name = ? WHERE id = ?").run(name, org.id);
+    await ctx.db.run("UPDATE owners SET name = ? WHERE id = ?", name, org.id);
   }
   if (patch.bio !== undefined) {
     if (patch.bio.length > 280) throw badRequest("The description is at most 280 characters.");
-    ctx.db.prepare("UPDATE owners SET bio = ? WHERE id = ?").run(patch.bio.trim(), org.id);
+    await ctx.db.run("UPDATE owners SET bio = ? WHERE id = ?", patch.bio.trim(), org.id);
   }
   return getOwner(ctx, org.handle);
 }
@@ -302,54 +290,54 @@ export function updateOrg(ctx: Ctx, orgHandle: string, actorId: number, patch: {
  * has repositories, so deleting the organization never silently deletes data: delete or move
  * those first.
  */
-export function deleteOrg(ctx: Ctx, orgHandle: string, actorId: number, confirm: string) {
-  const org = orgFor(ctx, orgHandle, actorId, "Owner");
+export async function deleteOrg(ctx: Ctx, orgHandle: string, actorId: number, confirm: string) {
+  const org = await orgFor(ctx, orgHandle, actorId, "Owner");
   if ((confirm ?? "").toLowerCase() !== org.handle.toLowerCase()) throw badRequest(`Type ${org.handle} to confirm.`);
-  const repos = (ctx.db.prepare("SELECT COUNT(*) AS n FROM repos WHERE owner_id = ?").get(org.id) as { n: number }).n;
+  const repos = (await ctx.db.get("SELECT COUNT(*) AS n FROM repos WHERE owner_id = ?", org.id) as { n: number }).n;
   if (repos) throw conflict("has_repositories", `${org.handle} still has ${repos} ${repos === 1 ? "repository" : "repositories"}. Delete ${repos === 1 ? "it" : "them"} first.`);
-  ctx.db.prepare("DELETE FROM owners WHERE id = ?").run(org.id); // memberships cascade
+  await ctx.db.run("DELETE FROM owners WHERE id = ?", org.id); // memberships cascade
 }
 
 // ── Profile, sessions and password reset ───────────────────────────────────
 
 export const PROFILE_ROLES = ["modeler", "gis", "utility", "research", "other"];
 
-export function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string; notify?: unknown; defaultVisibility?: string; website?: string; location?: string; company?: string; pronouns?: string }) {
+export async function updateProfile(ctx: Ctx, userId: number, patch: { name?: string; bio?: string; role?: string | null; onboarded?: boolean; digest?: string; notify?: unknown; defaultVisibility?: string; website?: string; location?: string; company?: string; pronouns?: string }) {
   for (const [field, max] of [["location", 80], ["company", 80], ["pronouns", 40]] as const) {
     const value = patch[field];
     if (value === undefined) continue;
     const text = String(value).trim();
     if (text.length > max) throw badRequest(`Keep ${field} under ${max} characters.`);
     if (/[\u0000-\u001f\u007f]/.test(text)) throw badRequest(`${field} cannot contain control characters.`);
-    ctx.db.prepare(`UPDATE owners SET ${field} = ? WHERE id = ?`).run(text, userId);
+    await ctx.db.run(`UPDATE owners SET ${field} = ? WHERE id = ?`, text, userId);
   }
-  if (patch.website !== undefined) ctx.db.prepare("UPDATE owners SET website = ? WHERE id = ?").run(cleanWebsite(patch.website), userId);
+  if (patch.website !== undefined) await ctx.db.run("UPDATE owners SET website = ? WHERE id = ?", cleanWebsite(patch.website), userId);
   if (patch.notify !== undefined) {
-    const current = ctx.db.prepare("SELECT notify FROM users WHERE owner_id = ?").get(userId) as { notify: string };
-    ctx.db.prepare("UPDATE users SET notify = ? WHERE owner_id = ?").run(mergeNotify(current.notify, patch.notify), userId);
+    const current = await ctx.db.get("SELECT notify FROM users WHERE owner_id = ?", userId) as { notify: string };
+    await ctx.db.run("UPDATE users SET notify = ? WHERE owner_id = ?", mergeNotify(current.notify, patch.notify), userId);
   }
   if (patch.defaultVisibility !== undefined) {
     if (patch.defaultVisibility !== "public" && patch.defaultVisibility !== "private") throw badRequest("defaultVisibility is public or private.");
-    ctx.db.prepare("UPDATE users SET default_visibility = ? WHERE owner_id = ?").run(patch.defaultVisibility, userId);
+    await ctx.db.run("UPDATE users SET default_visibility = ? WHERE owner_id = ?", patch.defaultVisibility, userId);
   }
   if (patch.digest !== undefined) {
     if (patch.digest !== "off" && patch.digest !== "weekly") throw badRequest("digest is off or weekly.");
-    ctx.db.prepare("UPDATE users SET digest = ?, digest_sent_at = CASE WHEN ? = 'weekly' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE digest_sent_at END WHERE owner_id = ?").run(patch.digest, patch.digest, userId);
+    await ctx.db.run("UPDATE users SET digest = ?, digest_sent_at = CASE WHEN ? = 'weekly' THEN now_iso() ELSE digest_sent_at END WHERE owner_id = ?", patch.digest, patch.digest, userId);
   }
   if (patch.name !== undefined) {
     const name = patch.name.trim();
     if (!name || name.length > 80) throw badRequest("Enter a name up to 80 characters.");
-    ctx.db.prepare("UPDATE owners SET name = ? WHERE id = ?").run(name, userId);
+    await ctx.db.run("UPDATE owners SET name = ? WHERE id = ?", name, userId);
   }
   if (patch.bio !== undefined) {
     if (patch.bio.length > 280) throw badRequest("Keep the bio under 280 characters.");
-    ctx.db.prepare("UPDATE owners SET bio = ? WHERE id = ?").run(patch.bio.trim(), userId);
+    await ctx.db.run("UPDATE owners SET bio = ? WHERE id = ?", patch.bio.trim(), userId);
   }
   if (patch.role !== undefined) {
     if (patch.role !== null && !PROFILE_ROLES.includes(patch.role)) throw badRequest(`Role must be one of ${PROFILE_ROLES.join(", ")}.`);
-    ctx.db.prepare("UPDATE users SET role = ? WHERE owner_id = ?").run(patch.role, userId);
+    await ctx.db.run("UPDATE users SET role = ? WHERE owner_id = ?", patch.role, userId);
   }
-  if (patch.onboarded) ctx.db.prepare("UPDATE users SET onboarded_at = COALESCE(onboarded_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE owner_id = ?").run(userId);
+  if (patch.onboarded) await ctx.db.run("UPDATE users SET onboarded_at = COALESCE(onboarded_at, now_iso()) WHERE owner_id = ?", userId);
   return getUserById(ctx, userId);
 }
 
@@ -379,30 +367,28 @@ export function sniffImage(data: Buffer): "image/png" | "image/jpeg" | "image/we
   return null;
 }
 
-export function setAvatar(ctx: Ctx, userId: number, data: Buffer) {
+export async function setAvatar(ctx: Ctx, userId: number, data: Buffer) {
   if (data.length === 0) throw badRequest("Send the image as the request body.");
   if (data.length > AVATAR_MAX_BYTES) throw badRequest(`A profile picture is at most ${AVATAR_MAX_BYTES / 1024} KB. The web app shrinks it for you.`);
   const type = sniffImage(data);
   if (!type) throw badRequest("Use a PNG, JPEG or WebP image.");
-  ctx.db
-    .prepare("INSERT INTO avatars (owner_id, type, data) VALUES (?, ?, ?) ON CONFLICT (owner_id) DO UPDATE SET type = excluded.type, data = excluded.data, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')")
-    .run(userId, type, data);
+  await ctx.db.run("INSERT INTO avatars (owner_id, type, data) VALUES (?, ?, ?) ON CONFLICT (owner_id) DO UPDATE SET type = excluded.type, data = excluded.data, updated_at = now_iso()", userId, type, data);
 }
 
-export function removeAvatar(ctx: Ctx, userId: number) {
-  ctx.db.prepare("DELETE FROM avatars WHERE owner_id = ?").run(userId);
+export async function removeAvatar(ctx: Ctx, userId: number) {
+  await ctx.db.run("DELETE FROM avatars WHERE owner_id = ?", userId);
 }
 
-export function getAvatar(ctx: Ctx, handle: string): { type: string; data: Buffer; updatedAt: string } | null {
-  const row = ctx.db.prepare("SELECT a.type, a.data, a.updated_at FROM avatars a JOIN owners o ON o.id = a.owner_id WHERE o.handle = ?").get(handle) as { type: string; data: Uint8Array; updated_at: string } | undefined;
+export async function getAvatar(ctx: Ctx, handle: string): Promise<{ type: string; data: Buffer; updatedAt: string } | null> {
+  const row = await ctx.db.get("SELECT a.type, a.data, a.updated_at FROM avatars a JOIN owners o ON o.id = a.owner_id WHERE o.handle = ?", handle) as { type: string; data: Uint8Array; updated_at: string } | undefined;
   return row ? { type: row.type, data: Buffer.from(row.data), updatedAt: row.updated_at } : null;
 }
 
-export const hasAvatar = (ctx: Ctx, ownerId: number) => Boolean(ctx.db.prepare("SELECT 1 FROM avatars WHERE owner_id = ?").get(ownerId));
+export const hasAvatar = async (ctx: Ctx, ownerId: number) => Boolean(await ctx.db.get("SELECT 1 FROM avatars WHERE owner_id = ?", ownerId));
 
 /** Sign out: the session token stops working immediately. */
-export function revokeSession(ctx: Ctx, token: string) {
-  ctx.db.prepare("DELETE FROM tokens WHERE token_hash = ? AND kind = 'session'").run(tokenHash(token));
+export async function revokeSession(ctx: Ctx, token: string) {
+  await ctx.db.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'session'", tokenHash(token));
 }
 
 /**
@@ -410,48 +396,46 @@ export function revokeSession(ctx: Ctx, token: string) {
  * production; the server log in development), or null when no account matches. Callers must
  * answer the same way either way, so the endpoint doesn't reveal which accounts exist.
  */
-export function requestPasswordReset(ctx: Ctx, loginName: string) {
-  const row = ctx.db
-    .prepare("SELECT o.id, o.handle, u.email FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.handle = ? OR u.email = ?")
-    .get(loginName.trim().toLowerCase(), loginName.trim()) as { id: number; handle: string; email: string } | undefined;
+export async function requestPasswordReset(ctx: Ctx, loginName: string) {
+  const row = await ctx.db.get("SELECT o.id, o.handle, u.email FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.handle = ? OR u.email = ?", loginName.trim().toLowerCase(), loginName.trim()) as { id: number; handle: string; email: string } | undefined;
   if (!row) return null;
   const token = randomBytes(24).toString("base64url");
   const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  ctx.db.prepare("INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)").run(row.id, tokenHash(token), expires);
+  await ctx.db.run("INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)", row.id, tokenHash(token), expires);
   return { token, handle: row.handle, email: row.email };
 }
 
 /** Finish a reset: sets the password, burns the link, and signs out every session. */
-export function resetPassword(ctx: Ctx, token: string, password: string) {
+export async function resetPassword(ctx: Ctx, token: string, password: string) {
   if ((password ?? "").length < 12) throw badRequest("Passwords need at least 12 characters.");
-  const row = ctx.db.prepare("SELECT id, user_id, expires_at, used_at FROM password_resets WHERE token_hash = ?").get(tokenHash(token ?? "")) as
+  const row = await ctx.db.get("SELECT id, user_id, expires_at, used_at FROM password_resets WHERE token_hash = ?", tokenHash(token ?? "")) as
     | { id: number; user_id: number; expires_at: string; used_at: string | null }
     | undefined;
   if (!row || row.used_at || row.expires_at < new Date().toISOString()) throw badRequest("This reset link has expired or was already used. Request a new one.");
-  ctx.db.prepare("UPDATE users SET password_hash = ? WHERE owner_id = ?").run(hashPassword(password), row.user_id);
-  ctx.db.prepare("UPDATE password_resets SET used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(row.id);
-  ctx.db.prepare("DELETE FROM tokens WHERE user_id = ? AND kind = 'session'").run(row.user_id);
+  await ctx.db.run("UPDATE users SET password_hash = ? WHERE owner_id = ?", hashPassword(password), row.user_id);
+  await ctx.db.run("UPDATE password_resets SET used_at = now_iso() WHERE id = ?", row.id);
+  await ctx.db.run("DELETE FROM tokens WHERE user_id = ? AND kind = 'session'", row.user_id);
   return getUserById(ctx, row.user_id);
 }
 
 // ── Email verification ─────────────────────────────────────────────────────
 
 /** A one-time link that confirms the address. Valid for 24 hours. */
-export function createVerifyToken(ctx: Ctx, userId: number) {
+export async function createVerifyToken(ctx: Ctx, userId: number) {
   const token = randomBytes(24).toString("base64url");
   const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  ctx.db.prepare("INSERT INTO email_tokens (user_id, purpose, token_hash, expires_at) VALUES (?, 'verify', ?, ?)").run(userId, tokenHash(token), expires);
+  await ctx.db.run("INSERT INTO email_tokens (user_id, purpose, token_hash, expires_at) VALUES (?, 'verify', ?, ?)", userId, tokenHash(token), expires);
   return token;
 }
 
-export function verifyEmail(ctx: Ctx, token: string) {
-  const row = ctx.db.prepare("SELECT id, user_id, expires_at, used_at FROM email_tokens WHERE token_hash = ? AND purpose = 'verify'").get(tokenHash(token ?? "")) as
+export async function verifyEmail(ctx: Ctx, token: string) {
+  const row = await ctx.db.get("SELECT id, user_id, expires_at, used_at FROM email_tokens WHERE token_hash = ? AND purpose = 'verify'", tokenHash(token ?? "")) as
     | { id: number; user_id: number; expires_at: string; used_at: string | null }
     | undefined;
   if (!row || row.expires_at < new Date().toISOString()) throw badRequest("This confirmation link has expired. Send a new one from your settings.");
   if (!row.used_at) {
-    ctx.db.prepare("UPDATE email_tokens SET used_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(row.id);
-    ctx.db.prepare("UPDATE users SET email_verified_at = COALESCE(email_verified_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE owner_id = ?").run(row.user_id);
+    await ctx.db.run("UPDATE email_tokens SET used_at = now_iso() WHERE id = ?", row.id);
+    await ctx.db.run("UPDATE users SET email_verified_at = COALESCE(email_verified_at, now_iso()) WHERE owner_id = ?", row.user_id);
   }
   return getUserById(ctx, row.user_id);
 }
@@ -463,49 +447,45 @@ export function requireVerified(user: User, action: string) {
 
 // ── Sessions and password ──────────────────────────────────────────────────
 
-export function listSessions(ctx: Ctx, userId: number, currentTokenId: number | null) {
-  const rows = ctx.db
-    .prepare(
-      "SELECT id, created_at, last_used_at, expires_at, user_agent, ip FROM tokens WHERE user_id = ? AND kind = 'session' AND (expires_at IS NULL OR expires_at > ?) ORDER BY COALESCE(last_used_at, created_at) DESC",
-    )
-    .all(userId, new Date().toISOString()) as { id: number; created_at: string; last_used_at: string | null; expires_at: string | null; user_agent: string | null; ip: string | null }[];
+export async function listSessions(ctx: Ctx, userId: number, currentTokenId: number | null) {
+  const rows = await ctx.db.all("SELECT id, created_at, last_used_at, expires_at, user_agent, ip FROM tokens WHERE user_id = ? AND kind = 'session' AND (expires_at IS NULL OR expires_at > ?) ORDER BY COALESCE(last_used_at, created_at) DESC", userId, new Date().toISOString()) as { id: number; created_at: string; last_used_at: string | null; expires_at: string | null; user_agent: string | null; ip: string | null }[];
   return rows.map((r) => ({ id: r.id, createdAt: r.created_at, lastUsedAt: r.last_used_at, expiresAt: r.expires_at, userAgent: r.user_agent, ip: r.ip, current: r.id === currentTokenId }));
 }
 
-export function revokeSessionById(ctx: Ctx, userId: number, id: number) {
-  const r = ctx.db.prepare("DELETE FROM tokens WHERE id = ? AND user_id = ? AND kind = 'session'").run(id, userId);
+export async function revokeSessionById(ctx: Ctx, userId: number, id: number) {
+  const r = await ctx.db.run("DELETE FROM tokens WHERE id = ? AND user_id = ? AND kind = 'session'", id, userId);
   if (!r.changes) throw notFound("Session");
 }
 
 /** Change password (needs the current one); signs out every other session. */
-export function changePassword(ctx: Ctx, userId: number, currentTokenId: number, current: string, next: string) {
-  const row = ctx.db.prepare("SELECT password_hash FROM users WHERE owner_id = ?").get(userId) as { password_hash: string };
+export async function changePassword(ctx: Ctx, userId: number, currentTokenId: number, current: string, next: string) {
+  const row = await ctx.db.get("SELECT password_hash FROM users WHERE owner_id = ?", userId) as { password_hash: string };
   if (row.password_hash === NO_PASSWORD) {
     throw new ApiError(409, "no_password", "This account signs in with Google and has no password yet. Use “Forgot password” on the sign-in page to add one by email.");
   }
   if (!verifyPassword(current ?? "", row.password_hash)) throw new ApiError(403, "wrong_password", "Your current password isn’t right.");
   if ((next ?? "").length < 12) throw badRequest("Passwords need at least 12 characters.");
-  ctx.db.prepare("UPDATE users SET password_hash = ? WHERE owner_id = ?").run(hashPassword(next), userId);
-  ctx.db.prepare("DELETE FROM tokens WHERE user_id = ? AND kind = 'session' AND id <> ?").run(userId, currentTokenId);
+  await ctx.db.run("UPDATE users SET password_hash = ? WHERE owner_id = ?", hashPassword(next), userId);
+  await ctx.db.run("DELETE FROM tokens WHERE user_id = ? AND kind = 'session' AND id <> ?", userId, currentTokenId);
 }
 
 // ── Export and deletion (GDPR Art. 20 and 17) ──────────────────────────────
 
 /** Everything Craton holds about a person, as JSON. Repository files are fetched with `craton clone`. */
-export function exportAccount(ctx: Ctx, userId: number) {
-  const u = getUserById(ctx, userId);
-  const all = (sql: string) => ctx.db.prepare(sql).all(userId);
+export async function exportAccount(ctx: Ctx, userId: number) {
+  const u = await getUserById(ctx, userId);
+  const all = async (sql: string) => await ctx.db.all(sql, userId);
   return {
     exportedAt: new Date().toISOString(),
     profile: { handle: u.handle, name: u.name, bio: u.bio, email: u.email, emailVerifiedAt: u.email_verified_at, plan: u.plan, role: u.role, createdAt: u.created_at },
-    organizations: all("SELECT o.handle, m.role FROM memberships m JOIN owners o ON o.id = m.org_id WHERE m.user_id = ?"),
-    repositories: all("SELECT r.name, r.description, r.visibility, r.default_branch AS defaultBranch, r.created_at AS createdAt FROM repos r WHERE r.owner_id = ?"),
-    stars: all("SELECT o.handle || '/' || r.name AS repository, s.created_at AS starredAt FROM stars s JOIN repos r ON r.id = s.repo_id JOIN owners o ON o.id = r.owner_id WHERE s.user_id = ?"),
-    issues: all("SELECT r.name AS repo, i.number, i.title, i.body, i.state, i.created_at AS createdAt FROM issues i JOIN repos r ON r.id = i.repo_id WHERE i.author_id = ?"),
-    pullRequests: all("SELECT r.name AS repo, p.number, p.title, p.body, p.state, p.created_at AS createdAt FROM pulls p JOIN repos r ON r.id = p.repo_id WHERE p.author_id = ?"),
-    comments: all("SELECT r.name AS repo, c.target, c.number, c.body, c.created_at AS createdAt FROM comments c JOIN repos r ON r.id = c.repo_id WHERE c.author_id = ?"),
-    reviews: all("SELECT r.name AS repo, v.number, v.state, v.body, v.created_at AS createdAt FROM reviews v JOIN repos r ON r.id = v.repo_id WHERE v.author_id = ?"),
-    tokens: all("SELECT note, kind, scopes, created_at AS createdAt, last_used_at AS lastUsedAt, expires_at AS expiresAt FROM tokens WHERE user_id = ?"),
+    organizations: await all("SELECT o.handle, m.role FROM memberships m JOIN owners o ON o.id = m.org_id WHERE m.user_id = ?"),
+    repositories: await all("SELECT r.name, r.description, r.visibility, r.default_branch AS defaultBranch, r.created_at AS createdAt FROM repos r WHERE r.owner_id = ?"),
+    stars: await all("SELECT o.handle || '/' || r.name AS repository, s.created_at AS starredAt FROM stars s JOIN repos r ON r.id = s.repo_id JOIN owners o ON o.id = r.owner_id WHERE s.user_id = ?"),
+    issues: await all("SELECT r.name AS repo, i.number, i.title, i.body, i.state, i.created_at AS createdAt FROM issues i JOIN repos r ON r.id = i.repo_id WHERE i.author_id = ?"),
+    pullRequests: await all("SELECT r.name AS repo, p.number, p.title, p.body, p.state, p.created_at AS createdAt FROM pulls p JOIN repos r ON r.id = p.repo_id WHERE p.author_id = ?"),
+    comments: await all("SELECT r.name AS repo, c.target, c.number, c.body, c.created_at AS createdAt FROM comments c JOIN repos r ON r.id = c.repo_id WHERE c.author_id = ?"),
+    reviews: await all("SELECT r.name AS repo, v.number, v.state, v.body, v.created_at AS createdAt FROM reviews v JOIN repos r ON r.id = v.repo_id WHERE v.author_id = ?"),
+    tokens: await all("SELECT note, kind, scopes, created_at AS createdAt, last_used_at AS lastUsedAt, expires_at AS expiresAt FROM tokens WHERE user_id = ?"),
     note: "Repository contents are not in this file. Download them with `craton clone owner/repo`.",
   };
 }
@@ -515,37 +495,28 @@ export function exportAccount(ctx: Ctx, userId: number) {
  * repositories (issues, comments, reviews, releases) is kept and shown as @ghost, like GitHub, so
  * conversations stay readable. Commit history keeps the handle as text: history is append-only.
  */
-export function deleteAccount(ctx: Ctx, userId: number, confirm: { handle: string; password: string }) {
-  const u = getUserById(ctx, userId);
+export async function deleteAccount(ctx: Ctx, userId: number, confirm: { handle: string; password: string }) {
+  const u = await getUserById(ctx, userId);
   if (confirm.handle !== u.handle) throw badRequest(`Type your username (${u.handle}) to confirm.`);
-  const row = ctx.db.prepare("SELECT password_hash FROM users WHERE owner_id = ?").get(userId) as { password_hash: string };
+  const row = await ctx.db.get("SELECT password_hash FROM users WHERE owner_id = ?", userId) as { password_hash: string };
   // An account with no password (Google only) is confirmed by typing its username, which was checked above.
   if (row.password_hash !== NO_PASSWORD && !verifyPassword(confirm.password ?? "", row.password_hash)) throw new ApiError(403, "wrong_password", "Your password isn’t right.");
-  const soleOwner = ctx.db
-    .prepare(
-      "SELECT o.handle FROM memberships m JOIN owners o ON o.id = m.org_id WHERE m.user_id = ? AND m.role = 'Owner' AND (SELECT COUNT(*) FROM memberships x WHERE x.org_id = m.org_id AND x.role = 'Owner') = 1",
-    )
-    .all(userId) as { handle: string }[];
+  const soleOwner = await ctx.db.all("SELECT o.handle FROM memberships m JOIN owners o ON o.id = m.org_id WHERE m.user_id = ? AND m.role = 'Owner' AND (SELECT COUNT(*) FROM memberships x WHERE x.org_id = m.org_id AND x.role = 'Owner') = 1", userId) as { handle: string }[];
   if (soleOwner.length) {
     throw conflict("sole_owner", `You’re the only owner of ${soleOwner.map((o) => o.handle).join(", ")}. Make someone else an owner, or delete the organization, first.`, { orgs: soleOwner.map((o) => o.handle) });
   }
 
-  let ghost = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'ghost'").get() as { id: number } | undefined;
+  let ghost = await ctx.db.get("SELECT id FROM owners WHERE handle = 'ghost'") as { id: number } | undefined;
   if (!ghost) {
-    const { lastInsertRowid } = ctx.db.prepare("INSERT INTO owners (handle, kind, name, bio) VALUES ('ghost', 'user', 'Deleted user', 'This account was deleted.')").run();
+    const lastInsertRowid = await ctx.db.insert("INSERT INTO owners (handle, kind, name, bio) VALUES ('ghost', 'user', 'Deleted user', 'This account was deleted.')");
     ghost = { id: Number(lastInsertRowid) };
   }
-  ctx.db.exec("BEGIN");
-  try {
-    for (const t of ["issues", "pulls", "comments", "reviews", "releases"]) ctx.db.prepare(`UPDATE ${t} SET author_id = ? WHERE author_id = ?`).run(ghost.id, userId);
-    ctx.db.prepare("UPDATE issues SET assignee_id = NULL WHERE assignee_id = ?").run(userId);
-    const starred = ctx.db.prepare("SELECT repo_id FROM stars WHERE user_id = ?").all(userId) as { repo_id: number }[];
-    ctx.db.prepare("DELETE FROM repos WHERE owner_id = ?").run(userId);
-    ctx.db.prepare("DELETE FROM owners WHERE id = ?").run(userId);
-    for (const s of starred) ctx.db.prepare("UPDATE repos SET stars = (SELECT COUNT(*) FROM stars WHERE repo_id = ?) WHERE id = ?").run(s.repo_id, s.repo_id);
-    ctx.db.exec("COMMIT");
-  } catch (err) {
-    ctx.db.exec("ROLLBACK");
-    throw err;
-  }
+  await ctx.db.tx(async (db) => {
+    for (const t of ["issues", "pulls", "comments", "reviews", "releases"]) await db.run(`UPDATE ${t} SET author_id = ? WHERE author_id = ?`, ghost!.id, userId);
+    await db.run("UPDATE issues SET assignee_id = NULL WHERE assignee_id = ?", userId);
+    const starred = await db.all("SELECT repo_id FROM stars WHERE user_id = ?", userId) as { repo_id: number }[];
+    await db.run("DELETE FROM repos WHERE owner_id = ?", userId);
+    await db.run("DELETE FROM owners WHERE id = ?", userId);
+    for (const s of starred) await db.run("UPDATE repos SET stars = (SELECT COUNT(*) FROM stars WHERE repo_id = ?) WHERE id = ?", s.repo_id, s.repo_id);
+  });
 }

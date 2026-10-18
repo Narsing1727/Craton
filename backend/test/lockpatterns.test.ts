@@ -29,12 +29,12 @@ const repoOf = (who: string) => getRepoFor(ctx, "rhea", "basin", ids[who]);
 const bytes = (s: string) => Buffer.from(s.repeat(2000));
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "sol"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ids[u] = (ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get(u) as { id: number }).id;
+    ids[u] = (await ctx.db.get("SELECT id FROM owners WHERE handle = ?", u) as { id: number }).id;
   }
   const res = await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${tokens.rhea}`, "content-type": "application/json" }, body: JSON.stringify({ name: "basin", visibility: "private", sample: true }) });
   assert.equal(res.status, 201);
@@ -71,7 +71,7 @@ test("only repository admins can set the patterns, and they come back on the rep
 });
 
 test("changing a matching file without holding its lock is refused; locking it first lets the push through", async () => {
-  const repo = repoOf("rhea");
+  const repo = await repoOf("rhea");
   await assert.rejects(
     commitFiles(ctx, repo, { branch: "main", author: "rhea", message: "Edit plan", timestamp: new Date(), changes: { "model/plan.p01": bytes("a") } }),
     (err: any) => {
@@ -90,7 +90,7 @@ test("changing a matching file without holding its lock is refused; locking it f
 
 test("somebody else holding the lock still refuses the push, with the holder's own message", async () => {
   await assert.rejects(
-    commitFiles(ctx, repoOf("rhea"), { branch: "main", author: "sol", message: "Edit plan", timestamp: new Date(), changes: { "model/plan.p01": bytes("c") } }),
+    commitFiles(ctx, await repoOf("rhea"), { branch: "main", author: "sol", message: "Edit plan", timestamp: new Date(), changes: { "model/plan.p01": bytes("c") } }),
     { code: "locked" },
   );
 });

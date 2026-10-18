@@ -37,16 +37,16 @@ const RENDER_VERSION = 1;
  * pure function of this, so it is the cache identity, and the basis of the HTTP ETag. Null when
  * the file doesn't exist or has no preview (the caller then lets the render path explain why).
  */
-export function previewKey(ctx: Ctx, repo: RepoRow, ref: string, path: string, opts: { base?: string; size: number }): string | null {
-  const head = blobAt(ctx, repo, ref, path);
+export async function previewKey(ctx: Ctx, repo: RepoRow, ref: string, path: string, opts: { base?: string; size: number }): Promise<string | null> {
+  const head = await blobAt(ctx, repo, ref, path);
   if (!head) return null;
-  const before = opts.base ? blobAt(ctx, repo, opts.base, path) : null;
+  const before = opts.base ? await blobAt(ctx, repo, opts.base, path) : null;
   if (opts.base && !before) return null;
   if (/\.tiff?$/i.test(path)) return `v${RENDER_VERSION}:${before ? `diff:${before.id}:${head.id}` : `thumb:${head.id}`}:${opts.size}`;
   if (/\.las$/i.test(path)) return `v${RENDER_VERSION}:cloud:${head.id}:${opts.size}`;
   if (/\.shp$/i.test(path)) {
     const dbf = path.replace(/\.shp$/i, ".dbf");
-    const dbfIds = [ref, opts.base].map((r) => (r ? blobAt(ctx, repo, r, dbf)?.id ?? "" : "")).join(":");
+    const dbfIds = (await Promise.all([ref, opts.base].map(async (r) => (r ? (await blobAt(ctx, repo, r, dbf))?.id ?? "" : "")))).join(":");
     return `v${RENDER_VERSION}:svg:${head.id}:${before?.id ?? ""}:${dbfIds}`;
   }
   return null;
@@ -59,11 +59,11 @@ export function previewKey(ctx: Ctx, repo: RepoRow, ref: string, path: string, o
  */
 export async function warmCommit(ctx: Ctx, repo: RepoRow, commitId: string) {
   try {
-    const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
+    const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
     const parent = commit.parents[0];
-    const entriesOf = (c: CommitObject) => getObject<TreeObject>(ctx, repo, c.tree, "tree").entries;
-    const before = new Map(parent ? entriesOf(getObject<CommitObject>(ctx, repo, parent, "commit")).map((e) => [e.path, e.blob] as const) : []);
-    const changed = entriesOf(commit).filter((e) => /\.(tiff?|shp|las)$/i.test(e.path) && before.get(e.path) !== e.blob).slice(0, 8);
+    const entriesOf = async (c: CommitObject) => (await getObject<TreeObject>(ctx, repo, c.tree, "tree")).entries;
+    const before = new Map(parent ? (await entriesOf(await getObject<CommitObject>(ctx, repo, parent, "commit"))).map((e) => [e.path, e.blob] as const) : []);
+    const changed = (await entriesOf(commit)).filter((e) => /\.(tiff?|shp|las)$/i.test(e.path) && before.get(e.path) !== e.blob).slice(0, 8);
     for (const e of changed) {
       const hadBefore = Boolean(parent) && before.has(e.path);
       try {
@@ -88,12 +88,12 @@ export async function warmCommit(ctx: Ctx, repo: RepoRow, commitId: string) {
   }
 }
 
-function blobAt(ctx: Ctx, repo: RepoRow, ref: string, path: string) {
-  const commit = getObject<CommitObject>(ctx, repo, resolveRef(ctx, repo, ref), "commit");
-  const tree = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+async function blobAt(ctx: Ctx, repo: RepoRow, ref: string, path: string) {
+  const commit = await getObject<CommitObject>(ctx, repo, await resolveRef(ctx, repo, ref), "commit");
+  const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
   const entry = tree.entries.find((e) => e.path === path);
   if (!entry) return null;
-  return { id: entry.blob, blob: getObject<BlobObject>(ctx, repo, entry.blob, "blob"), tree };
+  return { id: entry.blob, blob: await getObject<BlobObject>(ctx, repo, entry.blob, "blob"), tree };
 }
 
 async function gridOf(ctx: Ctx, blob: BlobObject, id: string, maxSide: number) {
@@ -149,7 +149,7 @@ const mix = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
 
 /** Hillshaded, elevation-tinted PNG of a raster at `ref`. */
 export async function rasterThumbnail(ctx: Ctx, repo: RepoRow, ref: string, path: string, maxSide = 512) {
-  const found = blobAt(ctx, repo, ref, path);
+  const found = await blobAt(ctx, repo, ref, path);
   if (!found) throw notFound(`File ${path}`);
   return cached(`thumb:${found.id}:${maxSide}`, async () => {
     const g = await gridOf(ctx, found.blob, found.id, maxSide);
@@ -175,8 +175,8 @@ export async function rasterThumbnail(ctx: Ctx, repo: RepoRow, ref: string, path
  * a faint hillshade of the new version. Stats say how much changed and by how much.
  */
 export async function rasterDiff(ctx: Ctx, repo: RepoRow, base: string, head: string, path: string, maxSide = 512) {
-  const a = blobAt(ctx, repo, base, path);
-  const b = blobAt(ctx, repo, head, path);
+  const a = await blobAt(ctx, repo, base, path);
+  const b = await blobAt(ctx, repo, head, path);
   if (!a || !b) throw notFound(`File ${path} in both versions`);
   return cached(`diff:${a.id}:${b.id}:${maxSide}`, async () => {
     const [ga, gb] = await Promise.all([gridOf(ctx, a.blob, a.id, maxSide), gridOf(ctx, b.blob, b.id, maxSide)]);
@@ -276,8 +276,8 @@ function histogram(values: Float32Array, lo: number, hi: number, bins: number) {
  * of the full raster when the file is larger than `maxSide`; `sampled.factor` says how much larger.
  */
 export async function rasterStats(ctx: Ctx, repo: RepoRow, base: string, head: string, path: string, maxSide = 512) {
-  const a = blobAt(ctx, repo, base, path);
-  const b = blobAt(ctx, repo, head, path);
+  const a = await blobAt(ctx, repo, base, path);
+  const b = await blobAt(ctx, repo, head, path);
   if (!a || !b) throw notFound(`File ${path} in both versions`);
   return cached(`stats:${a.id}:${b.id}:${maxSide}`, async () => {
     const [ga, gb] = await Promise.all([gridOf(ctx, a.blob, a.id, maxSide), gridOf(ctx, b.blob, b.id, maxSide)]);
@@ -393,10 +393,10 @@ const fmt = (n: number) => (Math.round(n * 10) / 10).toString();
  * the "changed" colour, new ones as added and deleted ones (dashed) as removed.
  */
 export async function vectorSvg(ctx: Ctx, repo: RepoRow, ref: string, path: string, base?: string) {
-  const head = blobAt(ctx, repo, ref, path);
+  const head = await blobAt(ctx, repo, ref, path);
   if (!head) throw notFound(`File ${path}`);
-  const before = base ? blobAt(ctx, repo, base, path) : null;
-  const dbfIds = [ref, base].map((r) => (r ? blobAt(ctx, repo, r, path.replace(/\.shp$/i, ".dbf"))?.id ?? "" : "")).join(":");
+  const before = base ? await blobAt(ctx, repo, base, path) : null;
+  const dbfIds = (await Promise.all([ref, base].map(async (r) => (r ? (await blobAt(ctx, repo, r, path.replace(/\.shp$/i, ".dbf")))?.id ?? "" : "")))).join(":");
   return cached(`svg:${head.id}:${before?.id ?? ""}:${dbfIds}`, async () => {
     const read = async (b: BlobObject) => new BlobReader(ctx, b).readAll();
     const cur = parseShp(await read(head.blob));
@@ -404,7 +404,7 @@ export async function vectorSvg(ctx: Ctx, repo: RepoRow, ref: string, path: stri
     // Attributes live in the .dbf beside the .shp: a feature whose row changed counts as changed.
     const dbfPath = path.replace(/\.shp$/i, ".dbf");
     const rows = async (r: string) => {
-      const f = blobAt(ctx, repo, r, dbfPath);
+      const f = await blobAt(ctx, repo, r, dbfPath);
       return f ? dbfRecords(await read(f.blob)) : [];
     };
     const [curRows, oldRows] = old && base ? await Promise.all([rows(ref), rows(base)]) : [[], []];
@@ -471,7 +471,7 @@ export const cloudLimits = { chunks: 512 };
  * and no absolute density is claimed (a sorted file's sample has full local density, a shuffled one's is thin everywhere).
  */
 export async function pointCloudPng(ctx: Ctx, repo: RepoRow, ref: string, path: string, size: number) {
-  const head = blobAt(ctx, repo, ref, path);
+  const head = await blobAt(ctx, repo, ref, path);
   if (!head) throw notFound(`File ${path}`);
   return cached(`cloud:${head.id}:${size}`, async () => {
     const blob = head.blob;

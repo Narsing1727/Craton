@@ -1,694 +1,284 @@
-// SQLite (Node's built-in node:sqlite) with versioned migrations.
+// PostgreSQL, through one small asynchronous interface with two engines behind it:
+//
+//   - `pg` (node-postgres) against a real server: a local container, or AWS RDS / Aurora (set CRATON_DATABASE_URL);
+//   - PGlite, which is the real Postgres compiled to WebAssembly and run inside this process: no server to install. It is what a
+//     development checkout uses when no URL is set (kept in data/pgdata) and what the tests use (in memory).
+//
+// Both speak the same Postgres SQL, so nothing above this file knows which one it is talking to. SQL is written with `?` placeholders
+// (turned into $1, $2 ... here) and returns plain objects. Numbers that Postgres calls bigint or numeric come back as JavaScript numbers,
+// and bytea as Buffers.
 
-import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
+import pg from "pg";
+import { PGlite } from "@electric-sql/pglite";
+import { citext } from "@electric-sql/pglite/contrib/citext";
+import { BASELINE } from "./schema.ts";
 
-const migrations: string[] = [
-  /* 1: accounts, repositories, content-addressed storage, history */ `
-  CREATE TABLE owners (
-    id INTEGER PRIMARY KEY,
-    handle TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    kind TEXT NOT NULL CHECK (kind IN ('user','org')),
-    name TEXT NOT NULL,
-    bio TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  CREATE TABLE users (
-    owner_id INTEGER PRIMARY KEY REFERENCES owners(id) ON DELETE CASCADE,
-    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    plan TEXT NOT NULL DEFAULT 'free'
-  );
-  CREATE TABLE memberships (
-    org_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK (role IN ('Owner','Maintainer','Member')),
-    PRIMARY KEY (org_id, user_id)
-  );
-  CREATE TABLE tokens (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    token_hash TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL CHECK (kind IN ('session','pat')),
-    note TEXT NOT NULL DEFAULT '',
-    scopes TEXT NOT NULL DEFAULT 'repo',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    expires_at TEXT,
-    last_used_at TEXT
-  );
-  CREATE TABLE repos (
-    id INTEGER PRIMARY KEY,
-    owner_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    name TEXT NOT NULL COLLATE NOCASE,
-    description TEXT NOT NULL DEFAULT '',
-    visibility TEXT NOT NULL CHECK (visibility IN ('public','private')),
-    default_branch TEXT NOT NULL DEFAULT 'main',
-    region TEXT NOT NULL DEFAULT '',
-    crs TEXT NOT NULL DEFAULT 'EPSG:32643',
-    nodata REAL,
-    vertical_datum INTEGER,
-    require_checks INTEGER NOT NULL DEFAULT 1,
-    require_review INTEGER NOT NULL DEFAULT 0,
-    stars INTEGER NOT NULL DEFAULT 0,
-    forks INTEGER NOT NULL DEFAULT 0,
-    tags TEXT NOT NULL DEFAULT '[]',
-    size_bytes INTEGER NOT NULL DEFAULT 0,
-    forked_from INTEGER REFERENCES repos(id),
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    UNIQUE (owner_id, name)
-  );
-  CREATE TABLE collaborators (
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK (role IN ('Admin','Write','Triage','Read')),
-    PRIMARY KEY (repo_id, user_id)
-  );
+export type Param = string | number | bigint | boolean | null | undefined | Uint8Array;
 
-  -- Physical chunks, stored once by hash.
-  CREATE TABLE chunks (
-    hash TEXT PRIMARY KEY,
-    size INTEGER NOT NULL,
-    stored_size INTEGER NOT NULL,
-    codec TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  -- Who may reference a chunk: 'public' or 'owner:<id>' (DECISIONS.md #3).
-  CREATE TABLE chunk_scopes (
-    hash TEXT NOT NULL REFERENCES chunks(hash),
-    scope TEXT NOT NULL,
-    PRIMARY KEY (hash, scope)
-  );
-
-  CREATE TABLE objects (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL CHECK (type IN ('blob','tree','commit')),
-    body TEXT NOT NULL
-  );
-  CREATE TABLE repo_objects (
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    object_id TEXT NOT NULL REFERENCES objects(id),
-    PRIMARY KEY (repo_id, object_id)
-  );
-  -- Which repository references which chunk (for storage and dedup statistics).
-  CREATE TABLE repo_chunks (
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    hash TEXT NOT NULL,
-    PRIMARY KEY (repo_id, hash)
-  );
-  CREATE INDEX idx_repo_chunks_hash ON repo_chunks(hash);
-  CREATE TABLE commits (
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    id TEXT NOT NULL,
-    tree TEXT NOT NULL,
-    parents TEXT NOT NULL,
-    author TEXT NOT NULL,
-    message TEXT NOT NULL,
-    timestamp TEXT NOT NULL,
-    merkle_root TEXT NOT NULL,
-    PRIMARY KEY (repo_id, id)
-  );
-  CREATE TABLE refs (
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('branch','tag')),
-    name TEXT NOT NULL,
-    commit_id TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    PRIMARY KEY (repo_id, kind, name)
-  );
-  -- Append-only record of every ref change (audit trail).
-  CREATE TABLE ref_log (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL,
-    ref TEXT NOT NULL,
-    old_commit TEXT,
-    new_commit TEXT,
-    actor TEXT NOT NULL,
-    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  `,
-  /* 2: collaboration */ `
-  CREATE TABLE issues (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    number INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    body TEXT NOT NULL DEFAULT '',
-    author_id INTEGER NOT NULL REFERENCES owners(id),
-    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','closed')),
-    label TEXT NOT NULL DEFAULT 'question',
-    assignee_id INTEGER REFERENCES owners(id),
-    milestone TEXT,
-    file_ref TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    UNIQUE (repo_id, number)
-  );
-  CREATE TABLE pulls (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    number INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    body TEXT NOT NULL DEFAULT '',
-    author_id INTEGER NOT NULL REFERENCES owners(id),
-    source TEXT NOT NULL,
-    target TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','merged','closed')),
-    merged_commit TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    UNIQUE (repo_id, number)
-  );
-  CREATE TABLE comments (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    target TEXT NOT NULL CHECK (target IN ('issue','pull')),
-    number INTEGER NOT NULL,
-    author_id INTEGER NOT NULL REFERENCES owners(id),
-    body TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  CREATE TABLE reviews (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    number INTEGER NOT NULL,
-    author_id INTEGER NOT NULL REFERENCES owners(id),
-    state TEXT NOT NULL CHECK (state IN ('approved','changes_requested','commented')),
-    body TEXT NOT NULL DEFAULT '',
-    commit_id TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  CREATE TABLE check_runs (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    commit_id TEXT NOT NULL,
-    branch TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('passed','failed')),
-    steps TEXT NOT NULL,
-    duration_ms INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  CREATE TABLE releases (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    tag TEXT NOT NULL,
-    commit_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    notes TEXT NOT NULL DEFAULT '',
-    prerelease INTEGER NOT NULL DEFAULT 0,
-    merkle_root TEXT NOT NULL,
-    checksums TEXT NOT NULL,
-    author_id INTEGER NOT NULL REFERENCES owners(id),
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    UNIQUE (repo_id, tag)
-  );
-  CREATE INDEX idx_commits_repo_time ON commits(repo_id, timestamp DESC);
-  CREATE INDEX idx_checks_repo ON check_runs(repo_id, created_at DESC);
-  `,
-  /* 3: onboarding and password resets */ `
-  ALTER TABLE users ADD COLUMN role TEXT;
-  ALTER TABLE users ADD COLUMN onboarded_at TEXT;
-  -- How a branch moved: 'push' (the push endpoint / CLI), 'merge' or 'branch' (created in the app).
-  ALTER TABLE ref_log ADD COLUMN via TEXT;
-  CREATE TABLE password_resets (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    token_hash TEXT NOT NULL UNIQUE,
-    expires_at TEXT NOT NULL,
-    used_at TEXT
-  );
-  `,
-  /* 4: stars, email verification, session details, health history */ `
-  CREATE TABLE stars (
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    PRIMARY KEY (user_id, repo_id)
-  );
-  -- repos.stars becomes a count kept in step with this table (it held made-up demo numbers).
-  UPDATE repos SET stars = 0, forks = 0;
-  ALTER TABLE users ADD COLUMN email_verified_at TEXT;
-  CREATE TABLE email_tokens (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    purpose TEXT NOT NULL CHECK (purpose IN ('verify')),
-    token_hash TEXT NOT NULL UNIQUE,
-    expires_at TEXT NOT NULL,
-    used_at TEXT
-  );
-  ALTER TABLE tokens ADD COLUMN user_agent TEXT;
-  ALTER TABLE tokens ADD COLUMN ip TEXT;
-  CREATE TABLE health_samples (
-    id INTEGER PRIMARY KEY,
-    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    component TEXT NOT NULL,
-    ok INTEGER NOT NULL,
-    latency_ms INTEGER NOT NULL
-  );
-  CREATE INDEX health_samples_at ON health_samples (component, at);
-  `,
-  /* 5: dataset card (licence, topics) and file locks */ `
-  ALTER TABLE repos ADD COLUMN license TEXT NOT NULL DEFAULT '';
-  ALTER TABLE repos ADD COLUMN topics TEXT NOT NULL DEFAULT '[]';
-  -- One holder per path. Locks are advisory for reading and enforced when a branch moves.
-  CREATE TABLE file_locks (
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    reason TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    PRIMARY KEY (repo_id, path)
-  );
-  `,
-  /* 6: webhooks and their delivery log */ `
-  CREATE TABLE webhooks (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    url TEXT NOT NULL,
-    secret TEXT NOT NULL,
-    events TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1,
-    created_by INTEGER NOT NULL REFERENCES owners(id),
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  CREATE INDEX idx_webhooks_repo ON webhooks(repo_id);
-  CREATE TABLE webhook_deliveries (
-    id INTEGER PRIMARY KEY,
-    webhook_id INTEGER NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
-    event TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    attempt INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed')),
-    response_code INTEGER,
-    error TEXT,
-    next_attempt_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    delivered_at TEXT
-  );
-  CREATE INDEX idx_deliveries_due ON webhook_deliveries(status, next_attempt_at);
-  CREATE INDEX idx_deliveries_hook ON webhook_deliveries(webhook_id, id DESC);
-  `,
-  /* 7: two-step verification (authenticator app + recovery codes) */ `
-  -- The secrets are AES-GCM ciphertext (services/secrets.ts), never the plain base32.
-  ALTER TABLE users ADD COLUMN totp_secret TEXT;
-  ALTER TABLE users ADD COLUMN totp_pending TEXT;
-  ALTER TABLE users ADD COLUMN totp_enabled_at TEXT;
-  ALTER TABLE users ADD COLUMN totp_last_step INTEGER;
-  CREATE TABLE recovery_codes (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    code_hash TEXT NOT NULL,
-    used_at TEXT,
-    UNIQUE (user_id, code_hash)
-  );
-  -- Between a correct password and a correct code: single-use, short-lived, attempt-limited.
-  CREATE TABLE mfa_tickets (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    ticket_hash TEXT NOT NULL UNIQUE,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    expires_at TEXT NOT NULL
-  );
-  `,
-  /* 8: share links (read-only snapshots for people without an account) */ `
-  -- Only the hash of the token is kept: the address is shown once, when the link is made.
-  CREATE TABLE share_links (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    token_hash TEXT NOT NULL UNIQUE,
-    note TEXT NOT NULL DEFAULT '',
-    ref TEXT NOT NULL,
-    commit_id TEXT NOT NULL,
-    created_by INTEGER NOT NULL REFERENCES owners(id),
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    expires_at TEXT NOT NULL,
-    revoked_at TEXT,
-    last_used_at TEXT,
-    uses INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE INDEX idx_share_repo ON share_links(repo_id, id DESC);
-  `,
-  /* 9: where the data is (footprints) */ `
-  -- [west, south, east, north] in degrees around every located file on the default branch.
-  ALTER TABLE repos ADD COLUMN footprint TEXT;
-  ALTER TABLE repos ADD COLUMN footprint_at TEXT;
-  -- One row per file version: its longitude/latitude box, or NULLs for "no usable location".
-  CREATE TABLE blob_extents (
-    key TEXT PRIMARY KEY,
-    west REAL, south REAL, east REAL, north REAL
-  );
-  `,
-  /* 10: server-side inbox state */ `
-  -- Items before this count as read (set the first time someone has an inbox, and by "mark all as read").
-  ALTER TABLE users ADD COLUMN inbox_read_before TEXT;
-  -- A person's own marks on inbox items; the items themselves are derived from the activity feed.
-  CREATE TABLE inbox_state (
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    key TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('read','unread','done')),
-    at TEXT NOT NULL,
-    PRIMARY KEY (user_id, key)
-  );
-  `,
-  /* 11: ref_log had no foreign key, so deleting a repository left its history behind, and SQLite
-        reuses the id: the next repository created inherited that history (a private repository's
-        commit messages showed up in a new repository's activity). */ `
-  DELETE FROM ref_log WHERE repo_id NOT IN (SELECT id FROM repos);
-  CREATE TRIGGER ref_log_with_repo AFTER DELETE ON repos BEGIN
-    DELETE FROM ref_log WHERE repo_id = OLD.id;
-  END;
-  `,
-  /* 12: milestones are real records now (the new-issue form used to offer two invented ones in every
-        repository); milestones already named on issues are kept. */ `
-  CREATE TABLE milestones (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    title TEXT NOT NULL COLLATE NOCASE,
-    description TEXT NOT NULL DEFAULT '',
-    due TEXT,
-    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','closed')),
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    UNIQUE (repo_id, title)
-  );
-  INSERT OR IGNORE INTO milestones (repo_id, title) SELECT DISTINCT repo_id, milestone FROM issues WHERE milestone IS NOT NULL AND TRIM(milestone) <> '';
-  `,/* 13: the status page and its uptime samples are gone. */ `
-  DROP TABLE IF EXISTS health_samples;
-  `,/* 14: a person's own security activity (sign-ins, password and token changes, two-step verification). */ `
-  CREATE TABLE security_events (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    type TEXT NOT NULL,
-    detail TEXT NOT NULL DEFAULT '',
-    ip TEXT,
-    user_agent TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  CREATE INDEX idx_security_events_user ON security_events (user_id, id DESC);
-  `,/* 15: path patterns that must be locked before they can be changed. */ `
-  ALTER TABLE repos ADD COLUMN lock_patterns TEXT NOT NULL DEFAULT '[]';
-  `,/* 16: a personal access token can be limited to named repositories (JSON array of "owner/name", NULL = all). */ `
-  ALTER TABLE tokens ADD COLUMN repos TEXT;
-  `,/* 17: a person's saved issue and pull request filters. */ `
-  CREATE TABLE saved_filters (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('issues','pulls')),
-    name TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT '',
-    label TEXT NOT NULL DEFAULT '',
-    q TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    UNIQUE (user_id, kind, name)
-  );
-  `,/* 18: invitations to a repository sent to an email address that has no account yet. */ `
-  CREATE TABLE repo_invites (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    email TEXT NOT NULL COLLATE NOCASE,
-    role TEXT NOT NULL CHECK (role IN ('Read','Write','Admin')),
-    token_hash TEXT NOT NULL UNIQUE,
-    invited_by INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    expires_at TEXT NOT NULL,
-    accepted_at TEXT,
-    UNIQUE (repo_id, email)
-  );
-  `,/* 19: asking a specific person to review a pull request. */ `
-  CREATE TABLE review_requests (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    number INTEGER NOT NULL,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    requested_by INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    UNIQUE (repo_id, number, user_id)
-  );
-  `,/* 20: merging needs an approval from the code owner of every changed file. */ `
-  ALTER TABLE repos ADD COLUMN require_owner_review INTEGER NOT NULL DEFAULT 0;
-  `,/* 21: storage-limit warnings already sent (one per owner and threshold, cleared when usage falls back below it). */ `
-  CREATE TABLE plan_notices (
-    owner_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    threshold INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    PRIMARY KEY (owner_id, threshold)
-  );
-  `,/* 22: why a webhook was paused by Craton itself (ten failed deliveries in a row); NULL when active or paused by a person. */ `
-  ALTER TABLE webhooks ADD COLUMN paused_reason TEXT;
-  `,/* 23: rasters must be laid out as Cloud Optimized GeoTIFFs (tiled, overviews, directories first) for checks to pass. */ `
-  ALTER TABLE repos ADD COLUMN require_cog INTEGER NOT NULL DEFAULT 0;
-  `,/* 23: sign-in with an identity provider (Google): who is linked to whom, the in-flight sign-ins (state, PKCE verifier, nonce), and people who signed in with Google but have not chosen a username yet. */ `
-  CREATE TABLE oauth_identities (
-    provider TEXT NOT NULL,
-    subject TEXT NOT NULL,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    email TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    PRIMARY KEY (provider, subject)
-  );
-  CREATE INDEX oauth_identities_user ON oauth_identities (user_id);
-  CREATE TABLE oauth_flows (
-    state_hash TEXT PRIMARY KEY,
-    verifier TEXT NOT NULL,
-    nonce TEXT NOT NULL,
-    next TEXT,
-    link_user_id INTEGER,
-    expires_at TEXT NOT NULL
-  );
-  CREATE TABLE oauth_pending (
-    ticket_hash TEXT PRIMARY KEY,
-    provider TEXT NOT NULL,
-    subject TEXT NOT NULL,
-    email TEXT NOT NULL,
-    name TEXT NOT NULL,
-    expires_at TEXT NOT NULL
-  );
-  `,/* 24: model reviews: a checklist, modelling log and sign-off pinned to one commit, with the automated findings captured when it was made. */ `
-  CREATE TABLE model_reviews (
-    id INTEGER PRIMARY KEY,
-    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-    number INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    template TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','in_review','changes_requested','approved')),
-    ref TEXT NOT NULL,
-    commit_id TEXT NOT NULL,
-    merkle_root TEXT NOT NULL,
-    evidence TEXT NOT NULL DEFAULT '{}',
-    created_by INTEGER NOT NULL REFERENCES owners(id),
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    submitted_at TEXT,
-    UNIQUE (repo_id, number)
-  );
-  CREATE TABLE model_review_items (
-    review_id INTEGER NOT NULL REFERENCES model_reviews(id) ON DELETE CASCADE,
-    key TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','pass','fail','na')),
-    note TEXT NOT NULL DEFAULT '',
-    updated_by INTEGER REFERENCES owners(id),
-    updated_at TEXT,
-    PRIMARY KEY (review_id, key)
-  );
-  CREATE TABLE model_review_log (
-    id INTEGER PRIMARY KEY,
-    review_id INTEGER NOT NULL REFERENCES model_reviews(id) ON DELETE CASCADE,
-    author_id INTEGER NOT NULL REFERENCES owners(id),
-    body TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  CREATE TABLE model_review_signoffs (
-    id INTEGER PRIMARY KEY,
-    review_id INTEGER NOT NULL REFERENCES model_reviews(id) ON DELETE CASCADE,
-    user_id INTEGER NOT NULL REFERENCES owners(id),
-    decision TEXT NOT NULL CHECK (decision IN ('approve','request_changes')),
-    comment TEXT NOT NULL DEFAULT '',
-    independent INTEGER NOT NULL,
-    commit_id TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  `,/* 25: audit log (who changed what, on whose repositories) and the last requests each personal access token made. */ `
-  CREATE TABLE audit_events (
-    id INTEGER PRIMARY KEY,
-    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    owner_id INTEGER,
-    owner_handle TEXT,
-    repo TEXT,
-    actor_id INTEGER,
-    actor_handle TEXT,
-    token_id INTEGER,
-    token_kind TEXT,
-    action TEXT NOT NULL,
-    method TEXT NOT NULL,
-    route TEXT NOT NULL,
-    params TEXT NOT NULL DEFAULT '{}',
-    status INTEGER NOT NULL,
-    ip TEXT,
-    user_agent TEXT
-  );
-  CREATE INDEX audit_owner ON audit_events (owner_id, id DESC);
-  CREATE INDEX audit_repo ON audit_events (owner_id, repo, id DESC);
-  CREATE TABLE token_requests (
-    id INTEGER PRIMARY KEY,
-    token_id INTEGER NOT NULL,
-    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    method TEXT NOT NULL,
-    route TEXT NOT NULL,
-    status INTEGER NOT NULL,
-    ms REAL NOT NULL,
-    ip TEXT
-  );
-  CREATE INDEX token_requests_token ON token_requests (token_id, id DESC);
-  `,/* 26: passkeys (WebAuthn): the public keys, a stable per-account user handle, and one-time challenges. */ `
-  CREATE TABLE passkeys (
-    id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    public_key BLOB NOT NULL,
-    alg INTEGER NOT NULL,
-    sign_count INTEGER NOT NULL DEFAULT 0,
-    transports TEXT NOT NULL DEFAULT '',
-    device_type TEXT NOT NULL DEFAULT 'singleDevice',
-    backed_up INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    last_used_at TEXT
-  );
-  CREATE INDEX passkeys_user ON passkeys (user_id);
-  CREATE TABLE passkey_users (
-    user_id INTEGER PRIMARY KEY REFERENCES owners(id) ON DELETE CASCADE,
-    handle TEXT NOT NULL
-  );
-  CREATE TABLE passkey_challenges (
-    hash TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('create','get')),
-    user_id INTEGER,
-    expires_at TEXT NOT NULL
-  );
-  `,/* 27: a sign-in flow belongs to one identity provider (Google or GitHub), so one provider's state can never finish the other's. */ `
-  ALTER TABLE oauth_flows ADD COLUMN provider TEXT NOT NULL DEFAULT 'google';
-  `,/* 28: a webhook can post into a chat room (Slack, Teams, Discord) instead of sending the signed JSON envelope. */ `
-  ALTER TABLE webhooks ADD COLUMN format TEXT NOT NULL DEFAULT 'json';
-  `,/* 29: organization domains: proved by a DNS TXT record, optionally letting people with a confirmed address there join as Members. */ `
-  CREATE TABLE org_domains (
-    id INTEGER PRIMARY KEY,
-    org_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    domain TEXT NOT NULL,
-    token TEXT NOT NULL,
-    verified_at TEXT,
-    auto_join INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    UNIQUE (org_id, domain)
-  );
-  CREATE UNIQUE INDEX org_domains_verified ON org_domains (domain) WHERE verified_at IS NOT NULL;
-  `,/* 30: single sign-on per organization (OpenID Connect against the organization's own identity provider). The client secret is stored encrypted. */ `
-  CREATE TABLE org_sso (
-    org_id INTEGER PRIMARY KEY REFERENCES owners(id) ON DELETE CASCADE,
-    issuer TEXT NOT NULL,
-    client_id TEXT NOT NULL,
-    client_secret TEXT NOT NULL,
-    auth_url TEXT NOT NULL,
-    token_url TEXT NOT NULL,
-    jwks_url TEXT NOT NULL,
-    auth_method TEXT NOT NULL DEFAULT 'post',
-    enforced INTEGER NOT NULL DEFAULT 0,
-    tested_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  `,/* 31: an optional weekly email summary of what is unread in a person's inbox (off unless they turn it on). */ `
-  ALTER TABLE users ADD COLUMN digest TEXT NOT NULL DEFAULT 'off';
-  ALTER TABLE users ADD COLUMN digest_sent_at TEXT;
-  `,/* 32: which emails a person wants (JSON of the ones switched off) and the visibility a new repository starts with. */ `
-  ALTER TABLE users ADD COLUMN notify TEXT NOT NULL DEFAULT '{}';
-  ALTER TABLE users ADD COLUMN default_visibility TEXT NOT NULL DEFAULT 'public';
-  `,/* 33: what a person says about themselves (website, location, company, pronouns) and their profile picture (a small image kept in the database). */ `
-  ALTER TABLE owners ADD COLUMN website TEXT NOT NULL DEFAULT '';
-  ALTER TABLE owners ADD COLUMN location TEXT NOT NULL DEFAULT '';
-  ALTER TABLE owners ADD COLUMN company TEXT NOT NULL DEFAULT '';
-  ALTER TABLE owners ADD COLUMN pronouns TEXT NOT NULL DEFAULT '';
-  CREATE TABLE avatars (
-    owner_id INTEGER PRIMARY KEY REFERENCES owners(id) ON DELETE CASCADE,
-    type TEXT NOT NULL,
-    data BLOB NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  `,/* 34: comments can be edited (and say so) and carry reactions: one row per person per emoji. */ `
-  ALTER TABLE comments ADD COLUMN edited_at TEXT;
-  CREATE TABLE comment_reactions (
-    comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
-    user_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
-    emoji TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    PRIMARY KEY (comment_id, user_id, emoji)
-  );
-  `,/* 35: a release can say which model run produced it (software, version, plan, run time, and the commits of the inputs), as JSON. */ `
-  ALTER TABLE releases ADD COLUMN run TEXT;
-  `,/* 36: a chunk can be stored as its difference from chunks of the previous version of a file (encoding 10); the chunks it needs are listed so nothing can remove them while it is stored that way. */ `
-  CREATE TABLE chunk_refs (
-    chunk_hash TEXT NOT NULL,
-    ref_hash TEXT NOT NULL,
-    PRIMARY KEY (chunk_hash, ref_hash)
-  );
-  CREATE INDEX idx_chunk_refs_ref ON chunk_refs (ref_hash);
-  `,/* 37: the cold tier for DEFLATE GeoTIFFs: a tile kept as its pixels, which chunks are made of which tiles, and which tile of which version of a file is which. */ `
-  CREATE TABLE tiles (
-    key TEXT PRIMARY KEY,
-    stream_len INTEGER NOT NULL,
-    raw_len INTEGER NOT NULL,
-    stored_size INTEGER NOT NULL,
-    kind INTEGER NOT NULL,
-    base_key TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  );
-  CREATE TABLE chunk_tiles (
-    chunk_hash TEXT NOT NULL,
-    tile_key TEXT NOT NULL,
-    PRIMARY KEY (chunk_hash, tile_key)
-  );
-  CREATE INDEX idx_chunk_tiles_tile ON chunk_tiles (tile_key);
-  CREATE TABLE blob_tiles (
-    blob_id TEXT NOT NULL,
-    image INTEGER NOT NULL,
-    idx INTEGER NOT NULL,
-    tile_key TEXT NOT NULL,
-    PRIMARY KEY (blob_id, image, idx)
-  );
-  `,
-];
-
-export type DB = DatabaseSync;
-
-export function openDb(file: string): DB {
-  if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-  db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
-  const row = db.prepare("SELECT version FROM schema_version").get() as { version: number } | undefined;
-  let version = row?.version ?? 0;
-  if (!row) db.prepare("INSERT INTO schema_version (version) VALUES (0)").run();
-  for (; version < migrations.length; version++) {
-    db.exec("BEGIN");
-    try {
-      db.exec(migrations[version]);
-      db.prepare("UPDATE schema_version SET version = ?").run(version + 1);
-      db.exec("COMMIT");
-    } catch (err) {
-      db.exec("ROLLBACK");
-      throw err;
-    }
-  }
-  return db;
+export interface Queryable {
+  /** The first row, or undefined. */
+  get<T = any>(sql: string, ...params: Param[]): Promise<T | undefined>;
+  all<T = any>(sql: string, ...params: Param[]): Promise<T[]>;
+  /** Run a statement; `changes` is how many rows it inserted, updated or deleted. */
+  run(sql: string, ...params: Param[]): Promise<{ changes: number }>;
+  /** Run an INSERT and return the new row's `id` (RETURNING id is added). */
+  insert(sql: string, ...params: Param[]): Promise<number>;
+  /** Run SQL with no parameters (possibly several statements). */
+  exec(sql: string): Promise<void>;
 }
 
-/** Run `fn` in a transaction; rolls back on any error. */
-export function tx<T>(db: DB, fn: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
+/** A statement kept for repeated use: `const find = statement(db, "SELECT ... WHERE id = ?"); await find.get(1);` */
+export function statement(db: Queryable, sql: string) {
+  return {
+    get: <T = any>(...params: Param[]) => db.get<T>(sql, ...params),
+    all: <T = any>(...params: Param[]) => db.all<T>(sql, ...params),
+    run: (...params: Param[]) => db.run(sql, ...params),
+  };
+}
+
+export interface DB extends Queryable {
+  readonly kind: "postgres" | "pglite";
+  /**
+   * Run `fn` in a transaction: everything it does through the `db` it is given commits together, or none of it does. Inside a
+   * transaction, `tx` again just runs `fn` in the same one.
+   */
+  tx<T>(fn: (db: DB) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+}
+
+/** `?` placeholders to $1, $2 ... (a `?` inside a quoted string is left alone). */
+export function numbered(sql: string): string {
+  let n = 0;
+  let out = "";
+  let quote: string | null = null;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    if (quote) {
+      out += ch;
+      if (ch === quote) {
+        if (sql[i + 1] === quote) out += sql[++i]; // doubled quote inside the string
+        else quote = null;
+      }
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      out += ch;
+    } else if (ch === "?") out += `$${++n}`;
+    else out += ch;
+  }
+  return out;
+}
+
+/** A database error that says which statement it came from (the driver's message alone rarely does). */
+async function run<T>(sql: string, go: () => Promise<T>): Promise<T> {
   try {
-    const out = fn();
-    db.exec("COMMIT");
-    return out;
+    return await go();
   } catch (err) {
-    db.exec("ROLLBACK");
+    if (err instanceof Error && !err.message.includes("\n  in: ")) err.message += `\n  in: ${sql.replace(/\s+/g, " ").slice(0, 300)}`;
     throw err;
   }
+}
+
+// NaN and Infinity are not Postgres integers; as a lookup key they can match nothing, which is what NULL does.
+const clean = (params: Param[]): unknown[] => params.map((p) => (p === undefined || (typeof p === "number" && !Number.isFinite(p)) ? null : typeof p === "boolean" ? (p ? 1 : 0) : p));
+
+/** Bytes come back as Uint8Array from PGlite; the rest of the code expects Buffers. */
+function normalise<T>(row: T): T {
+  if (row && typeof row === "object") for (const [k, v] of Object.entries(row as Record<string, unknown>)) if (v instanceof Uint8Array && !Buffer.isBuffer(v)) (row as Record<string, unknown>)[k] = Buffer.from(v);
+  return row;
+}
+
+// ---- node-postgres ------------------------------------------------------------------------------------------------------------
+
+pg.types.setTypeParser(20, (v) => Number(v)); // bigint
+pg.types.setTypeParser(1700, (v) => Number(v)); // numeric (SUM and AVG of integers)
+
+class PgQueries implements Queryable {
+  protected readonly q: { query: (text: string, values?: unknown[]) => Promise<pg.QueryResult> };
+  constructor(q: { query: (text: string, values?: unknown[]) => Promise<pg.QueryResult> }) {
+    this.q = q;
+  }
+  async get<T = any>(sql: string, ...params: Param[]) {
+    return normalise((await run(sql, () => this.q.query(numbered(sql), clean(params)))).rows[0]) as T | undefined;
+  }
+  async all<T = any>(sql: string, ...params: Param[]) {
+    return (await run(sql, () => this.q.query(numbered(sql), clean(params)))).rows.map(normalise) as T[];
+  }
+  async run(sql: string, ...params: Param[]) {
+    return { changes: (await run(sql, () => this.q.query(numbered(sql), clean(params)))).rowCount ?? 0 };
+  }
+  async insert(sql: string, ...params: Param[]) {
+    return Number((await run(sql, () => this.q.query(`${numbered(sql)} RETURNING id`, clean(params)))).rows[0].id);
+  }
+  async exec(sql: string) {
+    await this.q.query(sql);
+  }
+}
+
+class PgDb extends PgQueries implements DB {
+  readonly kind = "postgres" as const;
+  private readonly pool: pg.Pool;
+  private readonly onClose?: () => Promise<void>;
+  constructor(pool: pg.Pool, onClose?: () => Promise<void>) {
+    super(pool);
+    this.pool = pool;
+    this.onClose = onClose;
+  }
+  async tx<T>(fn: (db: DB) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    const inside = new PgTx(client);
+    try {
+      await client.query("BEGIN");
+      const out = await fn(inside);
+      await client.query("COMMIT");
+      return out;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+  async close() {
+    await this.pool.end();
+    await this.onClose?.();
+  }
+}
+
+/** The handle given to a transaction on one connection: its own `tx` just continues in the same transaction. */
+class PgTx extends PgQueries implements DB {
+  readonly kind = "postgres" as const;
+  async tx<T>(fn: (db: DB) => Promise<T>): Promise<T> {
+    return fn(this);
+  }
+  async close() {}
+}
+
+// ---- PGlite -------------------------------------------------------------------------------------------------------------------
+
+type LiteConn = Pick<PGlite, "query" | "exec">;
+
+class LiteQueries implements Queryable {
+  protected readonly conn: LiteConn;
+  constructor(conn: LiteConn) {
+    this.conn = conn;
+  }
+  async get<T = any>(sql: string, ...params: Param[]) {
+    return normalise((await run(sql, () => this.conn.query(numbered(sql), clean(params)))).rows[0]) as T | undefined;
+  }
+  async all<T = any>(sql: string, ...params: Param[]) {
+    return (await run(sql, () => this.conn.query(numbered(sql), clean(params)))).rows.map(normalise) as T[];
+  }
+  async run(sql: string, ...params: Param[]) {
+    return { changes: (await run(sql, () => this.conn.query(numbered(sql), clean(params)))).affectedRows ?? 0 };
+  }
+  async insert(sql: string, ...params: Param[]) {
+    return Number(((await run(sql, () => this.conn.query(`${numbered(sql)} RETURNING id`, clean(params)))).rows[0] as { id: number }).id);
+  }
+  async exec(sql: string) {
+    await this.conn.exec(sql);
+  }
+}
+
+class LiteDb extends LiteQueries implements DB {
+  readonly kind = "pglite" as const;
+  private readonly lite: PGlite;
+  constructor(lite: PGlite) {
+    super(lite);
+    this.lite = lite;
+  }
+  async tx<T>(fn: (db: DB) => Promise<T>): Promise<T> {
+    // PGlite has one connection; its transaction() holds it exclusively until `fn` is done, so statements of other requests wait.
+    return this.lite.transaction(async (t) => fn(new LiteTx(t as unknown as LiteConn)));
+  }
+  async close() {
+    await this.lite.close();
+  }
+}
+
+class LiteTx extends LiteQueries implements DB {
+  readonly kind = "pglite" as const;
+  async tx<T>(fn: (db: DB) => Promise<T>): Promise<T> {
+    return fn(this);
+  }
+  async close() {}
+}
+
+// ---- opening ------------------------------------------------------------------------------------------------------------------
+
+/** Migrations after the baseline, each run once, in order (the baseline is version 1). */
+const migrations: string[] = [];
+
+/** The schema version this build expects. */
+export const SCHEMA_VERSION = 1 + migrations.length;
+
+async function migrate(db: DB) {
+  const all = [BASELINE, ...migrations];
+  // One transaction, under a lock: servers starting together do not run the same migration twice, and a failed one leaves nothing half done.
+  await db.tx(async (t) => {
+    await t.exec("SELECT pg_advisory_xact_lock(726601)");
+    await t.exec("CREATE TABLE IF NOT EXISTS schema_version (version BIGINT NOT NULL)");
+    const row = await t.get<{ version: number }>("SELECT version FROM schema_version");
+    let version = row?.version ?? 0;
+    if (!row) await t.run("INSERT INTO schema_version (version) VALUES (0)");
+    for (; version < all.length; version++) {
+      await t.exec(all[version]);
+      await t.run("UPDATE schema_version SET version = ?", version + 1);
+    }
+  });
+}
+
+export type OpenOptions = { poolMax?: number; caFile?: string };
+
+/**
+ * Open a database and bring its schema up to date.
+ *   postgres://user:pass@host:5432/name?sslmode=require   a Postgres server (AWS RDS and Aurora included)
+ *   pglite:<folder>                                       Postgres in this process, kept in a folder
+ *   :memory: (or pglite:memory)                           Postgres in this process, forgotten when closed (tests)
+ */
+export async function openDb(target: string, opts: OpenOptions = {}): Promise<DB> {
+  // Test runs can ask for a real server instead of the in-process one: CRATON_TEST_PG=postgres://... gives every ":memory:" database its
+  // own schema on that server (dropped when closed), so the whole suite runs against the same driver and server as production.
+  const testServer = process.env.CRATON_TEST_PG;
+  if (testServer && (target === ":memory:" || target === "pglite:memory")) {
+    const schema = `t_${process.pid}_${Math.random().toString(36).slice(2, 10)}`;
+    const admin = new pg.Pool({ connectionString: testServer, max: 1 });
+    await admin.query("SELECT pg_advisory_lock(726602)");
+    await admin.query("CREATE EXTENSION IF NOT EXISTS citext");
+    await admin.query("SELECT pg_advisory_unlock(726602)");
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    await admin.end();
+    const pool = new pg.Pool({ connectionString: testServer, max: opts.poolMax ?? 10, options: `-c search_path=${schema},public` });
+    const db = new PgDb(pool, async () => {
+      const drop = new pg.Pool({ connectionString: testServer, max: 1 });
+      await drop.query(`DROP SCHEMA ${schema} CASCADE`).catch(() => undefined);
+      await drop.end();
+    });
+    await migrate(db);
+    return db;
+  }
+  if (/^postgres(ql)?:\/\//i.test(target)) {
+    const ca = opts.caFile ? fs.readFileSync(opts.caFile, "utf8") : undefined;
+    const pool = new pg.Pool({
+      connectionString: target,
+      max: opts.poolMax ?? 10,
+      ...(ca ? { ssl: { ca, rejectUnauthorized: true } } : {}),
+    });
+    const db = new PgDb(pool);
+    await migrate(db);
+    return db;
+  }
+  const memory = target === ":memory:" || target === "pglite:memory" || target === "pglite:";
+  const folder = target.replace(/^pglite:/, "");
+  if (!memory) fs.mkdirSync(path.resolve(folder), { recursive: true });
+  const lite = new PGlite({
+    ...(memory ? {} : { dataDir: path.resolve(folder) }),
+    extensions: { citext },
+    parsers: { 20: (v: string) => Number(v), 1700: (v: string) => Number(v) },
+  });
+  await lite.waitReady;
+  const db = new LiteDb(lite);
+  await migrate(db);
+  return db;
 }

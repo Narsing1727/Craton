@@ -155,7 +155,7 @@ const bad = (...problems: string[]): Verdict => ({ applies: true, problems });
 /** Column values of a CSV, read once per file when an expectation needs them. */
 async function readTable(ctx: Ctx, repo: RepoRow, f: Facts): Promise<{ header: string[]; rows: string[][] } | null> {
   if (!f.path.toLowerCase().endsWith(".csv") || f.size > MAX_CSV_BYTES) return null;
-  const text = (await new BlobReader(ctx, getObject<BlobObject>(ctx, repo, f.blob, "blob")).readAll()).toString("utf8");
+  const text = (await new BlobReader(ctx, await getObject<BlobObject>(ctx, repo, f.blob, "blob")).readAll()).toString("utf8");
   const parsed = parseCsv(text, sniffDelimiter(text));
   return { header: (parsed[0] ?? []).map((c) => c.trim()), rows: parsed.slice(1) };
 }
@@ -342,7 +342,7 @@ export type CustomResult = { status: "passed" | "failed" | "skipped"; detail: st
 export async function runCustomChecks(ctx: Ctx, repo: RepoRow, commitId: string, tree: TreeObject): Promise<CustomResult> {
   const entry = tree.entries.find((e) => e.path === CONFIG_PATH);
   if (!entry) return { status: "skipped", detail: `No ${CONFIG_PATH}: the repository declares no checks of its own.` };
-  const text = (await new BlobReader(ctx, getObject<BlobObject>(ctx, repo, entry.blob, "blob")).readAll()).toString("utf8");
+  const text = (await new BlobReader(ctx, await getObject<BlobObject>(ctx, repo, entry.blob, "blob")).readAll()).toString("utf8");
   const { checks, problems } = parseConfig(text);
   if (problems.length) return { status: "failed", detail: `${CONFIG_PATH} has ${problems.length} ${problems.length === 1 ? "problem" : "problems"}.`, files: problems.slice(0, MAX_FINDINGS).map((p) => `${CONFIG_PATH}: ${p}`) };
 
@@ -382,8 +382,8 @@ export async function runCustomChecks(ctx: Ctx, repo: RepoRow, commitId: string,
         add(path, `could not be read: ${f.message}`);
         continue;
       }
-      let table: Promise<{ header: string[]; rows: string[][] } | null> | null = null;
-      const readOnce = () => (table ??= readTable(ctx, repo, f as Facts));
+      let table: { header: string[]; rows: string[][] } | null = null;
+      const readOnce = async () => (table ??= await readTable(ctx, repo, f as Facts));
       for (const [key, value] of Object.entries(check.expect)) {
         const verdict = await JUDGES[key](value, f, readOnce);
         if (verdict.applies) applied.add(key);

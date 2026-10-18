@@ -51,11 +51,11 @@ export function ownersForPaths(rules: OwnerRule[], paths: string[]): { handle: s
 /** The CODEOWNERS file at the tip of a branch, or null. */
 export async function ownersFileAt(ctx: Ctx, repo: RepoRow, ref: string): Promise<string | null> {
   try {
-    const commit = getObject<CommitObject>(ctx, repo, resolveRef(ctx, repo, ref), "commit");
-    const tree = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+    const commit = await getObject<CommitObject>(ctx, repo, await resolveRef(ctx, repo, ref), "commit");
+    const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
     const entry = tree.entries.find((e) => e.path === OWNERS_FILE);
     if (!entry || entry.size > 64 * 1024) return null;
-    return (await new BlobReader(ctx, getObject<BlobObject>(ctx, repo, entry.blob, "blob")).readAll()).toString("utf8");
+    return (await new BlobReader(ctx, await getObject<BlobObject>(ctx, repo, entry.blob, "blob")).readAll()).toString("utf8");
   } catch {
     return null;
   }
@@ -72,16 +72,16 @@ export type PullOwner = {
 
 /** Who owns what a pull request changes, and where each owner stands. Names that aren't people here are skipped. */
 export async function ownersOfPull(ctx: Ctx, repo: RepoRow, number: number): Promise<PullOwner[]> {
-  const pull = getPull(ctx, repo, number);
+  const pull = await getPull(ctx, repo, number);
   const rules = parseOwners(await ownersFileAt(ctx, repo, pull.target));
   if (!rules.length) return [];
-  const changed = compareRefs(ctx, repo, pull.target, pull.source).changes.map((c) => c.path);
+  const changed = (await compareRefs(ctx, repo, pull.target, pull.source)).changes.map((c) => c.path);
   const waiting = new Set(
-    (ctx.db.prepare("SELECT o.handle FROM review_requests r JOIN owners o ON o.id = r.user_id WHERE r.repo_id = ? AND r.number = ?").all(repo.id, number) as { handle: string }[]).map((r) => r.handle),
+    (await ctx.db.all("SELECT o.handle FROM review_requests r JOIN owners o ON o.id = r.user_id WHERE r.repo_id = ? AND r.number = ?", repo.id, number) as { handle: string }[]).map((r) => r.handle),
   );
   const latest = new Map<string, { state: PullOwner["state"]; commit: string }>();
   for (const r of (pull as { reviews?: { author: string; state: PullOwner["state"]; commit: string }[] }).reviews ?? []) latest.set(r.author, { state: r.state, commit: r.commit });
-  const people = ctx.db.prepare("SELECT handle FROM owners WHERE kind = 'user'").all() as { handle: string }[];
+  const people = await ctx.db.all("SELECT handle FROM owners WHERE kind = 'user'") as { handle: string }[];
   const known = new Set(people.map((p) => p.handle));
   return ownersForPaths(rules, changed)
     .filter((o) => known.has(o.handle) && o.handle !== pull.author)
@@ -104,10 +104,10 @@ export async function requestOwnerReviews(ctx: Ctx, repo: RepoRow, number: numbe
     return asked;
   }
   for (const o of owners) {
-    const row = ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get(o.handle) as { id: number } | undefined;
-    if (!row || repoAccess(ctx, repo, row.id) === "none") continue;
+    const row = await ctx.db.get("SELECT id FROM owners WHERE handle = ?", o.handle) as { id: number } | undefined;
+    if (!row || await repoAccess(ctx, repo, row.id) === "none") continue;
     try {
-      requestReview(ctx, repo, number, authorId, o.handle);
+      await requestReview(ctx, repo, number, authorId, o.handle);
       asked.push(o.handle);
     } catch {
       // Over the reviewer limit, or similar: the rest of the owners are still asked.
@@ -133,10 +133,10 @@ export type OwnersPreview = {
  * What a CODEOWNERS text would do against the files at a ref: how many files each person would own, who isn't a
  * person here or can't see the repository, and which files nobody owns. Nothing is saved.
  */
-export function previewOwners(ctx: Ctx, repo: RepoRow, text: string, ref?: string): OwnersPreview {
+export async function previewOwners(ctx: Ctx, repo: RepoRow, text: string, ref?: string): Promise<OwnersPreview> {
   const rules = parseOwners(text);
-  const commit = getObject<CommitObject>(ctx, repo, resolveRef(ctx, repo, ref ?? repo.default_branch), "commit");
-  const paths = getObject<TreeObject>(ctx, repo, commit.tree, "tree").entries.map((e) => e.path).filter((p) => p !== OWNERS_FILE);
+  const commit = await getObject<CommitObject>(ctx, repo, await resolveRef(ctx, repo, ref ?? repo.default_branch), "commit");
+  const paths = (await getObject<TreeObject>(ctx, repo, commit.tree, "tree")).entries.map((e) => e.path).filter((p) => p !== OWNERS_FILE);
   const counts = new Map<string, number>();
   const unowned: string[] = [];
   for (const p of paths) {
@@ -145,13 +145,13 @@ export function previewOwners(ctx: Ctx, repo: RepoRow, text: string, ref?: strin
     for (const h of o) counts.set(h, (counts.get(h) ?? 0) + 1);
   }
   const handles = new Set<string>(rules.flatMap((r) => r.owners));
-  const people = [...handles].map((handle) => {
-    const row = ctx.db.prepare("SELECT id, kind FROM owners WHERE handle = ?").get(handle) as { id: number; kind: string } | undefined;
+  const people = (await Promise.all([...handles].map(async (handle) => {
+    const row = await ctx.db.get("SELECT id, kind FROM owners WHERE handle = ?", handle) as { id: number; kind: string } | undefined;
     let problem: string | null = null;
     if (!row || row.kind !== "user") problem = "No person with this name";
-    else if (repoAccess(ctx, repo, row.id) === "none") problem = "Cannot see this repository";
+    else if (await repoAccess(ctx, repo, row.id) === "none") problem = "Cannot see this repository";
     return { handle, files: counts.get(handle) ?? 0, problem };
-  }).sort((a, b) => b.files - a.files || a.handle.localeCompare(b.handle));
+  }))).sort((a, b) => b.files - a.files || a.handle.localeCompare(b.handle));
   const understood = new Set(rules.map((r) => r.line));
   const skipped: OwnersPreview["skipped"] = [];
   text.split(/\r?\n/).forEach((raw, i) => {

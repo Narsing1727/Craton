@@ -32,7 +32,7 @@ function frame(hash: string, data: Buffer) {
 const sample = (n: number) => Array.from({ length: n }, (_, i) => Buffer.from(`station ${i} reading ${"x".repeat(i % 7)}`));
 
 before(async () => {
-  app = createApp({ db: openDb(":memory:"), store: new MemoryStore() } as Ctx);
+  app = createApp({ db: await openDb(":memory:"), store: new MemoryStore() } as Ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
   const made = await call("POST", "/repos", JSON.stringify({ name: "basin", visibility: "private" }), { "content-type": "application/json" });
@@ -150,7 +150,7 @@ test("a batch is stored a few chunks at a time: against a slow object store it t
     }
   }
   const store = new SlowStore();
-  const slowApp = createApp({ db: openDb(":memory:"), store } as Ctx);
+  const slowApp = await createApp({ db: await openDb(":memory:"), store } as Ctx);
   const signup = await slowApp.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "kai", email: "kai@example.org", password: "a-very-long-password" }) });
   const t = ((await signup.json()) as { token: string }).token;
   const auth = { authorization: `Bearer ${t}` };

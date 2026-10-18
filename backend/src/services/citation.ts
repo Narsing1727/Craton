@@ -115,9 +115,9 @@ function parseCff(text: string): Partial<Fields> {
 }
 
 export async function citationFor(ctx: Ctx, repo: RepoRow): Promise<Citation> {
-  const owner = ctx.db.prepare("SELECT name, handle FROM owners WHERE id = ?").get(repo.owner_id) as { name: string; handle: string };
-  const release = ctx.db.prepare("SELECT tag, created_at FROM releases WHERE repo_id = ? AND prerelease = 0 ORDER BY id DESC LIMIT 1").get(repo.id) as { tag: string; created_at: string } | undefined;
-  const head = ctx.db.prepare("SELECT c.id, c.timestamp FROM refs r JOIN commits c ON c.repo_id = r.repo_id AND c.id = r.commit_id WHERE r.repo_id = ? AND r.kind = 'branch' AND r.name = ?").get(repo.id, repo.default_branch) as { id: string; timestamp: string } | undefined;
+  const owner = await ctx.db.get("SELECT name, handle FROM owners WHERE id = ?", repo.owner_id) as { name: string; handle: string };
+  const release = await ctx.db.get("SELECT tag, created_at FROM releases WHERE repo_id = ? AND prerelease = 0 ORDER BY id DESC LIMIT 1", repo.id) as { tag: string; created_at: string } | undefined;
+  const head = await ctx.db.get("SELECT c.id, c.timestamp FROM refs r JOIN commits c ON c.repo_id = r.repo_id AND c.id = r.commit_id WHERE r.repo_id = ? AND r.kind = 'branch' AND r.name = ?", repo.id, repo.default_branch) as { id: string; timestamp: string } | undefined;
 
   const topics = JSON.parse(repo.topics) as string[];
   const generated: Fields = {
@@ -134,10 +134,10 @@ export async function citationFor(ctx: Ctx, repo: RepoRow): Promise<Citation> {
 
   let own: string | null = null;
   if (head) {
-    const commit = getObject<CommitObject>(ctx, repo, head.id, "commit");
-    const tree = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+    const commit = await getObject<CommitObject>(ctx, repo, head.id, "commit");
+    const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
     const entry = tree.entries.find((e) => e.path === "CITATION.cff");
-    if (entry && entry.size <= 64 * 1024) own = (await new BlobReader(ctx, getObject<BlobObject>(ctx, repo, entry.blob, "blob")).readAll()).toString("utf8");
+    if (entry && entry.size <= 64 * 1024) own = (await new BlobReader(ctx, await getObject<BlobObject>(ctx, repo, entry.blob, "blob")).readAll()).toString("utf8");
   }
 
   const parsed = own ? parseCff(own) : {};

@@ -8,8 +8,9 @@
 // What the software can see for itself is captured as evidence (the validation gate's findings and each HEC-RAS plan's
 // own account of its run) and offered as a suggestion next to the item it bears on. A person still decides every item.
 
+import { statement } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
-import { badRequest, conflict, forbidden, notFound } from "./context.ts";
+import { badRequest, conflict, forbidden, inTransaction, lockNumbering, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { getObject, resolveRef } from "./history.ts";
 import { BlobReader } from "./chunks.ts";
@@ -86,7 +87,7 @@ export type Evidence = {
   runs: { path: string; solution: string | null; unstable: boolean; maxWselError: number | null; computeTotal: string | null; runWindow: string | null }[];
 };
 
-const handleOf = (ctx: Ctx, id: number | null) => (id === null ? null : ((ctx.db.prepare("SELECT handle FROM owners WHERE id = ?").get(id) as { handle: string } | undefined)?.handle ?? "ghost"));
+const handleOf = async (ctx: Ctx, id: number | null) => (id === null ? null : ((await ctx.db.get("SELECT handle FROM owners WHERE id = ?", id) as { handle: string } | undefined)?.handle ?? "ghost"));
 
 const clean = (v: unknown, max: number, what: string) => {
   const s = String(v ?? "").replace(/\r\n/g, "\n").trim();
@@ -94,8 +95,8 @@ const clean = (v: unknown, max: number, what: string) => {
   return s;
 };
 
-const find = (ctx: Ctx, repo: RepoRow, n: number) => {
-  const row = ctx.db.prepare("SELECT * FROM model_reviews WHERE repo_id = ? AND number = ?").get(repo.id, n) as Row | undefined;
+const find = async (ctx: Ctx, repo: RepoRow, n: number) => {
+  const row = await ctx.db.get("SELECT * FROM model_reviews WHERE repo_id = ? AND number = ?", repo.id, n) as Row | undefined;
   if (!row) throw notFound("Model review");
   return row;
 };
@@ -104,13 +105,13 @@ const find = (ctx: Ctx, repo: RepoRow, n: number) => {
 
 /** What the software can see about one commit: the gate's last run, and each HEC-RAS plan's own run summary. */
 export async function captureEvidence(ctx: Ctx, repo: RepoRow, commitId: string): Promise<Evidence> {
-  const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
-  const tree = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
-  const run = listCheckRuns(ctx, repo, { commit: commitId, limit: 1 })[0] ?? null;
+  const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
+  const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+  const run = (await listCheckRuns(ctx, repo, { commit: commitId, limit: 1 }))[0] ?? null;
   const runs: Evidence["runs"] = [];
   for (const e of tree.entries.filter((x) => /\.(hdf|h5|hdf5)$/i.test(x.path)).slice(0, 20)) {
     try {
-      const reader = new BlobReader(ctx, getObject<BlobObject>(ctx, repo, e.blob, "blob"));
+      const reader = new BlobReader(ctx, await getObject<BlobObject>(ctx, repo, e.blob, "blob"));
       const summary = summarizeRun((await readHdf5((o, l) => reader.read(o, l), reader.size)).objects);
       if (summary) runs.push({ path: e.path, solution: summary.solution, unstable: summary.unstable, maxWselError: summary.maxWselError, computeTotal: summary.computeTotal, runWindow: summary.runWindow });
     } catch {
@@ -153,52 +154,52 @@ export function suggestions(ev: Evidence): Record<string, { status: "pass" | "fa
 
 // ── Reading ──────────────────────────────────────────────────────────────────
 
-export function listReviews(ctx: Ctx, repo: RepoRow) {
-  const rows = ctx.db.prepare("SELECT * FROM model_reviews WHERE repo_id = ? ORDER BY number DESC").all(repo.id) as Row[];
-  return rows.map((r) => {
-    const counts = countsOf(ctx, r.id);
-    const last = ctx.db.prepare("SELECT user_id, decision, created_at FROM model_review_signoffs WHERE review_id = ? ORDER BY id DESC LIMIT 1").get(r.id) as { user_id: number; decision: string; created_at: string } | undefined;
+export async function listReviews(ctx: Ctx, repo: RepoRow) {
+  const rows = await ctx.db.all("SELECT * FROM model_reviews WHERE repo_id = ? ORDER BY number DESC", repo.id) as Row[];
+  return (await Promise.all(rows.map(async (r) => {
+    const counts = await countsOf(ctx, r.id);
+    const last = await ctx.db.get("SELECT user_id, decision, created_at FROM model_review_signoffs WHERE review_id = ? ORDER BY id DESC LIMIT 1", r.id) as { user_id: number; decision: string; created_at: string } | undefined;
     return {
       number: r.number,
       title: r.title,
       status: r.status,
       ref: r.ref,
       commit: r.commit_id,
-      createdBy: handleOf(ctx, r.created_by),
+      createdBy: await handleOf(ctx, r.created_by),
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       counts,
-      lastDecision: last ? { by: handleOf(ctx, last.user_id), decision: last.decision, at: last.created_at } : null,
+      lastDecision: last ? { by: await handleOf(ctx, last.user_id), decision: last.decision, at: last.created_at } : null,
     };
-  });
+  })));
 }
 
-function countsOf(ctx: Ctx, reviewId: number) {
-  const rows = ctx.db.prepare("SELECT status, COUNT(*) AS n FROM model_review_items WHERE review_id = ? GROUP BY status").all(reviewId) as { status: ItemStatus; n: number }[];
+async function countsOf(ctx: Ctx, reviewId: number) {
+  const rows = await ctx.db.all("SELECT status, COUNT(*) AS n FROM model_review_items WHERE review_id = ? GROUP BY status", reviewId) as { status: ItemStatus; n: number }[];
   const c = { todo: 0, pass: 0, fail: 0, na: 0 };
   for (const r of rows) c[r.status] = r.n;
   return c;
 }
 
-export function getReview(ctx: Ctx, repo: RepoRow, n: number) {
-  const r = find(ctx, repo, n);
+export async function getReview(ctx: Ctx, repo: RepoRow, n: number) {
+  const r = await find(ctx, repo, n);
   const stored = new Map(
-    (ctx.db.prepare("SELECT key, status, note, updated_by, updated_at FROM model_review_items WHERE review_id = ?").all(r.id) as { key: string; status: ItemStatus; note: string; updated_by: number | null; updated_at: string | null }[]).map((i) => [i.key, i]),
+    (await ctx.db.all("SELECT key, status, note, updated_by, updated_at FROM model_review_items WHERE review_id = ?", r.id) as { key: string; status: ItemStatus; note: string; updated_by: number | null; updated_at: string | null }[]).map((i) => [i.key, i]),
   );
   const evidence = JSON.parse(r.evidence) as Evidence;
   const hints = suggestions(evidence);
-  const items = TEMPLATE.map((t) => {
+  const items = (await Promise.all(TEMPLATE.map(async (t) => {
     const s = stored.get(t.key);
-    return { ...t, status: (s?.status ?? "todo") as ItemStatus, note: s?.note ?? "", updatedBy: handleOf(ctx, s?.updated_by ?? null), updatedAt: s?.updated_at ?? null, suggestion: hints[t.key] ?? null };
-  });
-  const log = (ctx.db.prepare("SELECT id, author_id, body, created_at FROM model_review_log WHERE review_id = ? ORDER BY id").all(r.id) as { id: number; author_id: number; body: string; created_at: string }[]).map((l) => ({
+    return { ...t, status: (s?.status ?? "todo") as ItemStatus, note: s?.note ?? "", updatedBy: await handleOf(ctx, s?.updated_by ?? null), updatedAt: s?.updated_at ?? null, suggestion: hints[t.key] ?? null };
+  })));
+  const log = (await Promise.all((await ctx.db.all("SELECT id, author_id, body, created_at FROM model_review_log WHERE review_id = ? ORDER BY id", r.id) as { id: number; author_id: number; body: string; created_at: string }[]).map(async (l) => ({
     id: l.id,
-    author: handleOf(ctx, l.author_id),
+    author: await handleOf(ctx, l.author_id),
     body: l.body,
     at: l.created_at,
-  }));
-  const signoffs = (
-    ctx.db.prepare("SELECT id, user_id, decision, comment, independent, commit_id, created_at FROM model_review_signoffs WHERE review_id = ? ORDER BY id").all(r.id) as {
+  }))));
+  const signoffs = (await Promise.all((
+    await ctx.db.all("SELECT id, user_id, decision, comment, independent, commit_id, created_at FROM model_review_signoffs WHERE review_id = ? ORDER BY id", r.id) as {
       id: number;
       user_id: number;
       decision: string;
@@ -207,7 +208,7 @@ export function getReview(ctx: Ctx, repo: RepoRow, n: number) {
       commit_id: string;
       created_at: string;
     }[]
-  ).map((s) => ({ id: s.id, user: handleOf(ctx, s.user_id), decision: s.decision, comment: s.comment, independent: Boolean(s.independent), commit: s.commit_id, at: s.created_at }));
+  ).map(async (s) => ({ id: s.id, user: await handleOf(ctx, s.user_id), decision: s.decision, comment: s.comment, independent: Boolean(s.independent), commit: s.commit_id, at: s.created_at }))));
   return {
     number: r.number,
     title: r.title,
@@ -216,11 +217,11 @@ export function getReview(ctx: Ctx, repo: RepoRow, n: number) {
     ref: r.ref,
     commit: r.commit_id,
     merkleRoot: r.merkle_root,
-    createdBy: handleOf(ctx, r.created_by),
+    createdBy: await handleOf(ctx, r.created_by),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     submittedAt: r.submitted_at,
-    counts: countsOf(ctx, r.id),
+    counts: await countsOf(ctx, r.id),
     items,
     log,
     signoffs,
@@ -234,84 +235,84 @@ export async function createReview(ctx: Ctx, repo: RepoRow, userId: number, inpu
   const title = clean(input.title, 120, "the title");
   if (!title) throw badRequest("Give the review a title, for example “Chalakudy 2D model, 100-year design event”.");
   const ref = clean(input.ref || repo.default_branch || "main", 200, "the ref");
-  const commitId = resolveRef(ctx, repo, ref);
-  const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
+  const commitId = await resolveRef(ctx, repo, ref);
+  const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
   const evidence = await captureEvidence(ctx, repo, commitId);
-  const number = ((ctx.db.prepare("SELECT MAX(number) AS n FROM model_reviews WHERE repo_id = ?").get(repo.id) as { n: number | null }).n ?? 0) + 1;
-  const info = ctx.db
-    .prepare("INSERT INTO model_reviews (repo_id, number, title, template, ref, commit_id, merkle_root, evidence, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(repo.id, number, title, TEMPLATE_ID, ref, commitId, commit.merkleRoot, JSON.stringify(evidence), userId);
-  const stmt = ctx.db.prepare("INSERT INTO model_review_items (review_id, key) VALUES (?, ?)");
-  for (const t of TEMPLATE) stmt.run(Number(info.lastInsertRowid), t.key);
-  ctx.db.prepare("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)").run(Number(info.lastInsertRowid), userId, `Review opened on ${ref} at ${commitId.slice(0, 12)} (Merkle root ${commit.merkleRoot.slice(0, 16)}…).`);
-  return getReview(ctx, repo, number);
+  const reviewNumber = await inTransaction(ctx, async (c) => {
+    await lockNumbering(c.db, repo.id);
+    const number = ((await c.db.get("SELECT MAX(number) AS n FROM model_reviews WHERE repo_id = ?", repo.id) as { n: number | null }).n ?? 0) + 1;
+    const info = await c.db.insert("INSERT INTO model_reviews (repo_id, number, title, template, ref, commit_id, merkle_root, evidence, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", repo.id, number, title, TEMPLATE_ID, ref, commitId, commit.merkleRoot, JSON.stringify(evidence), userId);
+    const stmt = statement(c.db, "INSERT INTO model_review_items (review_id, key) VALUES (?, ?)");
+    for (const t of TEMPLATE) await stmt.run(info, t.key);
+    await c.db.run("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)", info, userId, `Review opened on ${ref} at ${commitId.slice(0, 12)} (Merkle root ${commit.merkleRoot.slice(0, 16)}…).`);
+    return number;
+  });
+  return getReview(ctx, repo, reviewNumber);
 }
 
-const touch = (ctx: Ctx, id: number) => ctx.db.prepare("UPDATE model_reviews SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(id);
+const touch = async (ctx: Ctx, id: number) => await ctx.db.run("UPDATE model_reviews SET updated_at = now_iso() WHERE id = ?", id);
 
 function mustBeEditable(r: Row) {
   if (r.status === "approved") throw conflict("approved", "This review is approved and locked. Reopen it to change an item.");
 }
 
-export function setItem(ctx: Ctx, repo: RepoRow, n: number, userId: number, key: string, input: { status?: string; note?: string }) {
-  const r = find(ctx, repo, n);
+export async function setItem(ctx: Ctx, repo: RepoRow, n: number, userId: number, key: string, input: { status?: string; note?: string }) {
+  const r = await find(ctx, repo, n);
   mustBeEditable(r);
   if (!ITEM_KEYS.has(key)) throw notFound("Checklist item");
-  const current = ctx.db.prepare("SELECT status, note FROM model_review_items WHERE review_id = ? AND key = ?").get(r.id, key) as { status: ItemStatus; note: string };
+  const current = await ctx.db.get("SELECT status, note FROM model_review_items WHERE review_id = ? AND key = ?", r.id, key) as { status: ItemStatus; note: string };
   const status = (input.status ?? current.status) as ItemStatus;
   if (!["todo", "pass", "fail", "na"].includes(status)) throw badRequest("Status must be todo, pass, fail or na.");
   const note = input.note !== undefined ? clean(input.note, 2000, "a note") : current.note;
-  ctx.db.prepare("UPDATE model_review_items SET status = ?, note = ?, updated_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE review_id = ? AND key = ?").run(status, note, userId, r.id, key);
-  touch(ctx, r.id);
+  await ctx.db.run("UPDATE model_review_items SET status = ?, note = ?, updated_by = ?, updated_at = now_iso() WHERE review_id = ? AND key = ?", status, note, userId, r.id, key);
+  await touch(ctx, r.id);
   return getReview(ctx, repo, n);
 }
 
-export function addLog(ctx: Ctx, repo: RepoRow, n: number, userId: number, bodyInput: unknown) {
-  const r = find(ctx, repo, n);
+export async function addLog(ctx: Ctx, repo: RepoRow, n: number, userId: number, bodyInput: unknown) {
+  const r = await find(ctx, repo, n);
   const body = clean(bodyInput, 4000, "a log entry");
   if (!body) throw badRequest("Write what was done or decided.");
   // The log is append-only on purpose: it is the record of how the model was built, and it stays open after approval
   // so later observations can be added without unlocking the checklist.
-  ctx.db.prepare("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)").run(r.id, userId, body);
-  touch(ctx, r.id);
+  await ctx.db.run("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)", r.id, userId, body);
+  await touch(ctx, r.id);
   return getReview(ctx, repo, n);
 }
 
 /** Capture the findings again, optionally re-pinning the review to another ref. Not possible once approved. */
 export async function refreshEvidence(ctx: Ctx, repo: RepoRow, n: number, userId: number, input: { ref?: string }) {
-  const r = find(ctx, repo, n);
+  const r = await find(ctx, repo, n);
   mustBeEditable(r);
   const ref = input.ref ? clean(input.ref, 200, "the ref") : r.ref;
-  const commitId = resolveRef(ctx, repo, ref);
-  const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
+  const commitId = await resolveRef(ctx, repo, ref);
+  const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
   const evidence = await captureEvidence(ctx, repo, commitId);
-  ctx.db.prepare("UPDATE model_reviews SET ref = ?, commit_id = ?, merkle_root = ?, evidence = ? WHERE id = ?").run(ref, commitId, commit.merkleRoot, JSON.stringify(evidence), r.id);
+  await ctx.db.run("UPDATE model_reviews SET ref = ?, commit_id = ?, merkle_root = ?, evidence = ? WHERE id = ?", ref, commitId, commit.merkleRoot, JSON.stringify(evidence), r.id);
   const moved = commitId !== r.commit_id;
-  ctx.db
-    .prepare("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)")
-    .run(r.id, userId, moved ? `Evidence refreshed and review re-pinned to ${ref} at ${commitId.slice(0, 12)} (Merkle root ${commit.merkleRoot.slice(0, 16)}…).` : `Evidence refreshed at ${commitId.slice(0, 12)}.`);
-  touch(ctx, r.id);
+  await ctx.db.run("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)", r.id, userId, moved ? `Evidence refreshed and review re-pinned to ${ref} at ${commitId.slice(0, 12)} (Merkle root ${commit.merkleRoot.slice(0, 16)}…).` : `Evidence refreshed at ${commitId.slice(0, 12)}.`);
+  await touch(ctx, r.id);
   return getReview(ctx, repo, n);
 }
 
-export function submit(ctx: Ctx, repo: RepoRow, n: number, userId: number) {
-  const r = find(ctx, repo, n);
+export async function submit(ctx: Ctx, repo: RepoRow, n: number, userId: number) {
+  const r = await find(ctx, repo, n);
   if (r.status !== "draft" && r.status !== "changes_requested") throw conflict("state", `A review that is ${r.status.replace("_", " ")} cannot be submitted.`);
-  ctx.db.prepare("UPDATE model_reviews SET status = 'in_review', submitted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(r.id);
-  ctx.db.prepare("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)").run(r.id, userId, "Submitted for review.");
-  touch(ctx, r.id);
+  await ctx.db.run("UPDATE model_reviews SET status = 'in_review', submitted_at = now_iso() WHERE id = ?", r.id);
+  await ctx.db.run("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)", r.id, userId, "Submitted for review.");
+  await touch(ctx, r.id);
   return getReview(ctx, repo, n);
 }
 
-export function decide(ctx: Ctx, repo: RepoRow, n: number, userId: number, input: { decision?: string; comment?: string }) {
-  const r = find(ctx, repo, n);
+export async function decide(ctx: Ctx, repo: RepoRow, n: number, userId: number, input: { decision?: string; comment?: string }) {
+  const r = await find(ctx, repo, n);
   if (r.status !== "in_review") throw conflict("state", "Only a review that has been submitted can be decided.");
   const decision = input.decision;
   if (decision !== "approve" && decision !== "request_changes") throw badRequest("Decision must be approve or request_changes.");
   const comment = clean(input.comment, 1000, "a comment");
   if (decision === "request_changes" && !comment) throw badRequest("Say what has to change.");
   if (decision === "approve") {
-    const items = ctx.db.prepare("SELECT key, status, note FROM model_review_items WHERE review_id = ?").all(r.id) as { key: string; status: ItemStatus; note: string }[];
+    const items = await ctx.db.all("SELECT key, status, note FROM model_review_items WHERE review_id = ?", r.id) as { key: string; status: ItemStatus; note: string }[];
     const open = items.filter((i) => i.status === "todo");
     if (open.length) throw conflict("incomplete", `${open.length} checklist ${open.length === 1 ? "item is" : "items are"} still to do. Mark each pass, fail or not applicable first.`, { open: open.map((i) => i.key) });
     const bare = items.filter((i) => i.status === "fail" && i.note.trim().length < 3);
@@ -319,30 +320,28 @@ export function decide(ctx: Ctx, repo: RepoRow, n: number, userId: number, input
   }
   // Independence is recorded, not required: a one-person team can still finish a review, and the record says so.
   const independent = userId !== r.created_by;
-  ctx.db.prepare("INSERT INTO model_review_signoffs (review_id, user_id, decision, comment, independent, commit_id) VALUES (?, ?, ?, ?, ?, ?)").run(r.id, userId, decision, comment, independent ? 1 : 0, r.commit_id);
-  ctx.db.prepare("UPDATE model_reviews SET status = ? WHERE id = ?").run(decision === "approve" ? "approved" : "changes_requested", r.id);
-  ctx.db
-    .prepare("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)")
-    .run(r.id, userId, decision === "approve" ? `Approved${independent ? "" : " (not independent: the author signed off their own review)"}.${comment ? ` ${comment}` : ""}` : `Changes requested: ${comment}`);
-  touch(ctx, r.id);
+  await ctx.db.run("INSERT INTO model_review_signoffs (review_id, user_id, decision, comment, independent, commit_id) VALUES (?, ?, ?, ?, ?, ?)", r.id, userId, decision, comment, independent ? 1 : 0, r.commit_id);
+  await ctx.db.run("UPDATE model_reviews SET status = ? WHERE id = ?", decision === "approve" ? "approved" : "changes_requested", r.id);
+  await ctx.db.run("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)", r.id, userId, decision === "approve" ? `Approved${independent ? "" : " (not independent: the author signed off their own review)"}.${comment ? ` ${comment}` : ""}` : `Changes requested: ${comment}`);
+  await touch(ctx, r.id);
   return getReview(ctx, repo, n);
 }
 
-export function reopen(ctx: Ctx, repo: RepoRow, n: number, userId: number, reason: unknown) {
-  const r = find(ctx, repo, n);
+export async function reopen(ctx: Ctx, repo: RepoRow, n: number, userId: number, reason: unknown) {
+  const r = await find(ctx, repo, n);
   if (r.status !== "approved") throw conflict("state", "Only an approved review can be reopened.");
   const why = clean(reason, 500, "the reason");
   if (!why) throw badRequest("Say why the approved review is being reopened.");
-  ctx.db.prepare("UPDATE model_reviews SET status = 'draft' WHERE id = ?").run(r.id);
-  ctx.db.prepare("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)").run(r.id, userId, `Reopened: ${why}`);
-  touch(ctx, r.id);
+  await ctx.db.run("UPDATE model_reviews SET status = 'draft' WHERE id = ?", r.id);
+  await ctx.db.run("INSERT INTO model_review_log (review_id, author_id, body) VALUES (?, ?, ?)", r.id, userId, `Reopened: ${why}`);
+  await touch(ctx, r.id);
   return getReview(ctx, repo, n);
 }
 
-export function deleteReview(ctx: Ctx, repo: RepoRow, n: number) {
-  const r = find(ctx, repo, n);
+export async function deleteReview(ctx: Ctx, repo: RepoRow, n: number) {
+  const r = await find(ctx, repo, n);
   if (r.status === "approved") throw forbidden("An approved review is a record and cannot be deleted. Reopen it first.");
-  ctx.db.prepare("DELETE FROM model_reviews WHERE id = ?").run(r.id);
+  await ctx.db.run("DELETE FROM model_reviews WHERE id = ?", r.id);
 }
 
 // ── Export ───────────────────────────────────────────────────────────────────
@@ -351,8 +350,8 @@ const ICON: Record<ItemStatus, string> = { pass: "PASS", fail: "FAIL", na: "N/A"
 const STATUS_TEXT: Record<ReviewStatus, string> = { draft: "Draft", in_review: "In review", changes_requested: "Changes requested", approved: "Approved" };
 
 /** A document to attach to a submission: pinned commit, evidence, checklist, log and sign-offs. */
-export function exportMarkdown(ctx: Ctx, repo: RepoRow, n: number): string {
-  const r = getReview(ctx, repo, n);
+export async function exportMarkdown(ctx: Ctx, repo: RepoRow, n: number): Promise<string> {
+  const r = await getReview(ctx, repo, n);
   const lines: string[] = [];
   const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n+/g, " ");
   lines.push(`# Model review ${r.number}: ${r.title}`, "");
@@ -362,7 +361,7 @@ export function exportMarkdown(ctx: Ctx, repo: RepoRow, n: number): string {
   lines.push(`- Commit: \`${r.commit}\``);
   lines.push(`- Merkle root: \`${r.merkleRoot}\``);
   lines.push(`- Opened by @${r.createdBy} on ${r.createdAt.slice(0, 10)}`);
-  const approval = [...r.signoffs].reverse().find((s) => s.decision === "approve");
+  const approval = await [...r.signoffs].reverse().find((s) => s.decision === "approve");
   if (r.status === "approved" && approval) lines.push(`- Approved by @${approval.user} on ${approval.at.slice(0, 10)} (${approval.independent ? "independent review" : "NOT independent: signed off by the author"})`);
   lines.push(`- Checklist: ${r.counts.pass} pass, ${r.counts.fail} fail, ${r.counts.na} not applicable, ${r.counts.todo} to do`, "");
   lines.push("The Merkle root identifies exactly which files this review covers. Any change to any file changes it.", "");

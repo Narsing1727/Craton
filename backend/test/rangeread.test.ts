@@ -34,13 +34,13 @@ const data = crypto.randomBytes(3 * 1024 * 1024 + 12_345); // several chunks (12
 const sha = crypto.createHash("sha256").update(data).digest("hex");
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
-  ctx.db.prepare("UPDATE users SET email_verified_at = ?").run(new Date().toISOString());
+  await ctx.db.run("UPDATE users SET email_verified_at = ?", new Date().toISOString());
   assert.equal((await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "basin", visibility: "public" }) })).status, 201);
-  const repo = getRepoFor(ctx, "rhea", "basin", null);
+  const repo = await getRepoFor(ctx, "rhea", "basin", null);
   await commitFiles(ctx, repo, { branch: "main", author: "rhea", message: "big file", timestamp: new Date(), changes: { "terrain/big.bin": data, "small.txt": Buffer.from("hello") } });
 });
 

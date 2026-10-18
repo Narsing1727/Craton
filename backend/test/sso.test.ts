@@ -65,13 +65,13 @@ before(async () => {
   await new Promise<void>((r) => idp.listen(0, "127.0.0.1", r));
   ISSUER = `http://127.0.0.1:${(idp.address() as AddressInfo).port}`;
   discoveryBody = (base) => ({ issuer: base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`, jwks_uri: `${base}/jwks`, token_endpoint_auth_methods_supported: basicOnly ? ["client_secret_basic"] : ["client_secret_post", "client_secret_basic"] });
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() } as Ctx;
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() } as Ctx;
   app = createApp(ctx);
   resetKeyCache();
   for (const [u, email] of [["owen", "owen@hydrolab.org"], ["maya", "maya@hydrolab.org"], ["rhea", "rhea@gmail.com"]]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE lower(email) = lower(?)").run(new Date().toISOString(), email);
+    await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE lower(email) = lower(?)", new Date().toISOString(), email);
   }
   assert.equal((await call("POST", "/orgs", "owen", { handle: "hydrolab", name: "Hydrolab" })).status, 201);
 });
@@ -104,13 +104,13 @@ async function viaProvider(email: string, claims: Claims, opts: { key?: typeof g
   return { res, body: res.json as Record<string, any>, state: q.get("state")!, code };
 }
 
-const verifyDomain = (org: string, domain: string) => ctx.db.prepare("INSERT INTO org_domains (org_id, domain, token, verified_at) VALUES ((SELECT id FROM owners WHERE handle = ?), ?, 't', ?)").run(org, domain, new Date().toISOString());
+const verifyDomain = async (org: string, domain: string) => await ctx.db.run("INSERT INTO org_domains (org_id, domain, token, verified_at) VALUES ((SELECT id FROM owners WHERE handle = ?), ?, 't', ?)", org, domain, new Date().toISOString());
 const members = async () => ((await call("GET", "/owners/hydrolab", null)).json.members as { handle: string; role: string }[]).map((m) => `${m.handle}:${m.role}`).sort();
 
 test("setting it up needs a verified domain and an owner, and the provider's own answer has to make sense", async () => {
   const input = { issuer: ISSUER, clientId: CLIENT_ID, clientSecret: "s3cret" };
   assert.equal((await call("PUT", "/orgs/hydrolab/sso", "owen", input)).status, 400, "no verified domain yet");
-  verifyDomain("hydrolab", "hydrolab.org");
+  await verifyDomain("hydrolab", "hydrolab.org");
   assert.equal((await call("PUT", "/orgs/hydrolab/sso", "maya", input)).status, 404, "not a member");
   assert.equal((await call("PUT", "/orgs/hydrolab/sso", "owen", { ...input, issuer: "https://not-a-real-provider.invalid" })).json.error.code, "discovery_failed");
   assert.equal((await call("PUT", "/orgs/hydrolab/sso", "owen", { ...input, issuer: `${ISSUER}/` + "other" })).json.error.code, "discovery_failed");
@@ -125,7 +125,7 @@ test("setting it up needs a verified domain and an owner, and the provider's own
   assert.equal(ok.json.redirectUri, `${config.webUrl}/auth/sso/callback`);
   assert.deepEqual(ok.json.domains, ["hydrolab.org"]);
   assert.ok(!JSON.stringify(ok.json).includes("s3cret"), "the secret is never sent back");
-  const stored = (ctx.db.prepare("SELECT client_secret FROM org_sso").get() as { client_secret: string }).client_secret;
+  const stored = (await ctx.db.get("SELECT client_secret FROM org_sso") as { client_secret: string }).client_secret;
   assert.ok(stored && !stored.includes("s3cret"), "and it is stored encrypted");
   assert.equal((await call("GET", "/orgs/hydrolab/sso", "maya")).status, 404);
 });
@@ -253,7 +253,7 @@ test("it cannot be required before it has worked once; changing the client reset
   assert.equal((await call("PATCH", "/orgs/hydrolab/sso", "owen", { enforced: true })).status, 400, "untested");
   assert.equal((await call("PATCH", "/orgs/hydrolab/sso", "owen", { enforced: "yes" })).status, 400);
   assert.equal((await call("DELETE", "/orgs/hydrolab/sso", "owen")).status, 204);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM oauth_identities WHERE provider LIKE 'sso:%'").get() as { n: number }).n, 0);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM oauth_identities WHERE provider LIKE 'sso:%'") as { n: number }).n, 0);
   assert.equal((await call("POST", "/auth/sso/start", null, { email: "maya@hydrolab.org" })).status, 404);
   assert.equal((await call("GET", "/orgs/hydrolab/sso", "owen")).json.configured, false);
 });

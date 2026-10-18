@@ -46,14 +46,14 @@ async function upload(repo: string, who: string | null, parts: Part[], fields: R
 const tip = async (repo: string, branch: string) => (await json("GET", `/repos/${repo}/refs`, "rhea")).json.branches.find((b: any) => b.name === branch)?.commit_id as string | undefined;
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "sol", "ines"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
   }
   assert.equal((await json("POST", "/repos", "rhea", { name: "basin", visibility: "private" })).status, 201);
-  ctx.db.prepare("INSERT INTO collaborators (repo_id, user_id, role) VALUES ((SELECT id FROM repos WHERE name = 'basin'), (SELECT id FROM owners WHERE handle = 'sol'), 'Read')").run();
+  await ctx.db.run("INSERT INTO collaborators (repo_id, user_id, role) VALUES ((SELECT id FROM repos WHERE name = 'basin'), (SELECT id FROM owners WHERE handle = 'sol'), 'Read')");
 });
 
 // ── Paths ──────────────────────────────────────────────────────────────────
@@ -158,16 +158,16 @@ test("the branch moving while you chose files is caught instead of stacking on a
 });
 
 test("files someone else has locked are refused, and nothing from that upload is kept", async () => {
-  ctx.db.prepare("INSERT INTO collaborators (repo_id, user_id, role) VALUES ((SELECT id FROM repos WHERE name = 'basin'), (SELECT id FROM owners WHERE handle = 'ines'), 'Write') ON CONFLICT DO NOTHING").run();
+  await ctx.db.run("INSERT INTO collaborators (repo_id, user_id, role) VALUES ((SELECT id FROM repos WHERE name = 'basin'), (SELECT id FROM owners WHERE handle = 'ines'), 'Write') ON CONFLICT DO NOTHING");
   assert.equal((await json("POST", "/repos/rhea/basin/locks", "ines", { path: "model/plan.p01", reason: "recalibrating" })).status, 201);
-  const chunksBefore = (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunks").get() as { n: number }).n;
+  const chunksBefore = (await ctx.db.get("SELECT COUNT(*) AS n FROM chunks") as { n: number }).n;
   const before = await tip("rhea/basin", "main");
   const r = await upload("rhea/basin", "rhea", [{ name: "model/plan.p01", data: "someone else's lock" }, { name: "extra.bin", data: crypto.randomBytes(5000) }]);
   assert.equal(r.status, 409);
   assert.equal(r.json.error.code, "locked");
   assert.match(r.json.error.message, /model\/plan\.p01 \(@ines\)/);
   assert.equal(await tip("rhea/basin", "main"), before);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM chunks").get() as { n: number }).n, chunksBefore, "not even the other file's bytes were stored");
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM chunks") as { n: number }).n, chunksBefore, "not even the other file's bytes were stored");
   assert.equal((await json("DELETE", "/repos/rhea/basin/locks/model%2Fplan.p01", "ines")).status, 204);
 });
 
@@ -213,13 +213,13 @@ test("a push webhook fires for an upload, like for any push", async () => {
   const { listHooks, createHook } = await import("../src/services/webhooks.ts");
   (config.webhooks as { allowPrivate: boolean; autoDeliver: boolean }).allowPrivate = true;
   (config.webhooks as { allowPrivate: boolean; autoDeliver: boolean }).autoDeliver = false;
-  const owner = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number };
-  const repo = ctx.db.prepare("SELECT r.*, o.handle AS owner FROM repos r JOIN owners o ON o.id = r.owner_id WHERE r.name = 'basin'").get() as any;
-  createHook(ctx, repo, owner.id, { url: "http://127.0.0.1:9/hook", events: ["push"] });
-  assert.equal(listHooks(ctx, repo).length, 1);
+  const owner = await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number };
+  const repo = await ctx.db.get("SELECT r.*, o.handle AS owner FROM repos r JOIN owners o ON o.id = r.owner_id WHERE r.name = 'basin'") as any;
+  await createHook(ctx, repo, owner.id, { url: "http://127.0.0.1:9/hook", events: ["push"] });
+  assert.equal((await listHooks(ctx, repo)).length, 1);
   const r = await upload("rhea/basin", "rhea", [{ name: "hooked.txt", data: "ping" }]);
   assert.equal(r.status, 201, r.text);
-  const event = ctx.db.prepare("SELECT payload FROM webhook_deliveries WHERE event = 'push' ORDER BY id DESC LIMIT 1").get() as { payload: string } | undefined;
+  const event = await ctx.db.get("SELECT payload FROM webhook_deliveries WHERE event = 'push' ORDER BY id DESC LIMIT 1") as { payload: string } | undefined;
   assert.ok(event, "a push delivery was queued");
   const data = JSON.parse(event!.payload).data;
   assert.deepEqual([data.branch, data.pusher, data.after], ["main", "rhea", r.json.commit]);
@@ -261,7 +261,7 @@ test("an upload reports what it added to storage, and an uncompressed raster is 
   assert.equal(res.json.newBytes, res.json.bytes, "everything was new");
   assert.ok(res.json.storedBytes > 0 && res.json.storedBytes < res.json.newBytes * 0.7, `stored ${res.json.storedBytes} of ${res.json.newBytes}`);
   // The raster's chunks carry the delta+shuffle encoding, and reading the file back gives the same bytes.
-  const codecs = (ctx.db.prepare("SELECT DISTINCT codec FROM chunks").all() as { codec: string }[]).map((r) => r.codec);
+  const codecs = (await ctx.db.all("SELECT DISTINCT codec FROM chunks") as { codec: string }[]).map((r) => r.codec);
   assert.ok(codecs.some((c) => c.includes("shuffle4")), `codecs: ${codecs.join(", ")}`);
   const raw = await app.request("/v1/repos/rhea/rasters/raw/main/terrain/dem.tif", { headers: { authorization: `Bearer ${tokens.rhea}` } });
   assert.equal(raw.status, 200);

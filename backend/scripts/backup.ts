@@ -1,7 +1,11 @@
-// Back up Craton: a consistent copy of the database (SQLite VACUUM INTO, safe while the server
-// runs) plus any local chunks not already in the backup (a chunk's name is its hash, so what it stands for never
-// changes; repacking may keep it in a smaller form, and the copy already in the backup is then an older, equally valid form). With R2, turn on bucket versioning instead of
-// copying chunks.
+// Back up Craton: a consistent logical copy of the database (every table, as gzipped JSON lines, taken in one transaction so it is safe
+// while the server runs) plus any local chunks not already in the backup (a chunk's name is its hash, so what it stands for never
+// changes; repacking may keep it in a smaller form, and the copy already in the backup is then an older, equally valid form). With R2 or S3,
+// turn on bucket versioning instead of copying chunks.
+//
+// Works on whatever database Craton is using: a Postgres server (CRATON_DATABASE_URL, AWS RDS and Aurora included) or the in-process
+// development database. On a big production server take RDS snapshots or `pg_dump` as well; this copy is the one that also loads into a
+// different engine and that `npm run restore` understands.
 //
 //   npm run backup                 # into data/backups/
 //   npm run backup -- --to D:/bk   # somewhere else (another disk, a synced folder)
@@ -9,8 +13,10 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import zlib from "node:zlib";
 import { config, r2Enabled } from "../src/config.ts";
+import { createContext } from "../src/services/context.ts";
+import { dumpDatabase } from "../src/db/dump.ts";
 
 const arg = (name: string) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -18,29 +24,38 @@ const arg = (name: string) => {
 };
 const target = path.resolve(arg("to") ?? path.join(config.dataDir, "backups"));
 const keep = Number(arg("keep") ?? 14);
-const dbFile = path.join(config.dataDir, "craton.db");
-if (!fs.existsSync(dbFile)) {
-  console.error(`No database at ${dbFile}. Nothing to back up.`);
-  process.exit(1);
-}
 
 fs.mkdirSync(path.join(target, "db"), { recursive: true });
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const out = path.join(target, "db", `craton-${stamp}.db`);
-const db = new DatabaseSync(dbFile);
-db.exec(`VACUUM INTO '${out.replace(/'/g, "''")}'`);
-db.close();
+const out = path.join(target, "db", `craton-${stamp}.dump.gz`);
 
-// Verify the copy opens and has the same row counts as the source.
-const check = (file: string) => {
-  const d = new DatabaseSync(file, { readOnly: true });
-  const counts = d.prepare("SELECT (SELECT COUNT(*) FROM repos) AS repos, (SELECT COUNT(*) FROM commits) AS commits, (SELECT COUNT(*) FROM chunks) AS chunks").get() as Record<string, number>;
-  d.close();
-  return counts;
-};
-const a = check(dbFile), b = check(out);
-if (JSON.stringify(a) !== JSON.stringify(b)) {
-  console.error(`Backup verification failed: source ${JSON.stringify(a)} vs copy ${JSON.stringify(b)}`);
+const ctx = await createContext();
+const gz = zlib.createGzip({ level: 6 });
+const sink = fs.createWriteStream(out);
+const finished = new Promise<void>((resolve, reject) => {
+  sink.on("finish", resolve);
+  sink.on("error", reject);
+  gz.on("error", reject);
+});
+gz.pipe(sink);
+const summary = await dumpDatabase(ctx.db, (line) => new Promise<void>((resolve) => (gz.write(line) ? resolve() : gz.once("drain", resolve))));
+gz.end();
+await finished;
+
+// Verify the copy: read it back and compare the row count of every table with what was dumped.
+const readBack: Record<string, number> = {};
+{
+  const text = zlib.gunzipSync(fs.readFileSync(out)).toString("utf8");
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const obj = JSON.parse(line);
+    if (obj.t) readBack[obj.t] = (readBack[obj.t] ?? 0) + obj.rows.length;
+  }
+}
+const bad = Object.entries(summary.perTable).filter(([table, n]) => (readBack[table] ?? 0) !== n);
+if (bad.length) {
+  console.error(`Backup verification failed for: ${bad.map(([t]) => t).join(", ")}`);
+  fs.rmSync(out);
   process.exit(1);
 }
 
@@ -59,9 +74,11 @@ if (!r2Enabled()) {
   }
 }
 
-const copies = fs.readdirSync(path.join(target, "db")).filter((f) => /^craton-.*\.db$/.test(f)).sort();
+const copies = fs.readdirSync(path.join(target, "db")).filter((f) => /^craton-.*\.dump\.gz$/.test(f)).sort();
 for (const old of copies.slice(0, Math.max(0, copies.length - keep))) fs.rmSync(path.join(target, "db", old));
 
+const p = summary.perTable;
+await ctx.db.close();
 console.log(`Backed up to ${out}`);
-console.log(`  ${b.repos} repositories, ${b.commits} commits, ${b.chunks} chunks (verified against the live database)`);
+console.log(`  ${p.repos ?? 0} repositories, ${p.commits ?? 0} commits, ${p.chunks ?? 0} chunks; ${summary.rows} rows in ${summary.tables} tables (read back and counted)`);
 console.log(r2Enabled() ? "  Chunks are in R2: keep bucket versioning on." : `  ${copied} new chunk files copied to ${path.join(target, "chunks")}`);

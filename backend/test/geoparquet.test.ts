@@ -51,7 +51,7 @@ let token = "";
 const call = (method: string, p: string, body?: unknown) =>
   app.request(`/v1${p}`, { method, headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined });
 before(async () => {
-  app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  app = createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
   assert.equal((await call("POST", "/repos", { name: "tables", visibility: "private" })).status, 201);

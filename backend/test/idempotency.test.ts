@@ -27,14 +27,14 @@ async function call(method: string, path: string, who: string | null, body?: unk
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["mira", "jun"]) {
     const r = await call("POST", "/auth/signup", null, { username: u, email: `${u}@example.org`, password: "a-very-long-password" });
     assert.equal(r.status, 201, r.text);
     tokens[u] = r.json.token;
   }
-  ctx.db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')").run();
+  await ctx.db.run("UPDATE users SET email_verified_at = now_iso()");
   await call("POST", "/repos", "mira", { name: "idem-basin", visibility: "public" });
   resetIdempotency();
 });

@@ -2,6 +2,9 @@
 // exactly the bytes that were uploaded; clients are never sent a form they cannot decode; garbage collection keeps what a
 // stored difference needs.
 
+import { sumAsync } from "../src/core/async.ts";
+import { everyAsync, filterAsync, someAsync } from "../src/core/async.ts";
+import { statement } from "../src/db/db.ts";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
@@ -26,7 +29,7 @@ let ctx: Ctx;
 let app: ReturnType<typeof createApp>;
 let token = "";
 let dir = "";
-let repo: ReturnType<typeof findRepo>;
+let repo: Awaited<ReturnType<typeof findRepo>>;
 
 const COUNT = 700_000; // 2.8 MB of float32: about twenty chunks
 const surface = (shift: number) => {
@@ -45,12 +48,12 @@ async function upload(name: string, data: Buffer, message: string) {
   return ((await res.json()) as { commit: string }).commit;
 }
 const raw = async (ref: string, name: string) => Buffer.from(await (await app.request(`/v1/repos/alice/grids/raw/${ref}/${name}`, { headers: { authorization: `Bearer ${token}` } })).arrayBuffer());
-const blobOf = (commit: string, path = "") => {
-  const tree = getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, commit, "commit").tree, "tree");
+const blobOf = async (commit: string, path = "") => {
+  const tree = await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, commit, "commit")).tree, "tree");
   return getObject<BlobObject>(ctx, repo, (tree.entries.find((e) => e.path === path) ?? tree.entries[0]).blob, "blob");
 };
-const codecOf = (hash: string) => (ctx.db.prepare("SELECT codec FROM chunks WHERE hash = ?").get(hash) as { codec: string }).codec;
-const storedSize = (commit: string, path = "") => blobOf(commit, path).chunks.reduce((n, c) => n + (ctx.db.prepare("SELECT stored_size FROM chunks WHERE hash = ?").get(c.hash) as { stored_size: number }).stored_size, 0);
+const codecOf = async (hash: string) => (await ctx.db.get("SELECT codec FROM chunks WHERE hash = ?", hash) as { codec: string }).codec;
+const storedSize = async (commit: string, path = "") => await sumAsync((await blobOf(commit, path)).chunks, async (c) => (await ctx.db.get("SELECT stored_size FROM chunks WHERE hash = ?", c.hash) as { stored_size: number }).stored_size);
 
 const v1 = surface(0);
 const v2 = surface(0.25);
@@ -60,33 +63,33 @@ let c2 = "";
 before(async () => {
   // The real on-disk store: it keeps what is already there on `put`, which is what repacking must not trip over.
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "craton-repack-"));
-  ctx = { db: openDb(":memory:"), store: new FsStore(dir) };
+  ctx = { db: await openDb(":memory:"), store: new FsStore(dir) };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "alice", email: "alice@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
-  ctx.db.prepare("UPDATE users SET plan = 'team', email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')").run();
+  await ctx.db.run("UPDATE users SET plan = 'team', email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')");
   assert.equal((await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "grids", visibility: "private" }) })).status, 201);
-  repo = findRepo(ctx, "alice", "grids");
+  repo = await findRepo(ctx, "alice", "grids");
   c1 = await upload("dem.flt", v1, "first");
   c2 = await upload("dem.flt", v2, "datum shift");
 });
 
 test("a datum shift is stored as a few percent of its size, and nothing else changes", async () => {
-  const before = storedSize(c2);
-  const firstBefore = storedSize(c1);
+  const before = await storedSize(c2);
+  const firstBefore = await storedSize(c1);
   const done = await repackCommit(ctx, repo, c2);
   assert.ok(done.chunks > 10 && done.files === 1, JSON.stringify(done));
-  const after = storedSize(c2);
+  const after = await storedSize(c2);
   assert.ok(after < before * 0.1, `${before} -> ${after}`);
   assert.equal(done.savedBytes, before - after);
-  assert.equal(storedSize(c1), firstBefore, "the first version is untouched");
+  assert.equal(await storedSize(c1), firstBefore, "the first version is untouched");
   assert.deepEqual(await verifyDifferences(ctx), { checked: done.chunks, bad: [] });
 });
 
 test("every way of reading the file still gives exactly what was uploaded", async () => {
   assert.ok((await raw(c2, "dem.flt")).equals(v2), "download of the shifted version");
   assert.ok((await raw(c1, "dem.flt")).equals(v1), "download of the first version");
-  for (const c of blobOf(c2).chunks) {
+  for (const c of (await blobOf(c2)).chunks) {
     const direct = await app.request(`/v1/repos/alice/grids/chunks/${c.hash}`, { headers: { authorization: `Bearer ${token}` } });
     assert.equal(sha256Hex(Buffer.from(await direct.arrayBuffer())), c.hash);
   }
@@ -103,16 +106,16 @@ test("a later version is stored against an earlier one that is whole when its pa
   const head = await upload("chain.flt", third, "chain c");
   const done = await repackCommit(ctx, repo, head);
   assert.ok(done.chunks > 10, `the third is built on the first, which is whole: ${JSON.stringify(done)}`);
-  const firstHashes = new Set(blobOf(base, "chain.flt").chunks.map((c) => c.hash));
-  const used = ctx.db.prepare("SELECT ref_hash FROM chunk_refs WHERE chunk_hash = ?");
-  const heads = blobOf(head, "chain.flt").chunks.filter((c) => codecOf(c.hash) === "ref-delta");
-  assert.ok(heads.every((c) => (used.all(c.hash) as { ref_hash: string }[]).every((r) => firstHashes.has(r.ref_hash))), "its bases are the first version's chunks");
+  const firstHashes = new Set((await blobOf(base, "chain.flt")).chunks.map((c) => c.hash));
+  const used = statement(ctx.db, "SELECT ref_hash FROM chunk_refs WHERE chunk_hash = ?");
+  const heads = (await filterAsync((await blobOf(head, "chain.flt")).chunks, async (c) => await codecOf(c.hash) === "ref-delta"));
+  assert.ok((await everyAsync(heads, async (c) => (await used.all(c.hash) as { ref_hash: string }[]).every((r) => firstHashes.has(r.ref_hash)))), "its bases are the first version's chunks");
   assert.ok((await raw(head, "chain.flt")).equals(third));
   assert.ok((await raw(shifted, "chain.flt")).equals(surface(2.25)));
 });
 
 test("a client is sent a chunk it can decode on its own, never the difference", async () => {
-  const diffs = blobOf(c2).chunks.filter((c) => codecOf(c.hash) === "ref-delta");
+  const diffs = (await filterAsync((await blobOf(c2)).chunks, async (c) => await codecOf(c.hash) === "ref-delta"));
   assert.ok(diffs.length > 10);
   for (const c of diffs.slice(0, 5)) {
     assert.ok(isRefDelta((await ctx.store.get(c.hash))!), "stored as a difference");
@@ -123,7 +126,7 @@ test("a client is sent a chunk it can decode on its own, never the difference", 
 });
 
 test("a client cannot upload a difference, and a damaged one is never read as the chunk", async () => {
-  const hash = blobOf(c2).chunks.find((c) => codecOf(c.hash) === "ref-delta")!.hash;
+  const hash = (await filterAsync((await blobOf(c2)).chunks, async (c) => (await codecOf(c.hash)) === "ref-delta"))[0].hash;
   const stored = (await ctx.store.get(hash))!;
   await assert.rejects(putStored(ctx, repo, "f".repeat(64), stored), /could not be decoded|Unknown/);
   const broken = Buffer.from(stored);
@@ -135,15 +138,15 @@ test("a client cannot upload a difference, and a damaged one is never read as th
 });
 
 test("garbage collection keeps the chunks a stored difference is built on, even with the first version gone", async () => {
-  const gone = blobOf(c1);
-  ctx.db.prepare("DELETE FROM repo_objects WHERE object_id = (SELECT id FROM objects WHERE type = 'blob' AND body = ?)").run(JSON.stringify(gone));
+  const gone = await blobOf(c1);
+  await ctx.db.run("DELETE FROM repo_objects WHERE object_id = (SELECT id FROM objects WHERE type = 'blob' AND body = ?)", JSON.stringify(gone));
   const now = Date.now() + 40 * 86_400_000;
   const dry = await collectGarbage(ctx, { apply: false, graceDays: 30, now });
-  const refs = (ctx.db.prepare("SELECT COUNT(DISTINCT ref_hash) AS n FROM chunk_refs").get() as { n: number }).n;
+  const refs = (await ctx.db.get("SELECT COUNT(DISTINCT ref_hash) AS n FROM chunk_refs") as { n: number }).n;
   assert.ok(refs > 5, `${refs} base chunks`);
   const applied = await collectGarbage(ctx, { apply: true, graceDays: 30, now });
   assert.equal(applied.removed, dry.eligible);
-  for (const { ref_hash } of ctx.db.prepare("SELECT DISTINCT ref_hash FROM chunk_refs").all() as { ref_hash: string }[]) assert.ok(await ctx.store.has(ref_hash), "a base chunk survived");
+  for (const { ref_hash } of await ctx.db.all("SELECT DISTINCT ref_hash FROM chunk_refs") as { ref_hash: string }[]) assert.ok(await ctx.store.has(ref_hash), "a base chunk survived");
   assert.ok((await raw(c2, "dem.flt")).equals(v2), "and the shifted version still downloads");
   assert.deepEqual((await verifyDifferences(ctx)).bad, []);
 });
@@ -168,7 +171,7 @@ test("measuring only (a dry run) changes nothing", async () => {
   const b = await upload("dry.flt", surface(0.125), "d2");
   const dryRun = await repackCommit(ctx, repo, b, { apply: false });
   assert.ok(dryRun.chunks > 5 && dryRun.savedBytes > 0, JSON.stringify(dryRun));
-  assert.equal(blobOf(b, "dry.flt").chunks.some((c) => codecOf(c.hash) === "ref-delta"), false);
+  assert.equal((await someAsync((await blobOf(b, "dry.flt")).chunks, async (c) => await codecOf(c.hash) === "ref-delta")), false);
 });
 
 test("with it switched on, a new version is stored as a difference by the push itself, off the request", async () => {
@@ -179,7 +182,7 @@ test("with it switched on, a new version is stored as a difference by the push i
   try {
     const head = await upload("auto.flt", b, "a2");
     await repackIdle();
-    assert.ok(blobOf(head, "auto.flt").chunks.filter((c) => codecOf(c.hash) === "ref-delta").length > 10);
+    assert.ok((await filterAsync((await blobOf(head, "auto.flt")).chunks, async (c) => await codecOf(c.hash) === "ref-delta")).length > 10);
     assert.ok((await raw(head, "auto.flt")).equals(b));
   } finally {
     config.repack.auto = false;

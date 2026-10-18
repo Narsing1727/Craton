@@ -15,14 +15,14 @@ let token = "";
 const shas: string[] = [];
 
 before(async () => {
-  const ctx: Ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  const ctx: Ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
   const post = await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "basin", visibility: "private" }) });
   assert.equal(post.status, 201);
-  const owner = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number };
-  const repo = getRepoFor(ctx, "rhea", "basin", owner.id, "write");
+  const owner = await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number };
+  const repo = await getRepoFor(ctx, "rhea", "basin", owner.id, "write");
   const base = { width: 512, height: 512, epsg: 32643, nodata: -9999, seed: 5 };
   const commit = async (message: string, dem: Buffer, extra: Record<string, Buffer> = {}) => {
     const r = await commitFiles(ctx, repo, { branch: "main", author: "rhea", message, timestamp: new Date(Date.now() + shas.length * 1000), changes: { "terrain/dem.tif": dem, ...extra } });

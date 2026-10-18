@@ -27,43 +27,43 @@ export function cleanPath(input: unknown): string {
   return path;
 }
 
-export function listLocks(ctx: Ctx, repo: RepoRow): Lock[] {
-  return (ctx.db.prepare(`${SELECT} WHERE l.repo_id = ? ORDER BY l.path`).all(repo.id) as Row[]).map(toLock);
+export async function listLocks(ctx: Ctx, repo: RepoRow): Promise<Lock[]> {
+  return (await ctx.db.all(`${SELECT} WHERE l.repo_id = ? ORDER BY l.path`, repo.id) as Row[]).map(toLock);
 }
 
-export function lockPath(ctx: Ctx, repo: RepoRow, userId: number, path: string, reason: string): Lock {
+export async function lockPath(ctx: Ctx, repo: RepoRow, userId: number, path: string, reason: string): Promise<Lock> {
   const clean = cleanPath(path);
   const why = String(reason ?? "").trim().slice(0, 200);
-  const held = ctx.db.prepare(`${SELECT} WHERE l.repo_id = ? AND l.path = ?`).get(repo.id, clean) as Row | undefined;
+  const held = await ctx.db.get(`${SELECT} WHERE l.repo_id = ? AND l.path = ?`, repo.id, clean) as Row | undefined;
   if (held) {
-    const mine = (ctx.db.prepare("SELECT 1 FROM file_locks WHERE repo_id = ? AND path = ? AND user_id = ?").get(repo.id, clean, userId)) !== undefined;
+    const mine = (await ctx.db.get("SELECT 1 FROM file_locks WHERE repo_id = ? AND path = ? AND user_id = ?", repo.id, clean, userId)) !== undefined;
     if (!mine) throw conflict("locked", `${clean} is already locked by @${held.holder}.`, { path: clean, holder: held.holder });
     return toLock(held); // locking what you already hold is a no-op, so a retry is safe
   }
-  ctx.db.prepare("INSERT INTO file_locks (repo_id, path, user_id, reason) VALUES (?, ?, ?, ?)").run(repo.id, clean, userId, why);
-  return toLock(ctx.db.prepare(`${SELECT} WHERE l.repo_id = ? AND l.path = ?`).get(repo.id, clean) as Row);
+  await ctx.db.run("INSERT INTO file_locks (repo_id, path, user_id, reason) VALUES (?, ?, ?, ?)", repo.id, clean, userId, why);
+  return toLock(await ctx.db.get(`${SELECT} WHERE l.repo_id = ? AND l.path = ?`, repo.id, clean) as Row);
 }
 
 /** Release a lock. Only the holder may, unless `force` (the route requires admin access for that). */
-export function unlockPath(ctx: Ctx, repo: RepoRow, userId: number, path: string, force: boolean) {
+export async function unlockPath(ctx: Ctx, repo: RepoRow, userId: number, path: string, force: boolean) {
   const clean = cleanPath(path);
-  const held = ctx.db.prepare("SELECT user_id FROM file_locks WHERE repo_id = ? AND path = ?").get(repo.id, clean) as { user_id: number } | undefined;
+  const held = await ctx.db.get("SELECT user_id FROM file_locks WHERE repo_id = ? AND path = ?", repo.id, clean) as { user_id: number } | undefined;
   if (!held) throw notFound(`A lock on ${clean}`);
   if (held.user_id !== userId && !force) {
-    const holder = (ctx.db.prepare("SELECT handle FROM owners WHERE id = ?").get(held.user_id) as { handle: string }).handle;
+    const holder = (await ctx.db.get("SELECT handle FROM owners WHERE id = ?", held.user_id) as { handle: string }).handle;
     throw forbidden(`Only @${holder} can release this lock. A repository admin can force it.`);
   }
-  ctx.db.prepare("DELETE FROM file_locks WHERE repo_id = ? AND path = ?").run(repo.id, clean);
+  await ctx.db.run("DELETE FROM file_locks WHERE repo_id = ? AND path = ?", repo.id, clean);
 }
 
 /**
  * For paths that match the repository's lock patterns, the person changing them must hold the lock. This is
  * for direct changes (a push or an upload); a merge carries changes someone already made under their own lock.
  */
-export function assertLockedWhenRequired(ctx: Ctx, repo: RepoRow, actor: string, changed: string[]) {
+export async function assertLockedWhenRequired(ctx: Ctx, repo: RepoRow, actor: string, changed: string[]) {
   const patterns = JSON.parse(repo.lock_patterns ?? "[]") as string[];
   if (!patterns.length || !changed.length) return;
-  const mine = new Set(listLocks(ctx, repo).filter((l) => l.holder === actor).map((l) => l.path));
+  const mine = new Set((await listLocks(ctx, repo)).filter((l) => l.holder === actor).map((l) => l.path));
   const missing = changed.filter((p) => matchesAny(patterns, p) && !mine.has(p));
   if (!missing.length) return;
   const shown = missing.slice(0, 5).join(", ") + (missing.length > 5 ? ` and ${missing.length - 5} more` : "");
@@ -74,9 +74,9 @@ export function assertLockedWhenRequired(ctx: Ctx, repo: RepoRow, actor: string,
  * Refuse a branch update that changes a path locked by someone other than `actor`. `changed` is
  * the paths the update adds, modifies or removes.
  */
-export function assertNotLockedByOthers(ctx: Ctx, repo: RepoRow, actor: string, changed: string[]) {
+export async function assertNotLockedByOthers(ctx: Ctx, repo: RepoRow, actor: string, changed: string[]) {
   if (!changed.length) return;
-  const blocked = listLocks(ctx, repo).filter((l) => l.holder !== actor && changed.includes(l.path));
+  const blocked = (await listLocks(ctx, repo)).filter((l) => l.holder !== actor && changed.includes(l.path));
   if (!blocked.length) return;
   const list = blocked.map((l) => `${l.path} (@${l.holder})`).join(", ");
   throw new ApiError(409, "locked", `${blocked.length === 1 ? "A file in this push is" : `${blocked.length} files in this push are`} locked by someone else: ${list}. Ask them to release the lock, or drop the change.`, {

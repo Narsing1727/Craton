@@ -60,14 +60,14 @@ async function push(who: string, repo: string, files: Record<string, Buffer>, op
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob"]) {
     const r = await call("POST", "/auth/signup", null, { username: u, email: `${u}@example.org`, password: "a-very-long-password" });
     assert.equal(r.status, 201, r.text);
     tokens[u] = r.json.token;
     // Tests act as people who confirmed their email (publishing needs it).
-    ctx.db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')").run();
+    await ctx.db.run("UPDATE users SET email_verified_at = now_iso()");
   }
 });
 
@@ -93,7 +93,7 @@ test("dedup never reveals someone else's private chunks, but still stores bytes 
   const privateData = noiseBytes(700_000, 42);
   const first = await push("alice", "alice/secret-basin", { "terrain/private.tif": privateData }, { parent: null, expected: null });
   assert.equal(first.ref.status, 200, first.ref.text);
-  const storedBefore = (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunks").get() as { n: number }).n;
+  const storedBefore = (await ctx.db.get("SELECT COUNT(*) AS n FROM chunks") as { n: number }).n;
 
   await call("POST", "/repos", "bob", { name: "bobs-basin", visibility: "public" });
   const probe = await call("POST", "/repos/bob/bobs-basin/chunks/missing", "bob", { hashes: first.missing });
@@ -101,7 +101,7 @@ test("dedup never reveals someone else's private chunks, but still stores bytes 
 
   const second = await push("bob", "bob/bobs-basin", { "terrain/same-bytes.tif": privateData }, { parent: null, expected: null });
   assert.equal(second.ref.status, 200, second.ref.text);
-  const storedAfter = (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunks").get() as { n: number }).n;
+  const storedAfter = (await ctx.db.get("SELECT COUNT(*) AS n FROM chunks") as { n: number }).n;
   assert.equal(storedAfter, storedBefore, "identical bytes are stored once physically");
 });
 

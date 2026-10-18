@@ -31,13 +31,13 @@ async function call(method: string, path: string, who: string | null, body?: unk
 const digests = () => sentEmails.filter((e) => e.kind === "digest");
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ids[u] = (ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get(u) as { id: number }).id;
-    ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE owner_id = ?").run(new Date().toISOString(), ids[u]);
+    ids[u] = (await ctx.db.get("SELECT id FROM owners WHERE handle = ?", u) as { id: number }).id;
+    await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE owner_id = ?", new Date().toISOString(), ids[u]);
   }
   assert.equal((await call("POST", "/repos", "alice", { name: "basin", visibility: "public" })).status, 201);
 });
@@ -70,10 +70,10 @@ test("nothing is sent the day it is switched on, nor when there is nothing new, 
 });
 
 test("an address that was never confirmed never gets one", async () => {
-  ctx.db.prepare("UPDATE users SET email_verified_at = NULL WHERE owner_id = ?").run(ids.alice);
+  await ctx.db.run("UPDATE users SET email_verified_at = NULL WHERE owner_id = ?", ids.alice);
   await call("POST", "/repos/alice/basin/issues", "bob", { title: "Another", label: "question" });
   assert.equal(await sendDue(ctx, new Date(Date.now() + 3 * week)), 0);
-  ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE owner_id = ?").run(new Date().toISOString(), ids.alice);
+  await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE owner_id = ?", new Date().toISOString(), ids.alice);
 });
 
 test("the unsubscribe link works without signing in, only for the person it was made for, and only if it is genuine", async () => {

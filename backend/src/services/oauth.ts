@@ -38,15 +38,13 @@ function safeNext(next: string | null | undefined) {
   return next && next.startsWith("/") && !next.startsWith("//") && !next.includes("\\") && next.length <= 300 ? next : null;
 }
 
-export function startOAuth(ctx: Ctx, provider: Provider, opts: { next?: string | null; linkUserId?: number | null }) {
+export async function startOAuth(ctx: Ctx, provider: Provider, opts: { next?: string | null; linkUserId?: number | null }) {
   if (!enabled(provider)) throw new ApiError(404, "not_configured", `${providerName(provider)} sign-in isn’t set up on this server.`);
-  ctx.db.prepare("DELETE FROM oauth_flows WHERE expires_at < ?").run(nowIso());
+  await ctx.db.run("DELETE FROM oauth_flows WHERE expires_at < ?", nowIso());
   const state = random(32);
   const verifier = random(48);
   const nonce = random(16);
-  ctx.db
-    .prepare("INSERT INTO oauth_flows (state_hash, verifier, nonce, next, link_user_id, expires_at, provider) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(sha(state), verifier, nonce, safeNext(opts.next), opts.linkUserId ?? null, inMinutes(FLOW_MINUTES), provider);
+  await ctx.db.run("INSERT INTO oauth_flows (state_hash, verifier, nonce, next, link_user_id, expires_at, provider) VALUES (?, ?, ?, ?, ?, ?, ?)", sha(state), verifier, nonce, safeNext(opts.next), opts.linkUserId ?? null, inMinutes(FLOW_MINUTES), provider);
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const query =
     provider === "google"
@@ -151,11 +149,11 @@ export async function finishOAuth(ctx: Ctx, provider: Provider, input: { code: s
   if (!enabled(provider)) throw new ApiError(404, "not_configured", `${label} sign-in isn’t set up on this server.`);
   if (!input.code || !input.state) throw badRequest("The sign-in was cut short. Start again.");
   const stateHash = sha(input.state);
-  const flow = ctx.db.prepare("SELECT verifier, nonce, next, link_user_id, expires_at, provider FROM oauth_flows WHERE state_hash = ?").get(stateHash) as
+  const flow = await ctx.db.get("SELECT verifier, nonce, next, link_user_id, expires_at, provider FROM oauth_flows WHERE state_hash = ?", stateHash) as
     | { verifier: string; nonce: string; next: string | null; link_user_id: number | null; expires_at: string; provider: string }
     | undefined;
   // Single use: gone as soon as it is looked at, whatever happens next.
-  ctx.db.prepare("DELETE FROM oauth_flows WHERE state_hash = ?").run(stateHash);
+  await ctx.db.run("DELETE FROM oauth_flows WHERE state_hash = ?", stateHash);
   if (!flow || flow.expires_at < nowIso() || flow.provider !== provider) throw badRequest("This sign-in expired or was already used. Start again.");
 
   const cfg = provider === "google" ? config.google : config.github;
@@ -193,43 +191,41 @@ export const finishGoogle = (ctx: Ctx, input: { code: string; state: string }) =
 
 // ── Who is linked to whom ────────────────────────────────────────────────────
 
-export function identityOwner(ctx: Ctx, subject: string, provider: string = "google"): number | null {
-  const row = ctx.db.prepare("SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ?").get(provider, subject) as { user_id: number } | undefined;
+export async function identityOwner(ctx: Ctx, subject: string, provider: string = "google"): Promise<number | null> {
+  const row = await ctx.db.get("SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ?", provider, subject) as { user_id: number } | undefined;
   return row?.user_id ?? null;
 }
 
-export function linkIdentity(ctx: Ctx, userId: number, subject: string, email: string, provider: string = "google") {
-  ctx.db.prepare("INSERT OR REPLACE INTO oauth_identities (provider, subject, user_id, email) VALUES (?, ?, ?, ?)").run(provider, subject, userId, email);
+export async function linkIdentity(ctx: Ctx, userId: number, subject: string, email: string, provider: string = "google") {
+  await ctx.db.run("INSERT INTO oauth_identities (provider, subject, user_id, email) VALUES (?, ?, ?, ?) ON CONFLICT (provider, subject) DO UPDATE SET user_id = EXCLUDED.user_id, email = EXCLUDED.email, created_at = now_iso()", provider, subject, userId, email);
 }
 
-export function listIdentities(ctx: Ctx, userId: number) {
-  return ctx.db.prepare("SELECT provider, email, created_at AS since FROM oauth_identities WHERE user_id = ? ORDER BY created_at").all(userId) as { provider: string; email: string; since: string }[];
+export async function listIdentities(ctx: Ctx, userId: number) {
+  return await ctx.db.all("SELECT provider, email, created_at AS since FROM oauth_identities WHERE user_id = ? ORDER BY created_at", userId) as { provider: string; email: string; since: string }[];
 }
 
-export function unlinkIdentity(ctx: Ctx, userId: number, provider: string = "google") {
-  return Number(ctx.db.prepare("DELETE FROM oauth_identities WHERE provider = ? AND user_id = ?").run(provider, userId).changes) > 0;
+export async function unlinkIdentity(ctx: Ctx, userId: number, provider: string = "google") {
+  return Number((await ctx.db.run("DELETE FROM oauth_identities WHERE provider = ? AND user_id = ?", provider, userId)).changes) > 0;
 }
 
 /** The account holding this address, and whether that address was ever confirmed. Case-insensitive. */
-export function userByEmail(ctx: Ctx, email: string): { id: number; verified: boolean } | null {
-  const row = ctx.db.prepare("SELECT owner_id, email_verified_at FROM users WHERE lower(email) = lower(?)").get(email) as { owner_id: number; email_verified_at: string | null } | undefined;
+export async function userByEmail(ctx: Ctx, email: string): Promise<{ id: number; verified: boolean } | null> {
+  const row = await ctx.db.get("SELECT owner_id, email_verified_at FROM users WHERE lower(email) = lower(?)", email) as { owner_id: number; email_verified_at: string | null } | undefined;
   return row ? { id: row.owner_id, verified: Boolean(row.email_verified_at) } : null;
 }
 
 // ── First sign-in: the person still has to pick a username ───────────────────
 
-export function createPending(ctx: Ctx, input: { subject: string; email: string; name: string }, provider: string = "google") {
-  ctx.db.prepare("DELETE FROM oauth_pending WHERE expires_at < ?").run(nowIso());
+export async function createPending(ctx: Ctx, input: { subject: string; email: string; name: string }, provider: string = "google") {
+  await ctx.db.run("DELETE FROM oauth_pending WHERE expires_at < ?", nowIso());
   const ticket = random(32);
-  ctx.db
-    .prepare("INSERT INTO oauth_pending (ticket_hash, provider, subject, email, name, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(sha(ticket), provider, input.subject, input.email, input.name, inMinutes(PENDING_MINUTES));
+  await ctx.db.run("INSERT INTO oauth_pending (ticket_hash, provider, subject, email, name, expires_at) VALUES (?, ?, ?, ?, ?, ?)", sha(ticket), provider, input.subject, input.email, input.name, inMinutes(PENDING_MINUTES));
   return ticket;
 }
 
 /** `provider` "sso" matches a ticket from any organization's single sign-on ("sso:<id>"). */
-export function readPending(ctx: Ctx, ticket: string, provider: Provider | "sso" = "google") {
-  const row = ctx.db.prepare("SELECT subject, email, name, expires_at, provider FROM oauth_pending WHERE ticket_hash = ?").get(sha(ticket ?? "")) as
+export async function readPending(ctx: Ctx, ticket: string, provider: Provider | "sso" = "google") {
+  const row = await ctx.db.get("SELECT subject, email, name, expires_at, provider FROM oauth_pending WHERE ticket_hash = ?", sha(ticket ?? "")) as
     | { subject: string; email: string; name: string; expires_at: string; provider: string }
     | undefined;
   const matches = row && (provider === "sso" ? row.provider.startsWith("sso:") : row.provider === provider);
@@ -237,12 +233,12 @@ export function readPending(ctx: Ctx, ticket: string, provider: Provider | "sso"
   return row;
 }
 
-export function dropPending(ctx: Ctx, ticket: string) {
-  ctx.db.prepare("DELETE FROM oauth_pending WHERE ticket_hash = ?").run(sha(ticket ?? ""));
+export async function dropPending(ctx: Ctx, ticket: string) {
+  await ctx.db.run("DELETE FROM oauth_pending WHERE ticket_hash = ?", sha(ticket ?? ""));
 }
 
 /** A free, valid username derived from the address (or the name), for the form to start from. */
-export function suggestHandle(ctx: Ctx, email: string, name: string): string {
+export async function suggestHandle(ctx: Ctx, email: string, name: string): Promise<string> {
   const clean = (s: string) =>
     s
       .toLowerCase()
@@ -252,11 +248,11 @@ export function suggestHandle(ctx: Ctx, email: string, name: string): string {
       .slice(0, 30);
   let base = clean(email.split("@")[0]) || clean(name) || "user";
   if (base.length < 2) base = `${base}user`;
-  const taken = (h: string) => RESERVED_HANDLES.has(h) || Boolean(ctx.db.prepare("SELECT 1 FROM owners WHERE handle = ?").get(h));
-  if (!taken(base)) return base;
+  const taken = async (h: string) => RESERVED_HANDLES.has(h) || Boolean(await ctx.db.get("SELECT 1 FROM owners WHERE handle = ?", h));
+  if (!await taken(base)) return base;
   for (let n = 2; n < 1000; n++) {
     const candidate = `${base}-${n}`;
-    if (!taken(candidate)) return candidate;
+    if (!await taken(candidate)) return candidate;
   }
   return `${base}-${random(3).toLowerCase().replace(/[^a-z0-9]/g, "x")}`;
 }

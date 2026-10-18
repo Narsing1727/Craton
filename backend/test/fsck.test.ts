@@ -39,18 +39,18 @@ async function upload(name: string, data: Buffer, message: string) {
   assert.equal(res.status, 201, await res.clone().text());
   return ((await res.json()) as { commit: string }).commit;
 }
-const plain = () => (ctx.db.prepare("SELECT hash FROM chunks WHERE codec NOT IN ('ref-delta', 'tiles') ORDER BY hash").all() as { hash: string }[]).map((r) => r.hash);
-const hashesOf = (codec: string) => (ctx.db.prepare("SELECT hash FROM chunks WHERE codec = ? ORDER BY hash").all(codec) as { hash: string }[]).map((r) => r.hash);
+const plain = async () => (await ctx.db.all("SELECT hash FROM chunks WHERE codec NOT IN ('ref-delta', 'tiles') ORDER BY hash") as { hash: string }[]).map((r) => r.hash);
+const hashesOf = async (codec: string) => (await ctx.db.all("SELECT hash FROM chunks WHERE codec = ? ORDER BY hash", codec) as { hash: string }[]).map((r) => r.hash);
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "craton-fsck-"));
-  ctx = { db: openDb(":memory:"), store: new FsStore(dir) };
+  ctx = { db: await openDb(":memory:"), store: new FsStore(dir) };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "alice", email: "alice@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
-  ctx.db.prepare("UPDATE users SET plan = 'team', email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')").run();
+  await ctx.db.run("UPDATE users SET plan = 'team', email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')");
   await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "store", visibility: "private" }) });
-  const repo = findRepo(ctx, "alice", "store");
+  const repo = await findRepo(ctx, "alice", "store");
   await upload("notes.csv", Buffer.from("a,b\n" + Array.from({ length: 4000 }, (_, i) => `${i},${i * 3}`).join("\n")), "a table");
   await upload("grid.flt", surface(0), "grid one");
   flt2 = await upload("grid.flt", surface(0.25), "grid shifted");
@@ -61,7 +61,7 @@ before(async () => {
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 test("a store holding every stored form checks out", async () => {
-  assert.ok(hashesOf("ref-delta").length > 0 && hashesOf("tiles").length > 0 && plain().length > 2, "the test needs every form to be present");
+  assert.ok((await hashesOf("ref-delta")).length > 0 && (await hashesOf("tiles")).length > 0 && (await plain()).length > 2, "the test needs every form to be present");
   const r = await fsck(ctx);
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.ok(r.chunks.checked > 20 && r.chunks.bytes > 1_000_000);
@@ -69,7 +69,7 @@ test("a store holding every stored form checks out", async () => {
 });
 
 test("a chunk with a flipped byte, and a chunk with no bytes, are named", async () => {
-  const [victim, other] = plain();
+  const [victim, other] = await plain();
   const good = (await ctx.store.get(victim))!;
   const otherBytes = (await ctx.store.get(other))!;
   const bad = Buffer.from(good);
@@ -87,15 +87,15 @@ test("a chunk with a flipped byte, and a chunk with no bytes, are named", async 
 });
 
 test("a stored difference whose base is gone, and a damaged tile, are named", async () => {
-  const diff = hashesOf("ref-delta")[0];
-  const base = (ctx.db.prepare("SELECT ref_hash FROM chunk_refs WHERE chunk_hash = ?").get(diff) as { ref_hash: string }).ref_hash;
+  const diff = (await hashesOf("ref-delta"))[0];
+  const base = (await ctx.db.get("SELECT ref_hash FROM chunk_refs WHERE chunk_hash = ?", diff) as { ref_hash: string }).ref_hash;
   const baseBytes = (await ctx.store.get(base))!;
   await ctx.store.delete(base);
   const lost = await fsck(ctx);
   assert.ok(lost.chunks.corrupt.includes(diff) || lost.chunks.missing.includes(base), "the difference can no longer be read");
   await ctx.store.replace(base, baseBytes);
 
-  const tile = (ctx.db.prepare("SELECT key FROM tiles WHERE kind = 1 LIMIT 1").get() as { key: string }).key;
+  const tile = (await ctx.db.get("SELECT key FROM tiles WHERE kind = 1 LIMIT 1") as { key: string }).key;
   const tileBytes = (await ctx.store.get(tile))!;
   const damaged = Buffer.from(tileBytes);
   damaged[damaged.length - 4] ^= 0xff;
@@ -108,52 +108,52 @@ test("a stored difference whose base is gone, and a damaged tile, are named", as
 });
 
 test("a file whose chunks do not add up, and a commit whose Merkle root is wrong, are named; --quick sees them without reading anything", async () => {
-  const blob = ctx.db.prepare("SELECT id, body FROM objects WHERE type = 'blob' AND body LIKE '%\"size\":%' ORDER BY id LIMIT 1").get() as { id: string; body: string };
+  const blob = await ctx.db.get("SELECT id, body FROM objects WHERE type = 'blob' AND body LIKE '%\"size\":%' ORDER BY id LIMIT 1") as { id: string; body: string };
   const changed = JSON.parse(blob.body);
   changed.size += 7;
-  ctx.db.prepare("UPDATE objects SET body = ? WHERE id = ?").run(JSON.stringify(changed), blob.id);
-  const commit = ctx.db.prepare("SELECT id, body FROM objects WHERE type = 'commit' ORDER BY id LIMIT 1").get() as { id: string; body: string };
+  await ctx.db.run("UPDATE objects SET body = ? WHERE id = ?", JSON.stringify(changed), blob.id);
+  const commit = await ctx.db.get("SELECT id, body FROM objects WHERE type = 'commit' ORDER BY id LIMIT 1") as { id: string; body: string };
   const tampered = JSON.parse(commit.body);
   tampered.merkleRoot = "0".repeat(64);
-  ctx.db.prepare("UPDATE objects SET body = ? WHERE id = ?").run(JSON.stringify(tampered), commit.id);
+  await ctx.db.run("UPDATE objects SET body = ? WHERE id = ?", JSON.stringify(tampered), commit.id);
   const r = await fsck(ctx, { quick: true });
   assert.ok(r.files.bad.some((m) => m.startsWith(blob.id.slice(0, 12))), JSON.stringify(r.files));
   assert.ok(r.commits.bad.some((m) => m.startsWith(commit.id.slice(0, 12))), JSON.stringify(r.commits));
   assert.equal(r.ok, false);
-  ctx.db.prepare("UPDATE objects SET body = ? WHERE id = ?").run(blob.body, blob.id);
-  ctx.db.prepare("UPDATE objects SET body = ? WHERE id = ?").run(commit.body, commit.id);
+  await ctx.db.run("UPDATE objects SET body = ? WHERE id = ?", blob.body, blob.id);
+  await ctx.db.run("UPDATE objects SET body = ? WHERE id = ?", commit.body, commit.id);
   assert.equal((await fsck(ctx, { quick: true })).ok, true);
 });
 
 test("a chunk the database says is one form but whose bytes are another is reported", async () => {
-  const hash = plain()[1];
-  ctx.db.prepare("UPDATE chunks SET codec = 'shuffle4+zstd' WHERE hash = ?").run(hash);
+  const hash = (await plain())[1];
+  await ctx.db.run("UPDATE chunks SET codec = 'shuffle4+zstd' WHERE hash = ?", hash);
   const r = await fsck(ctx);
   assert.equal(r.chunks.wrongForm.length, 0, "the two plain-codec names are not told apart: the bytes decode and hash correctly");
-  ctx.db.prepare("UPDATE chunks SET codec = 'tiles' WHERE hash = ?").run(hash);
+  await ctx.db.run("UPDATE chunks SET codec = 'tiles' WHERE hash = ?", hash);
   const r2 = await fsck(ctx);
   assert.ok(r2.chunks.wrongForm.some((m) => m.startsWith(hash.slice(0, 12))), JSON.stringify(r2.chunks.wrongForm));
-  ctx.db.prepare("UPDATE chunks SET codec = 'zstd' WHERE hash = ?").run(hash);
+  await ctx.db.run("UPDATE chunks SET codec = 'zstd' WHERE hash = ?", hash);
   assert.equal((await fsck(ctx)).chunks.wrongForm.length, 0);
 });
 
 test("a database restored from before the chunks were rewritten is put right from the bytes, so nothing they need is collected", async () => {
-  const snapshot = ctx.db.prepare("SELECT hash, codec, stored_size FROM chunks ORDER BY hash").all() as { hash: string; codec: string; stored_size: number }[];
-  const refs = (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunk_refs").get() as { n: number }).n;
-  const tiles = (ctx.db.prepare("SELECT COUNT(*) AS n FROM tiles").get() as { n: number }).n;
-  const links = (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunk_tiles").get() as { n: number }).n;
+  const snapshot = await ctx.db.all("SELECT hash, codec, stored_size FROM chunks ORDER BY hash") as { hash: string; codec: string; stored_size: number }[];
+  const refs = (await ctx.db.get("SELECT COUNT(*) AS n FROM chunk_refs") as { n: number }).n;
+  const tiles = (await ctx.db.get("SELECT COUNT(*) AS n FROM tiles") as { n: number }).n;
+  const links = (await ctx.db.get("SELECT COUNT(*) AS n FROM chunk_tiles") as { n: number }).n;
   assert.ok(refs > 0 && tiles >= 24 && links > 0);
 
   // A backup whose database snapshot knows nothing about the differences and tiles that are in the chunk files.
-  ctx.db.exec("DELETE FROM chunk_refs; DELETE FROM chunk_tiles; DELETE FROM tiles; UPDATE chunks SET codec = 'zstd', stored_size = size WHERE codec IN ('ref-delta', 'tiles');");
+  await ctx.db.exec("DELETE FROM chunk_refs; DELETE FROM chunk_tiles; DELETE FROM tiles; UPDATE chunks SET codec = 'zstd', stored_size = size WHERE codec IN ('ref-delta', 'tiles');");
   const before = await fsck(ctx);
   assert.equal(before.ok, false, "it is noticed");
 
   const healed = await fsck(ctx, { repair: true });
   assert.equal(healed.ok, true, JSON.stringify([healed.chunks, healed.tiles, healed.bases]));
   assert.ok(healed.repaired.length > 20);
-  assert.deepEqual(ctx.db.prepare("SELECT hash, codec, stored_size FROM chunks ORDER BY hash").all(), snapshot, "every chunk is recorded as it was");
-  assert.deepEqual([(ctx.db.prepare("SELECT COUNT(*) AS n FROM chunk_refs").get() as { n: number }).n, (ctx.db.prepare("SELECT COUNT(*) AS n FROM tiles").get() as { n: number }).n, (ctx.db.prepare("SELECT COUNT(*) AS n FROM chunk_tiles").get() as { n: number }).n], [refs, tiles, links]);
+  assert.deepEqual(await ctx.db.all("SELECT hash, codec, stored_size FROM chunks ORDER BY hash"), snapshot, "every chunk is recorded as it was");
+  assert.deepEqual([(await ctx.db.get("SELECT COUNT(*) AS n FROM chunk_refs") as { n: number }).n, (await ctx.db.get("SELECT COUNT(*) AS n FROM tiles") as { n: number }).n, (await ctx.db.get("SELECT COUNT(*) AS n FROM chunk_tiles") as { n: number }).n], [refs, tiles, links]);
   assert.equal((await fsck(ctx, { repair: true })).repaired.length, 0, "and a second repair has nothing to do");
 
   // What the repair is for: garbage collection no longer sees the bases and tiles as unused.

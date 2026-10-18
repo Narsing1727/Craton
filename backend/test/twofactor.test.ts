@@ -104,7 +104,7 @@ const tick = (seconds = 30) => (clockNow += seconds);
 const codeNow = (secret: string) => totpAt(secret, clockNow);
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "sol"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: PASSWORD }) });
@@ -132,7 +132,7 @@ test("setup needs the password, hands over a secret and link, and changes nothin
   secret = r.json.secret;
   assert.equal((await call("GET", "/user", "rhea")).json.twoFactor, false, "not on yet");
   assert.ok(!(await login("rhea")).json.mfaRequired, "signing in still needs only a password");
-  const stored = ctx.db.prepare("SELECT totp_pending FROM users WHERE owner_id = (SELECT id FROM owners WHERE handle = 'rhea')").get() as { totp_pending: string };
+  const stored = await ctx.db.get("SELECT totp_pending FROM users WHERE owner_id = (SELECT id FROM owners WHERE handle = 'rhea')") as { totp_pending: string };
   assert.ok(!stored.totp_pending.includes(secret), "the pending secret is encrypted at rest");
 });
 
@@ -147,9 +147,9 @@ test("confirming needs a correct code; then it is on, with ten recovery codes sh
   for (const c of recovery) assert.match(c, /^[2-9a-hjkmnp-z]{5}-[2-9a-hjkmnp-z]{5}$/);
   assert.equal((await call("GET", "/user", "rhea")).json.twoFactor, true);
   assert.equal((await call("GET", "/user/2fa", "rhea")).json.recoveryCodesLeft, 10);
-  const stored = ctx.db.prepare("SELECT totp_secret FROM users WHERE owner_id = (SELECT id FROM owners WHERE handle = 'rhea')").get() as { totp_secret: string };
+  const stored = await ctx.db.get("SELECT totp_secret FROM users WHERE owner_id = (SELECT id FROM owners WHERE handle = 'rhea')") as { totp_secret: string };
   assert.ok(!stored.totp_secret.includes(secret), "the live secret is encrypted at rest");
-  const hashes = ctx.db.prepare("SELECT code_hash FROM recovery_codes").all() as { code_hash: string }[];
+  const hashes = await ctx.db.all("SELECT code_hash FROM recovery_codes") as { code_hash: string }[];
   assert.ok(hashes.every((h) => !recovery.some((c) => h.code_hash.includes(c.replace("-", "")))), "recovery codes are stored only as hashes");
   assert.ok(sentEmails.some((m) => m.to === "rhea@example.org" && m.kind === "twofactor" && /is on/.test(m.subject)), "the owner is emailed");
   assert.equal((await call("POST", "/user/2fa/setup", "rhea", { password: PASSWORD })).status, 409, "can't set up again while on");
@@ -195,7 +195,7 @@ test("wrong codes use up a ticket's tries, then it dies even for the right code"
   tick();
   const right = await call("POST", "/auth/login/2fa", null, { ticket: t, code: codeNow(secret) });
   assert.equal(right.json.error.code, "invalid_ticket", "the ticket is gone");
-  limits.clear(`mfa:${(ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number }).id}`);
+  limits.clear(`mfa:${(await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number }).id}`);
 });
 
 test("a recovery code signs in once and is then spent; the count goes down", async () => {
@@ -210,7 +210,7 @@ test("a recovery code signs in once and is then spent; the count goes down", asy
 });
 
 test("an account is locked out of code guessing across tickets", async () => {
-  const id = (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number }).id;
+  const id = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number }).id;
   limits.clear(`mfa:${id}`);
   let locked: any;
   for (let i = 0; i < 12 && !locked; i++) {
@@ -249,9 +249,9 @@ test("turning it off needs the password and a code, then sign-in is one step aga
   assert.equal((await call("GET", "/user", "rhea")).json.twoFactor, false);
   const r = await login("rhea");
   assert.ok(r.json.token && !r.json.mfaRequired);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id = (SELECT id FROM owners WHERE handle = 'rhea')").get() as { n: number }).n, 0, "recovery codes are deleted");
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id = (SELECT id FROM owners WHERE handle = 'rhea')") as { n: number }).n, 0, "recovery codes are deleted");
   assert.ok(sentEmails.some((m) => m.to === "rhea@example.org" && m.kind === "twofactor" && /turned off/.test(m.subject)));
-  limits.clear(`2fa:${(ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number }).id}`); // this test has used up the 10 tries per 15 minutes
+  limits.clear(`2fa:${(await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number }).id}`); // this test has used up the 10 tries per 15 minutes
   assert.equal((await call("POST", "/user/2fa/disable", "rhea", { password: PASSWORD, code: "123456" })).status, 400, "already off");
 });
 

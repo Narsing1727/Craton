@@ -23,7 +23,7 @@ async function call(method: string, path: string, body?: unknown) {
 }
 
 before(async () => {
-  app = createApp({ db: openDb(":memory:"), store: new MemoryStore() } as Ctx);
+  app = createApp({ db: await openDb(":memory:"), store: new MemoryStore() } as Ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
   assert.equal((await call("POST", "/repos", { name: "basin", visibility: "private", sample: true })).status, 201);

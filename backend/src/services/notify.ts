@@ -32,7 +32,7 @@ export function mergeNotify(raw: string | null | undefined, patch: unknown): str
 }
 
 /** Whether the person with this address wants this kind of email. An address with no account (an invitation) always does. */
-export function wantsEmail(ctx: Ctx, address: string, key: NotifyKey): boolean {
-  const row = ctx.db.prepare("SELECT notify FROM users WHERE email = ?").get(address) as { notify: string } | undefined;
+export async function wantsEmail(ctx: Ctx, address: string, key: NotifyKey): Promise<boolean> {
+  const row = await ctx.db.get("SELECT notify FROM users WHERE email = ?", address) as { notify: string } | undefined;
   return row ? notifyOf(row.notify)[key] : true;
 }

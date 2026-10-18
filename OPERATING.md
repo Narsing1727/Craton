@@ -7,18 +7,21 @@ setting the code reads that is missing from the tables below, or a setting liste
 
 | Part | Command | Port | Needs |
 | --- | --- | --- | --- |
-| API | `npm start` in `backend` | `PORT` (4000) | Node.js 23.6 or newer; no database server (SQLite in the data folder) |
+| API | `npm start` in `backend` | `PORT` (4000) | Node.js 23.6 or newer; PostgreSQL (`CRATON_DATABASE_URL`), or none for development: the API then runs Postgres inside its own process and keeps it in the data folder |
 | Web app | `npm run build && npm start` in `frontend` | 3100 | the API's address in `frontend/.env.local` (`CRATON_API_URL`) |
 
-Both are plain Node processes. The API keeps the database and, unless R2 is configured, every chunk under the data
-folder.
+Both are plain Node processes. The database is PostgreSQL. Unless R2 is configured, every chunk is a file under the data folder.
 
 ## Settings (environment variables of the API)
 
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `PORT` | `4000` | Port the API listens on. |
-| `CRATON_DATA_DIR` | `backend/data` | Folder for the SQLite database, local chunks, the secret key file and the dev outbox. |
+| `CRATON_DATA_DIR` | `backend/data` | Folder for local chunks, the secret key file, the dev outbox and, when no database address is set, the development database (`pgdata`). |
+| `CRATON_DATABASE_URL` | none | The PostgreSQL server: `postgres://user:password@host:5432/craton?sslmode=require`. AWS RDS and Aurora work as they are (see “The database” below). `DATABASE_URL` is read when this is not set. Without either, a development database runs inside the API process and is kept in `<data folder>/pgdata`; it is real Postgres, but only one process can use it at a time. |
+| `CRATON_DB_CA` | none | A certificate bundle file to verify the database server against (for RDS, AWS's `global-bundle.pem`). With it, the connection is encrypted and the server's certificate is checked. |
+| `CRATON_DB_POOL_MAX` | `10` | Most connections the API holds open to the database (1 to 200). Keep it below the server's `max_connections` divided by the number of API processes. |
+| `CRATON_TEST_PG` | none | For `npm test` in `backend` only: a Postgres address (for example the container from `docker compose up -d db`). Every test database then gets its own schema on that server, dropped when it closes, so the suite runs against the real driver and server instead of the in-process database. |
 | `CRATON_WEB_URL` | `http://localhost:3100` | Where the web app lives, for links the API writes into emails. |
 | `CRATON_CORS_ORIGINS` | `http://localhost:3100` | Comma-separated origins allowed to call the API from a browser. |
 | `CRATON_TRUSTED_PROXIES` | loopback addresses | Addresses allowed to pass on a visitor's real address (`x-craton-client-ip`): the web app. Anything else cannot pick its own address for rate limits. |
@@ -70,7 +73,7 @@ These only matter if you run `npm run sweep`, `npm run focus` or `npm run contra
 | `CRATON_API` | `http://localhost:4000/v1` | The API address the scripts sign in through. |
 | `CRATON_BROWSER` | Edge or Chrome if found | Path of a Chromium-based browser. |
 | `CRATON_WIDTH` | `1280` | Window width in CSS pixels (390 for a phone, 640 for 200% zoom). |
-| `CRATON_E2E_DB` | none | For `npm run e2e:google` only: the `craton.db` of a throwaway API started with Google pointed at `scripts/mock-google.mjs`. The test creates accounts, so never aim it at real data. |
+| `CRATON_E2E_DATABASE_URL` | none | For the `npm run e2e:*` browser scripts only: the PostgreSQL address of a throwaway API (its own database, for example `createdb craton_e2e`) so the script can confirm an email address or switch two-step on, as a link or a settings page would. The scripts create accounts, so never aim it at real data. |
 | `CRATON_E2E_SHOTS` | `e2e-shots` | For `npm run e2e:google`: the folder the screenshots go in. |
 | `CRATON_ROUTES` | a built-in list | Comma-separated paths for `focus` and `contrast`. |
 | `CRATON_THEME` | both | `darker` or `standard` for `contrast`. |
@@ -81,6 +84,23 @@ The command-line tool reads its own few: `CRATON_HOME` (where the saved sign-in 
 and `CRATON_AUTHOR` (the name shown on commits and locks; for tests). `CRATON_FAIL_AFTER_CHUNKS` drops a download's
 connection after that many chunks and exists for the tests.
 
+## The database
+
+Craton keeps everything but the bytes of chunks in PostgreSQL (version 14 or newer; the `citext` extension, which RDS and Aurora allow
+for the database owner, is created on first start). The schema is applied automatically at start, in one transaction under an advisory
+lock, so several API processes starting together do not collide; the version is in the `schema_version` table.
+
+- **Development:** set nothing. The API runs Postgres inside its own process (PGlite) and keeps it in `<data folder>/pgdata`. Stop the
+  API before running a script that opens the database, because only one process can use it.
+- **A local server:** `docker compose up -d db` in the Craton folder starts Postgres 16 on port 5433; then
+  `CRATON_DATABASE_URL=postgres://craton:craton@localhost:5433/craton`.
+- **AWS RDS or Aurora:** create the database and a user that owns it, put the endpoint in `CRATON_DATABASE_URL` with `?sslmode=require`,
+  and set `CRATON_DB_CA` to the downloaded AWS certificate bundle. Allow the API's security group in the database's. Nothing else in
+  Craton changes. Chunks stay in files, or in R2 (S3-compatible) when it is configured.
+- **From the old SQLite file:** `npm run migrate-sqlite` (in `backend`) copies `data/craton.db` into the configured database with every id
+  kept, moves the counters past them, and checks each table's row count. It refuses a target that already has data unless you add
+  `--force`. It never changes the SQLite file.
+
 ## Backups
 
 ```sh
@@ -89,7 +109,10 @@ npm run backup -- --to D:/bk      # somewhere else: another disk, a synced folde
 npm run backup -- --keep 14       # database copies to keep (default 14)
 ```
 
-The database copy is made with SQLite's `VACUUM INTO`, which is safe while the server runs. What a chunk stands for never changes, so each
+The database copy (`craton-<time>.dump.gz`) is every table as compressed lines of JSON, read in one repeatable-read transaction, so it is
+one moment in time and safe while the server runs; the script reads the file back and compares the row count of every table before it
+says it is done. It works the same on a Postgres server and on the development database, and it loads into either. On a production
+server also take RDS snapshots (or `pg_dump`); they are faster for a very large database. What a chunk stands for never changes, so each
 run copies only chunk files that are not already in the backup (repacking may later keep a chunk in a smaller form; the older copy in the
 backup is then an equally valid form of the same chunk). With R2, turn on bucket versioning instead of copying chunks. Nothing here
 encrypts the backup; put it somewhere you already protect.
@@ -99,7 +122,7 @@ encrypts the backup; put it somewhere you already protect.
 Stop the API first, then:
 
 ```sh
-npm run restore -- data/backups/db/craton-<time>.db
+npm run restore -- data/backups/db/craton-<time>.dump.gz
 npm run restore -- <file> --chunks data/backups/chunks    # also copy missing chunk files back
 npm run fsck -- --repair                                  # then check it, and put right anything the backup caught half way
 ```
@@ -108,7 +131,8 @@ A backup taken while repacking or the cold tier was running can hold a chunk fil
 file is the truth; `npm run fsck -- --repair` reads every rewritten chunk and puts back the database rows that say what it is built on, so
 `npm run gc` keeps those chunks, then verifies the whole store.
 
-The database being replaced is kept next to it as `craton.db.before-restore-<time>`, so a mistaken restore can itself
+Restoring empties the configured database and fills it from the file in one transaction: a file that fails halfway leaves the database as
+it was. Before that, what is there now is written next to the backup as `before-restore-<time>.dump.gz`, so a mistaken restore can itself
 be undone. Practise it once on a copy before you need it.
 
 ## Storing changes as differences

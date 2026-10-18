@@ -10,6 +10,7 @@
 // for versions that are no longer the tip of any branch or any tag, and only when the operator turns it on (CRATON_RECODE=1) or
 // runs `npm run recode`.
 
+import { statement } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
 import { branchMovedListeners, getObject } from "./history.ts";
@@ -45,7 +46,7 @@ type TileState = { key: string; stream: Buffer; payloadSize: number; ok: boolean
 export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: { apply?: boolean; priors?: string[]; hotChunks?: Set<string>; next?: string } = {}): Promise<RecodeResult> {
   const apply = opts.apply ?? true;
   const result = none();
-  const blob = getObject<BlobObject>(ctx, repo, blobId, "blob");
+  const blob = await getObject<BlobObject>(ctx, repo, blobId, "blob");
   if (blob.size < SMALLEST_FILE) return result;
   const reader = new Window(ctx, blob);
   const segments = await compressedSegments((o, l) => reader.read(o, l), blob.size);
@@ -54,10 +55,10 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
   const starts: number[] = [];
   let at = 0;
   for (const c of blob.chunks) (starts.push(at), (at += c.size));
-  const codecOf = ctx.db.prepare("SELECT codec, stored_size FROM chunks WHERE hash = ?");
-  const isBase = ctx.db.prepare("SELECT 1 FROM chunk_refs WHERE ref_hash = ?");
-  const baseRow = ctx.db.prepare("SELECT t.key AS key, t.raw_len AS raw_len FROM blob_tiles bt JOIN tiles t ON t.key = bt.tile_key WHERE bt.blob_id = ? AND bt.image = ? AND bt.idx = ? AND t.kind = 1");
-  const known = ctx.db.prepare("SELECT stored_size FROM tiles WHERE key = ?");
+  const codecOf = statement(ctx.db, "SELECT codec, stored_size FROM chunks WHERE hash = ?");
+  const isBase = statement(ctx.db, "SELECT 1 FROM chunk_refs WHERE ref_hash = ?");
+  const baseRow = statement(ctx.db, "SELECT t.key AS key, t.raw_len AS raw_len FROM blob_tiles bt JOIN tiles t ON t.key = bt.tile_key WHERE bt.blob_id = ? AND bt.image = ? AND bt.idx = ? AND t.kind = 1");
+  const known = statement(ctx.db, "SELECT stored_size FROM tiles WHERE key = ?");
 
   // The next cold version of this file, read only as far as it takes to compare one tile with this version's.
   let nextSegments: Segment[] | null | undefined;
@@ -66,8 +67,8 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
     if (!opts.next || width === 1) return false;
     try {
       if (nextSegments === undefined) {
-        nextReader = new Window(ctx, getObject<BlobObject>(ctx, repo, opts.next, "blob"));
-        nextSegments = await compressedSegments((o, l) => nextReader!.read(o, l), getObject<BlobObject>(ctx, repo, opts.next, "blob").size);
+        nextReader = new Window(ctx, await getObject<BlobObject>(ctx, repo, opts.next, "blob"));
+        nextSegments = await compressedSegments((o, l) => nextReader!.read(o, l), (await getObject<BlobObject>(ctx, repo, opts.next, "blob")).size);
       }
       const other = nextSegments?.find((s) => s.image === seg.image && s.index === seg.index);
       if (!other || !nextReader) return false;
@@ -100,13 +101,13 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
     const sample = seg.sampleBytes === 2 || seg.sampleBytes === 4 || seg.sampleBytes === 8;
     const width: TileWidth = (seg.shuffled || seg.predictor === 1) && sample ? (seg.sampleBytes as TileWidth) : 1;
     const shuffled = Boolean(seg.shuffled) && width > 1;
-    const existing = known.get(key) as { stored_size: number } | undefined;
+    const existing = await known.get(key) as { stored_size: number } | undefined;
     let payloadSize = existing?.stored_size ?? 0;
     if (existing) result.reused++;
     else {
       let payload = encodeWhole(raw, params, width, stream.length, shuffled);
       for (const prior of opts.priors ?? []) {
-        const base = baseRow.get(prior, seg.image, seg.index) as { key: string; raw_len: number } | undefined;
+        const base = await baseRow.get(prior, seg.image, seg.index) as { key: string; raw_len: number } | undefined;
         if (!base || base.raw_len !== raw.length) continue;
         const diff = encodeDifference(raw, params, width, stream.length, { key: base.key, raw: (await tilePixels(ctx, base.key)).raw }, payload.length * 0.9, shuffled);
         if (diff) {
@@ -126,7 +127,7 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
       payloadSize = payload.length;
       result.tiles++;
     }
-    if (apply) ctx.db.prepare("INSERT OR IGNORE INTO blob_tiles (blob_id, image, idx, tile_key) VALUES (?, ?, ?, ?)").run(blobId, seg.image, seg.index, key);
+    if (apply) await ctx.db.run("INSERT INTO blob_tiles (blob_id, image, idx, tile_key) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", blobId, seg.image, seg.index, key);
     return remember(i, { key, stream, payloadSize, ok: true, keyframe: existing ? false : keyframeFlag });
   };
   const remember = (i: number, s: TileState) => (states.set(i, s), s);
@@ -154,8 +155,8 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
     for (const k of states.keys()) if (segments[k].offset + segments[k].count <= start) states.delete(k);
     if (!overlapping.length || opts.hotChunks?.has(c.hash)) continue;
 
-    const row = codecOf.get(c.hash) as { codec: string; stored_size: number } | undefined;
-    if (!row || row.codec === "tiles" || row.codec === "ref-delta" || isBase.get(c.hash)) {
+    const row = await codecOf.get(c.hash) as { codec: string; stored_size: number } | undefined;
+    if (!row || row.codec === "tiles" || row.codec === "ref-delta" || await isBase.get(c.hash)) {
       for (const i of overlapping) await prepare(i); // still record which tile of this version is which
       continue;
     }
@@ -201,9 +202,9 @@ export async function recodeBlob(ctx: Ctx, repo: RepoRow, blobId: string, opts: 
     result.savedBytes += row.stored_size - newSize;
     touched = true;
     if (!apply) continue;
-    for (const s of prepared) if (s.ok) ctx.db.prepare("INSERT OR IGNORE INTO chunk_tiles (chunk_hash, tile_key) VALUES (?, ?)").run(c.hash, s.key);
+    for (const s of prepared) if (s.ok) await ctx.db.run("INSERT INTO chunk_tiles (chunk_hash, tile_key) VALUES (?, ?) ON CONFLICT DO NOTHING", c.hash, s.key);
     await ctx.store.replace(c.hash, stored);
-    ctx.db.prepare("UPDATE chunks SET stored_size = ?, codec = 'tiles' WHERE hash = ?").run(newSize, c.hash);
+    await ctx.db.run("UPDATE chunks SET stored_size = ?, codec = 'tiles' WHERE hash = ?", newSize, c.hash);
   }
   if (touched) result.files++;
   return result;
@@ -218,16 +219,16 @@ const add = (a: RecodeResult, b: RecodeResult) => {
 };
 
 /** The blobs of every branch tip and tag: the versions people read most, which stay exactly as they were uploaded (and so do the chunks they are made of, even when an old version shares them). */
-function hotBlobs(ctx: Ctx, repo: RepoRow): { blobs: Set<string>; chunks: Set<string> } {
+async function hotBlobs(ctx: Ctx, repo: RepoRow): Promise<{ blobs: Set<string>; chunks: Set<string> }> {
   const blobs = new Set<string>();
   const chunks = new Set<string>();
-  const refs = ctx.db.prepare("SELECT commit_id FROM refs WHERE repo_id = ?").all(repo.id) as { commit_id: string }[];
+  const refs = await ctx.db.all("SELECT commit_id FROM refs WHERE repo_id = ?", repo.id) as { commit_id: string }[];
   for (const r of refs) {
-    const tree = getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, r.commit_id, "commit").tree, "tree");
+    const tree = await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, r.commit_id, "commit")).tree, "tree");
     for (const e of tree.entries) {
       if (blobs.has(e.blob)) continue;
       blobs.add(e.blob);
-      for (const c of getObject<BlobObject>(ctx, repo, e.blob, "blob").chunks) chunks.add(c.hash);
+      for (const c of (await getObject<BlobObject>(ctx, repo, e.blob, "blob")).chunks) chunks.add(c.hash);
     }
   }
   return { blobs, chunks };
@@ -240,11 +241,11 @@ function hotBlobs(ctx: Ctx, repo: RepoRow): { blobs: Set<string>; chunks: Set<st
  */
 export async function recodeRepository(ctx: Ctx, repo: RepoRow, opts: { apply?: boolean; includeHot?: boolean; force?: boolean } = {}): Promise<RecodeResult> {
   const total = none();
-  const hot = opts.includeHot ? { blobs: new Set<string>(), chunks: new Set<string>() } : hotBlobs(ctx, repo);
+  const hot = opts.includeHot ? { blobs: new Set<string>(), chunks: new Set<string>() } : await hotBlobs(ctx, repo);
   const versions = new Map<string, string[]>();
-  const ids = ctx.db.prepare("SELECT id FROM commits WHERE repo_id = ? ORDER BY timestamp, id").all(repo.id) as { id: string }[];
+  const ids = await ctx.db.all("SELECT id FROM commits WHERE repo_id = ? ORDER BY timestamp, id", repo.id) as { id: string }[];
   for (const { id } of ids) {
-    const tree = getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, id, "commit").tree, "tree");
+    const tree = await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, id, "commit")).tree, "tree");
     for (const e of tree.entries) {
       if (!/\.(tiff?|h5|hdf5?|he5|nc4?|nc)$/i.test(e.path)) continue;
       const list = versions.get(e.path) ?? [];
@@ -252,11 +253,11 @@ export async function recodeRepository(ctx: Ctx, repo: RepoRow, opts: { apply?: 
       versions.set(e.path, list);
     }
   }
-  const attempted = ctx.db.prepare("SELECT 1 FROM blob_tiles WHERE blob_id = ? AND image = -1");
+  const attempted = statement(ctx.db, "SELECT 1 FROM blob_tiles WHERE blob_id = ? AND image = -1");
   for (const list of versions.values()) {
     const recoded: string[] = [];
     for (const blobId of list) {
-      const seen = Boolean(attempted.get(blobId));
+      const seen = Boolean(await attempted.get(blobId));
       if (hot.blobs.has(blobId) || (seen && !opts.force)) {
         if (seen) recoded.unshift(blobId);
         continue;
@@ -266,7 +267,7 @@ export async function recodeRepository(ctx: Ctx, repo: RepoRow, opts: { apply?: 
       add(total, r);
       // Remember that this version was looked at, so a push does not read it again to find the same nothing.
       if (opts.apply ?? true) {
-        ctx.db.prepare("INSERT OR IGNORE INTO blob_tiles (blob_id, image, idx, tile_key) VALUES (?, -1, -1, '')").run(blobId);
+        await ctx.db.run("INSERT INTO blob_tiles (blob_id, image, idx, tile_key) VALUES (?, -1, -1, '') ON CONFLICT DO NOTHING", blobId);
         recoded.unshift(blobId);
       }
     }

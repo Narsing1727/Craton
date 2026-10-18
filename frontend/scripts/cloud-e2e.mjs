@@ -1,6 +1,6 @@
 // A real browser against a running stack, on a throwaway account (start the API with a throwaway CRATON_DATA_DIR): a LAS point cloud's
 // file page shows a picture of the cloud seen from above, with its point count and elevation range.
-//   CRATON_E2E_DB=<throwaway craton.db> node scripts/cloud-e2e.mjs [shots-dir]
+//   CRATON_E2E_DATABASE_URL=<postgres address> node scripts/cloud-e2e.mjs [shots-dir]
 
 import { chromium } from "playwright-core";
 import { las } from "../../backend/test/helpers/lasfile.ts";
@@ -18,12 +18,10 @@ if (!signup.ok) throw new Error(`signup failed: ${signup.status} ${await signup.
 const { token } = await signup.json();
 const h = { authorization: `Bearer ${token}`, "content-type": "application/json" };
 await fetch(`${API}/v1/user`, { method: "PATCH", headers: h, body: JSON.stringify({ onboarded: true }) });
-const dbFile = process.env.CRATON_E2E_DB;
-if (!dbFile) throw new Error("Set CRATON_E2E_DB to the throwaway API's craton.db.");
-const { DatabaseSync } = await import("node:sqlite");
-const db = new DatabaseSync(dbFile);
-db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(handle);
-db.close();
+const { openE2eDb } = await import("./e2e-db.mjs");
+const db = await openE2eDb();
+await db.prepare("UPDATE users SET email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(handle);
+await db.close();
 const made = await fetch(`${API}/v1/repos`, { method: "POST", headers: h, body: JSON.stringify({ name: "survey", visibility: "public" }) });
 if (!made.ok) throw new Error(`repo create failed: ${made.status} ${await made.text()}`);
 const form = new FormData();

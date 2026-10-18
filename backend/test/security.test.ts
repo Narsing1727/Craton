@@ -32,7 +32,7 @@ async function call(method: string, path: string, who: string | null, body?: unk
 const lastEmail = (to: string, kind: string) => [...sentEmails].reverse().find((m) => m.to === to && m.kind === kind);
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["olga", "pavel", "quinn"]) {
     const r = await call("POST", "/auth/signup", null, { username: u, email: `${u}@example.org`, password: "a-very-long-password" }, { "x-craton-client-ip": `10.0.0.${u.length}` });
@@ -191,7 +191,7 @@ test("garbage collection only removes unreferenced chunks past the grace period"
   const run = await collectGarbage(ctx, { apply: true, graceDays: 30, now: later });
   assert.ok(run.removed >= 1);
   assert.equal(await ctx.store.has(hash), false);
-  assert.equal(ctx.db.prepare("SELECT 1 FROM chunks WHERE hash = ?").get(hash), undefined);
+  assert.equal(await ctx.db.get("SELECT 1 FROM chunks WHERE hash = ?", hash), undefined);
 });
 
 test("uploads never reveal whether someone else's private repository holds the same bytes", async () => {

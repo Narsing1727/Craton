@@ -185,8 +185,8 @@ the same patterns; versions are pinned so old integrations never break.
 
 ## P1 · Trust, reliability and operations
 
-- [ ] **Production deployment:** API on a managed platform in at least one region, Postgres instead of SQLite once
-      there's more than one instance, chunks on Cloudflare R2 (already supported), the web app on an edge
+- [ ] **Production deployment:** API on a managed platform in at least one region, Postgres (done: the API runs on PostgreSQL; point
+      `CRATON_DATABASE_URL` at RDS or Aurora), chunks on Cloudflare R2 (already supported), the web app on an edge
       platform, infrastructure as code.
 - [ ] **CI/CD:** on every PR run typecheck, backend tests, browser end-to-end tests, accessibility and phone-width
       audits, and a production build; deploy previews per PR; one-click rollback.

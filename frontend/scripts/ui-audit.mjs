@@ -1,23 +1,21 @@
 // The contrast scan and the keyboard walk on the pages that need data of their own (a repository with an issue, a comment and a
 // release), on a throwaway account so the demo user's security log is not written to. Start the API with a throwaway
 // CRATON_DATA_DIR first.
-//   CRATON_E2E_DB=<throwaway craton.db> node scripts/ui-audit.mjs
+//   CRATON_E2E_DATABASE_URL=<postgres address> node scripts/ui-audit.mjs
 
 import { spawnSync } from "node:child_process";
 
 const API = process.env.CRATON_API_URL ?? "http://localhost:4000";
-const dbFile = process.env.CRATON_E2E_DB;
-if (!dbFile) throw new Error("Set CRATON_E2E_DB to the throwaway API's craton.db (it confirms the email).");
 const handle = `audit${Date.now().toString(36)}`;
 const r = await fetch(`${API}/v1/auth/signup`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: handle, email: `${handle}@example.org`, password: "a-very-long-password" }) });
 if (!r.ok) throw new Error(`signup failed: ${r.status} ${await r.text()}`);
 const { token } = await r.json();
 const h = { authorization: `Bearer ${token}`, "content-type": "application/json" };
 await fetch(`${API}/v1/user`, { method: "PATCH", headers: h, body: JSON.stringify({ onboarded: true }) });
-const { DatabaseSync } = await import("node:sqlite");
-const db = new DatabaseSync(dbFile);
-db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), plan = 'team' WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(handle);
-db.close();
+const { openE2eDb } = await import("./e2e-db.mjs");
+const db = await openE2eDb();
+await db.prepare("UPDATE users SET email_verified_at = now_iso(), plan = 'team' WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(handle);
+await db.close();
 const must = async (res, what) => {
   if (!res.ok) throw new Error(`${what} failed: ${res.status} ${await res.text()}`);
   return res.json();

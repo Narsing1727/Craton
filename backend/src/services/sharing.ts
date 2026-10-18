@@ -36,29 +36,27 @@ type LinkRow = {
 
 const isActive = (r: LinkRow) => !r.revoked_at && r.expires_at > now();
 
-export function createLink(ctx: Ctx, repo: RepoRow, userId: number, input: { ref?: string; expiresInDays?: number; note?: string }) {
+export async function createLink(ctx: Ctx, repo: RepoRow, userId: number, input: { ref?: string; expiresInDays?: number; note?: string }) {
   const days = input.expiresInDays ?? 7;
   if (!(EXPIRY_CHOICES as readonly number[]).includes(days)) throw badRequest(`Choose how long the link works: ${EXPIRY_CHOICES.join(", ")} days.`);
-  const active = (ctx.db.prepare("SELECT COUNT(*) AS n FROM share_links WHERE repo_id = ? AND revoked_at IS NULL AND expires_at > ?").get(repo.id, now()) as { n: number }).n;
+  const active = (await ctx.db.get("SELECT COUNT(*) AS n FROM share_links WHERE repo_id = ? AND revoked_at IS NULL AND expires_at > ?", repo.id, now()) as { n: number }).n;
   if (active >= MAX_ACTIVE) throw badRequest(`A repository can have up to ${MAX_ACTIVE} active share links. Revoke one you no longer need.`);
 
   const ref = (input.ref ?? repo.default_branch).trim();
-  const commit = resolveRef(ctx, repo, ref); // a branch name, a tag or a commit id; the link pins the commit it points to now
+  const commit = await resolveRef(ctx, repo, ref); // a branch name, a tag or a commit id; the link pins the commit it points to now
   const token = `bcn_share_${randomBytes(24).toString("base64url")}`;
   const expiresAt = new Date(Date.now() + days * 86_400_000).toISOString();
   const id = Number(
-    ctx.db
-      .prepare("INSERT INTO share_links (repo_id, token_hash, note, ref, commit_id, created_by, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(repo.id, sha(token), String(input.note ?? "").trim().slice(0, 120), ref, commit, userId, expiresAt).lastInsertRowid,
+    (await ctx.db.insert("INSERT INTO share_links (repo_id, token_hash, note, ref, commit_id, created_by, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)", repo.id, sha(token), String(input.note ?? "").trim().slice(0, 120), ref, commit, userId, expiresAt)),
   );
   return { id, token, path: `/s/${token}`, url: `${config.webUrl}/s/${token}`, ref, commit, expiresAt };
 }
 
-export function listLinks(ctx: Ctx, repo: RepoRow) {
-  const rows = ctx.db.prepare("SELECT * FROM share_links WHERE repo_id = ? ORDER BY id DESC LIMIT 100").all(repo.id) as LinkRow[];
+export async function listLinks(ctx: Ctx, repo: RepoRow) {
+  const rows = await ctx.db.all("SELECT * FROM share_links WHERE repo_id = ? ORDER BY id DESC LIMIT 100", repo.id) as LinkRow[];
   const names = new Map<number, string>();
-  return rows.map((r) => {
-    if (!names.has(r.created_by)) names.set(r.created_by, (ctx.db.prepare("SELECT handle FROM owners WHERE id = ?").get(r.created_by) as { handle: string } | undefined)?.handle ?? "someone");
+  return (await Promise.all(rows.map(async (r) => {
+    if (!names.has(r.created_by)) names.set(r.created_by, (await ctx.db.get("SELECT handle FROM owners WHERE id = ?", r.created_by) as { handle: string } | undefined)?.handle ?? "someone");
     return {
       id: r.id,
       note: r.note,
@@ -72,11 +70,11 @@ export function listLinks(ctx: Ctx, repo: RepoRow) {
       uses: r.uses,
       active: isActive(r),
     };
-  });
+  })));
 }
 
-export function revokeLink(ctx: Ctx, repo: RepoRow, id: number) {
-  const r = ctx.db.prepare("UPDATE share_links SET revoked_at = ? WHERE id = ? AND repo_id = ? AND revoked_at IS NULL").run(now(), id, repo.id);
+export async function revokeLink(ctx: Ctx, repo: RepoRow, id: number) {
+  const r = await ctx.db.run("UPDATE share_links SET revoked_at = ? WHERE id = ? AND repo_id = ? AND revoked_at IS NULL", now(), id, repo.id);
   if (!r.changes) throw notFound("Share link");
 }
 
@@ -85,27 +83,25 @@ export function revokeLink(ctx: Ctx, repo: RepoRow, id: number) {
 const GONE = () => notFound("This link");
 
 /** The repository and snapshot a token points to. Unknown, expired and revoked tokens are indistinguishable. */
-export function resolveToken(ctx: Ctx, token: unknown): { link: LinkRow; repo: RepoRow } {
+export async function resolveToken(ctx: Ctx, token: unknown): Promise<{ link: LinkRow; repo: RepoRow }> {
   if (typeof token !== "string" || !/^bcn_share_[A-Za-z0-9_-]{20,64}$/.test(token)) throw GONE();
-  const link = ctx.db.prepare("SELECT * FROM share_links WHERE token_hash = ?").get(sha(token)) as LinkRow | undefined;
+  const link = await ctx.db.get("SELECT * FROM share_links WHERE token_hash = ?", sha(token)) as LinkRow | undefined;
   if (!link || !isActive(link)) throw GONE();
-  const repo = ctx.db
-    .prepare("SELECT r.*, o.handle AS owner FROM repos r JOIN owners o ON o.id = r.owner_id WHERE r.id = ?")
-    .get(link.repo_id) as RepoRow | undefined;
+  const repo = await ctx.db.get("SELECT r.*, o.handle AS owner FROM repos r JOIN owners o ON o.id = r.owner_id WHERE r.id = ?", link.repo_id) as RepoRow | undefined;
   if (!repo) throw GONE();
   return { link, repo };
 }
 
-function treeOf(ctx: Ctx, repo: RepoRow, commitId: string) {
-  return getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, commitId, "commit").tree, "tree");
+async function treeOf(ctx: Ctx, repo: RepoRow, commitId: string) {
+  return getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, commitId, "commit")).tree, "tree");
 }
 
 /** What the share page shows. Counts as one use of the link. */
-export function overview(ctx: Ctx, token: unknown) {
-  const { link, repo } = resolveToken(ctx, token);
-  ctx.db.prepare("UPDATE share_links SET uses = uses + 1, last_used_at = ? WHERE id = ?").run(now(), link.id);
-  const commit = getObject<CommitObject>(ctx, repo, link.commit_id, "commit");
-  const files = treeOf(ctx, repo, link.commit_id).entries.map((e) => ({ path: e.path, size: e.size }));
+export async function overview(ctx: Ctx, token: unknown) {
+  const { link, repo } = await resolveToken(ctx, token);
+  await ctx.db.run("UPDATE share_links SET uses = uses + 1, last_used_at = ? WHERE id = ?", now(), link.id);
+  const commit = await getObject<CommitObject>(ctx, repo, link.commit_id, "commit");
+  const files = (await treeOf(ctx, repo, link.commit_id)).entries.map((e) => ({ path: e.path, size: e.size }));
   return {
     repository: {
       owner: repo.owner,
@@ -124,9 +120,9 @@ export function overview(ctx: Ctx, token: unknown) {
 }
 
 /** A file of the snapshot as a byte stream, plus what a download needs. */
-export function fileOf(ctx: Ctx, token: unknown, path: string) {
-  const { link, repo } = resolveToken(ctx, token);
-  const entry = treeOf(ctx, repo, link.commit_id).entries.find((e) => e.path === path);
+export async function fileOf(ctx: Ctx, token: unknown, path: string) {
+  const { link, repo } = await resolveToken(ctx, token);
+  const entry = (await treeOf(ctx, repo, link.commit_id)).entries.find((e) => e.path === path);
   if (!entry) throw notFound("File");
-  return { repo, commit: link.commit_id, blob: getObject<BlobObject>(ctx, repo, entry.blob, "blob"), path: entry.path };
+  return { repo, commit: link.commit_id, blob: await getObject<BlobObject>(ctx, repo, entry.blob, "blob"), path: entry.path };
 }

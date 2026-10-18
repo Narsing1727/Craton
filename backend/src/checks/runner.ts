@@ -32,15 +32,15 @@ const stem = (p: string) => p.slice(0, p.lastIndexOf("."));
 
 export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branch: string): Promise<CheckRun> {
   const started = performance.now();
-  const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
-  const tree = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+  const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
+  const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
   const blobOf = (id: string) => getObject<BlobObject>(ctx, repo, id, "blob");
   const byPath = new Map(tree.entries.map((e) => [lower(e.path), e]));
 
   const rasters = tree.entries.filter((e) => ["tif", "tiff"].includes(ext(e.path)));
   const rasterInfo: { path: string; epsg: number | null; vertical: number | null; nodata: number | null; cog?: string[]; error?: string }[] = [];
   for (const r of rasters) {
-    const reader = new BlobReader(ctx, blobOf(r.blob));
+    const reader = new BlobReader(ctx, await blobOf(r.blob));
     try {
       const info = await readGeoTiff((o, l) => reader.read(o, l), reader.size);
       // The layout is read from the same file; a directory that cannot be read just means "not known", not a failure.
@@ -54,7 +54,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
   const prjFiles = tree.entries.filter((e) => ext(e.path) === "prj" && byPath.has(lower(stem(e.path)) + ".shp"));
   const prjInfo: { path: string; epsg: number | null }[] = [];
   for (const p of prjFiles) {
-    const text = (await new BlobReader(ctx, blobOf(p.blob)).readAll()).toString("utf8");
+    const text = (await new BlobReader(ctx, await blobOf(p.blob)).readAll()).toString("utf8");
     prjInfo.push({ path: p.path, epsg: epsgFromWkt(text) });
   }
 
@@ -68,7 +68,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
       continue;
     }
     try {
-      const info = await readGeoPackage(await new BlobReader(ctx, blobOf(g.blob)).readAll());
+      const info = await readGeoPackage(await new BlobReader(ctx, await blobOf(g.blob)).readAll());
       for (const l of info.layers) if (l.type !== "attributes") gpkgLayers.push({ path: g.path, table: l.table, epsg: l.epsg });
     } catch (err) {
       gpkgNotes.push(`${g.path} could not be read as a GeoPackage (${(err as Error).message})`);
@@ -79,7 +79,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
   // file with no "geo" metadata is a plain table and has nothing to check.
   for (const g of tree.entries.filter((e) => ext(e.path) === "parquet")) {
     try {
-      const reader = new BlobReader(ctx, blobOf(g.blob));
+      const reader = new BlobReader(ctx, await blobOf(g.blob));
       const info = await readGeoParquet((o, l) => reader.read(o, l), reader.size);
       for (const c of info?.columns ?? []) gpkgLayers.push({ path: g.path, table: c.name, epsg: c.epsg });
     } catch (err) {
@@ -160,7 +160,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
       const base = lower(stem(s.path));
       const missing = ["shx", "dbf"].filter((x) => !byPath.has(`${base}.${x}`));
       if (missing.length) problems.push(`${s.path} is missing .${missing.join(" and .")}`);
-      const head = readShpHeader(await new BlobReader(ctx, blobOf(s.blob)).read(0, 100));
+      const head = readShpHeader(await new BlobReader(ctx, await blobOf(s.blob)).read(0, 100));
       if (!head?.valid) problems.push(`${s.path} has an invalid header`);
       else if (head.declaredBytes !== s.size) problems.push(`${s.path} is truncated (header says ${head.declaredBytes} bytes, file has ${s.size})`);
     }
@@ -178,7 +178,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
     const plans = tree.entries.filter((e) => /\.p\d\d$/i.test(e.path));
     const problems: string[] = [];
     for (const p of plans) {
-      const text = (await new BlobReader(ctx, blobOf(p.blob)).readAll()).toString("latin1");
+      const text = (await new BlobReader(ctx, await blobOf(p.blob)).readAll()).toString("latin1");
       const { geom, flow } = hecRasPlanRefs(text);
       const base = lower(stem(p.path));
       if (!geom) problems.push(`${p.path} doesn’t name a geometry file`);
@@ -203,7 +203,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
     let models = 0;
     let links = 0;
     for (const f of inps) {
-      const text = (await new BlobReader(ctx, blobOf(f.blob)).readAll()).toString("latin1");
+      const text = (await new BlobReader(ctx, await blobOf(f.blob)).readAll()).toString("latin1");
       if (!/^\s*\[(CONDUITS|SUBCATCHMENTS|RAINGAGES|OUTFALLS)\]/im.test(text)) continue;
       models++;
       const report = checkSwmm(text);
@@ -228,7 +228,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
     let undeclared = 0;
     let total = 0;
     for (const c of clouds) {
-      const reader = new BlobReader(ctx, blobOf(c.blob));
+      const reader = new BlobReader(ctx, await blobOf(c.blob));
       try {
         const info = await readLasHeader((o, l) => reader.read(o, l), reader.size);
         total++;
@@ -261,7 +261,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
     let hdf5 = 0;
     let noConventions = 0;
     for (const f of files) {
-      const reader = new BlobReader(ctx, blobOf(f.blob));
+      const reader = new BlobReader(ctx, await blobOf(f.blob));
       try {
         const info = await readNetcdf((o, l) => reader.read(o, l), reader.size);
         classic++;
@@ -296,7 +296,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
     let withResults = 0;
     let notes = 0;
     for (const f of files) {
-      const reader = new BlobReader(ctx, blobOf(f.blob));
+      const reader = new BlobReader(ctx, await blobOf(f.blob));
       try {
         const info = await readHdf5((o, l) => reader.read(o, l), reader.size);
         readable++;
@@ -339,10 +339,10 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
     // does not read the other 9,990 again. Anything else is hashed in full, as before.
     const alreadyVerified = new Set<string>();
     const parentId = commit.parents[0];
-    if (parentId && latestCheckStatus(ctx, repo, parentId) === "passed") {
+    if (parentId && await latestCheckStatus(ctx, repo, parentId) === "passed") {
       try {
-        const parent = getObject<CommitObject>(ctx, repo, parentId, "commit");
-        for (const e of getObject<TreeObject>(ctx, repo, parent.tree, "tree").entries) alreadyVerified.add(e.blob);
+        const parent = await getObject<CommitObject>(ctx, repo, parentId, "commit");
+        for (const e of (await getObject<TreeObject>(ctx, repo, parent.tree, "tree")).entries) alreadyVerified.add(e.blob);
       } catch {
         alreadyVerified.clear();
       }
@@ -354,7 +354,7 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
         carried++;
         continue;
       }
-      const blob = blobOf(e.blob);
+      const blob = await blobOf(e.blob);
       const reader = new BlobReader(ctx, blob);
       try {
         if (blob.size <= FULL_HASH_LIMIT) {
@@ -388,17 +388,15 @@ export async function runChecks(ctx: Ctx, repo: RepoRow, commitId: string, branc
 
   const status = steps.some((s) => s.status === "failed") ? "failed" : "passed";
   const durationMs = Math.round(performance.now() - started);
-  const { lastInsertRowid } = ctx.db
-    .prepare("INSERT INTO check_runs (repo_id, commit_id, branch, status, steps, duration_ms) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(repo.id, commitId, branch, status, JSON.stringify(steps), durationMs);
-  const row = ctx.db.prepare("SELECT created_at FROM check_runs WHERE id = ?").get(lastInsertRowid) as { created_at: string };
+  const lastInsertRowid = await ctx.db.insert("INSERT INTO check_runs (repo_id, commit_id, branch, status, steps, duration_ms) VALUES (?, ?, ?, ?, ?, ?)", repo.id, commitId, branch, status, JSON.stringify(steps), durationMs);
+  const row = await ctx.db.get("SELECT created_at FROM check_runs WHERE id = ?", lastInsertRowid) as { created_at: string };
   return { id: Number(lastInsertRowid), commit: commitId, branch, status, steps, durationMs, createdAt: row.created_at };
 }
 
-export function listCheckRuns(ctx: Ctx, repo: RepoRow, opts: { commit?: string; limit?: number } = {}) {
+export async function listCheckRuns(ctx: Ctx, repo: RepoRow, opts: { commit?: string; limit?: number } = {}) {
   const rows = (opts.commit
-    ? ctx.db.prepare("SELECT * FROM check_runs WHERE repo_id = ? AND commit_id = ? ORDER BY id DESC LIMIT ?").all(repo.id, opts.commit, opts.limit ?? 20)
-    : ctx.db.prepare("SELECT * FROM check_runs WHERE repo_id = ? ORDER BY id DESC LIMIT ?").all(repo.id, opts.limit ?? 50)) as {
+    ? await ctx.db.all("SELECT * FROM check_runs WHERE repo_id = ? AND commit_id = ? ORDER BY id DESC LIMIT ?", repo.id, opts.commit, opts.limit ?? 20)
+    : await ctx.db.all("SELECT * FROM check_runs WHERE repo_id = ? ORDER BY id DESC LIMIT ?", repo.id, opts.limit ?? 50)) as {
     id: number;
     commit_id: string;
     branch: string;
@@ -411,8 +409,8 @@ export function listCheckRuns(ctx: Ctx, repo: RepoRow, opts: { commit?: string; 
 }
 
 /** Latest check status for a commit, or null if it never ran. */
-export function latestCheckStatus(ctx: Ctx, repo: RepoRow, commitId: string): "passed" | "failed" | null {
-  const row = ctx.db.prepare("SELECT status FROM check_runs WHERE repo_id = ? AND commit_id = ? ORDER BY id DESC LIMIT 1").get(repo.id, commitId) as { status: "passed" | "failed" } | undefined;
+export async function latestCheckStatus(ctx: Ctx, repo: RepoRow, commitId: string): Promise<"passed" | "failed" | null> {
+  const row = await ctx.db.get("SELECT status FROM check_runs WHERE repo_id = ? AND commit_id = ? ORDER BY id DESC LIMIT 1", repo.id, commitId) as { status: "passed" | "failed" } | undefined;
   return row?.status ?? null;
 }
 

@@ -49,46 +49,46 @@ function json(r: Row) {
 }
 
 /** Owners only: everything here is about who can join. */
-function ownedOrg(ctx: Ctx, orgHandle: string, actorId: number) {
-  const org = getOwner(ctx, orgHandle);
+async function ownedOrg(ctx: Ctx, orgHandle: string, actorId: number) {
+  const org = await getOwner(ctx, orgHandle);
   if (org.kind !== "org") throw notFound(`Organization ${orgHandle}`);
-  const role = orgRole(ctx, org.id, actorId);
+  const role = await orgRole(ctx, org.id, actorId);
   if (!role) throw notFound(`Organization ${orgHandle}`);
   if (role !== "Owner") throw forbidden(`Only owners of ${org.handle} can manage its domains.`);
   return org;
 }
 
-function find(ctx: Ctx, orgId: number, domain: string): Row {
-  const row = ctx.db.prepare("SELECT * FROM org_domains WHERE org_id = ? AND domain = ?").get(orgId, normalizeDomain(domain)) as Row | undefined;
+async function find(ctx: Ctx, orgId: number, domain: string): Promise<Row> {
+  const row = await ctx.db.get("SELECT * FROM org_domains WHERE org_id = ? AND domain = ?", orgId, normalizeDomain(domain)) as Row | undefined;
   if (!row) throw notFound("Domain");
   return row;
 }
 
-export function listDomains(ctx: Ctx, orgHandle: string, actorId: number) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
-  return (ctx.db.prepare("SELECT * FROM org_domains WHERE org_id = ? ORDER BY domain").all(org.id) as Row[]).map(json);
+export async function listDomains(ctx: Ctx, orgHandle: string, actorId: number) {
+  const org = await ownedOrg(ctx, orgHandle, actorId);
+  return (await ctx.db.all("SELECT * FROM org_domains WHERE org_id = ? ORDER BY domain", org.id) as Row[]).map(json);
 }
 
 /** The domains an organization has verified: shown on its public profile. */
-export function verifiedDomains(ctx: Ctx, orgId: number): string[] {
-  return (ctx.db.prepare("SELECT domain FROM org_domains WHERE org_id = ? AND verified_at IS NOT NULL ORDER BY domain").all(orgId) as { domain: string }[]).map((r) => r.domain);
+export async function verifiedDomains(ctx: Ctx, orgId: number): Promise<string[]> {
+  return (await ctx.db.all("SELECT domain FROM org_domains WHERE org_id = ? AND verified_at IS NOT NULL ORDER BY domain", orgId) as { domain: string }[]).map((r) => r.domain);
 }
 
-export function addDomain(ctx: Ctx, orgHandle: string, actorId: number, input: unknown) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
+export async function addDomain(ctx: Ctx, orgHandle: string, actorId: number, input: unknown) {
+  const org = await ownedOrg(ctx, orgHandle, actorId);
   const domain = normalizeDomain(input);
-  if (ctx.db.prepare("SELECT 1 FROM org_domains WHERE org_id = ? AND domain = ?").get(org.id, domain)) throw conflict("domain_exists", `${domain} is already on ${org.handle}.`);
-  const holder = ctx.db.prepare("SELECT o.handle FROM org_domains d JOIN owners o ON o.id = d.org_id WHERE d.domain = ? AND d.verified_at IS NOT NULL").get(domain) as { handle: string } | undefined;
+  if (await ctx.db.get("SELECT 1 FROM org_domains WHERE org_id = ? AND domain = ?", org.id, domain)) throw conflict("domain_exists", `${domain} is already on ${org.handle}.`);
+  const holder = await ctx.db.get("SELECT o.handle FROM org_domains d JOIN owners o ON o.id = d.org_id WHERE d.domain = ? AND d.verified_at IS NOT NULL", domain) as { handle: string } | undefined;
   if (holder) throw conflict("domain_taken", `${domain} is already verified by another organization. If it is yours, ask them to remove it, or contact support.`);
-  if ((ctx.db.prepare("SELECT COUNT(*) AS n FROM org_domains WHERE org_id = ?").get(org.id) as { n: number }).n >= MAX_DOMAINS) throw badRequest(`An organization can have up to ${MAX_DOMAINS} domains.`);
-  ctx.db.prepare("INSERT INTO org_domains (org_id, domain, token) VALUES (?, ?, ?)").run(org.id, domain, randomBytes(18).toString("hex"));
-  return json(find(ctx, org.id, domain));
+  if ((await ctx.db.get("SELECT COUNT(*) AS n FROM org_domains WHERE org_id = ?", org.id) as { n: number }).n >= MAX_DOMAINS) throw badRequest(`An organization can have up to ${MAX_DOMAINS} domains.`);
+  await ctx.db.run("INSERT INTO org_domains (org_id, domain, token) VALUES (?, ?, ?)", org.id, domain, randomBytes(18).toString("hex"));
+  return json(await find(ctx, org.id, domain));
 }
 
 /** Look for the TXT record. A record not there yet is the common case, so the answer says exactly what was and was not found. */
 export async function verifyDomain(ctx: Ctx, orgHandle: string, actorId: number, domain: string) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
-  const row = find(ctx, org.id, domain);
+  const org = await ownedOrg(ctx, orgHandle, actorId);
+  const row = await find(ctx, org.id, domain);
   if (row.verified_at) return { ...json(row), joined: 0 };
   const rec = recordFor(row);
   let values: string[] = [];
@@ -111,54 +111,52 @@ export async function verifyDomain(ctx: Ctx, orgHandle: string, actorId: number,
     );
   }
   try {
-    ctx.db.prepare("UPDATE org_domains SET verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?").run(row.id);
+    await ctx.db.run("UPDATE org_domains SET verified_at = now_iso() WHERE id = ?", row.id);
   } catch {
     // Another organization verified it first (the unique index on verified domains).
     throw conflict("domain_taken", `${row.domain} was just verified by another organization.`);
   }
-  const done = find(ctx, org.id, row.domain);
-  return { ...json(done), joined: done.auto_join ? backfill(ctx, org.id, done.domain) : 0 };
+  const done = await find(ctx, org.id, row.domain);
+  return { ...json(done), joined: done.auto_join ? await backfill(ctx, org.id, done.domain) : 0 };
 }
 
-export function setAutoJoin(ctx: Ctx, orgHandle: string, actorId: number, domain: string, on: unknown) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
-  const row = find(ctx, org.id, domain);
+export async function setAutoJoin(ctx: Ctx, orgHandle: string, actorId: number, domain: string, on: unknown) {
+  const org = await ownedOrg(ctx, orgHandle, actorId);
+  const row = await find(ctx, org.id, domain);
   if (typeof on !== "boolean") throw badRequest("Send { autoJoin: true } or { autoJoin: false }.");
   if (!row.verified_at) throw badRequest(`Verify ${row.domain} first: joining by email address only makes sense for a domain the organization has proved it controls.`);
-  ctx.db.prepare("UPDATE org_domains SET auto_join = ? WHERE id = ?").run(on ? 1 : 0, row.id);
-  return { ...json(find(ctx, org.id, row.domain)), joined: on ? backfill(ctx, org.id, row.domain) : 0 };
+  await ctx.db.run("UPDATE org_domains SET auto_join = ? WHERE id = ?", on ? 1 : 0, row.id);
+  return { ...json(await find(ctx, org.id, row.domain)), joined: on ? await backfill(ctx, org.id, row.domain) : 0 };
 }
 
-export function removeDomain(ctx: Ctx, orgHandle: string, actorId: number, domain: string) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
-  const row = find(ctx, org.id, domain);
+export async function removeDomain(ctx: Ctx, orgHandle: string, actorId: number, domain: string) {
+  const org = await ownedOrg(ctx, orgHandle, actorId);
+  const row = await find(ctx, org.id, domain);
   // Members who joined through it stay: leaving is their choice or an owner's, never a side effect of a DNS record.
-  ctx.db.prepare("DELETE FROM org_domains WHERE id = ?").run(row.id);
+  await ctx.db.run("DELETE FROM org_domains WHERE id = ?", row.id);
 }
 
 /** Add every existing person with a confirmed address at the domain who is not a member yet. Returns how many joined. */
-function backfill(ctx: Ctx, orgId: number, domain: string): number {
-  const people = ctx.db.prepare("SELECT owner_id, email FROM users WHERE email_verified_at IS NOT NULL AND lower(email) LIKE ?").all(`%@${domain}`) as { owner_id: number; email: string }[];
+async function backfill(ctx: Ctx, orgId: number, domain: string): Promise<number> {
+  const people = await ctx.db.all("SELECT owner_id, email FROM users WHERE email_verified_at IS NOT NULL AND lower(email) LIKE ?", `%@${domain}`) as { owner_id: number; email: string }[];
   let joined = 0;
   for (const p of people) {
-    if (emailDomain(p.email) !== domain || orgRole(ctx, orgId, p.owner_id)) continue;
-    addMember(ctx, orgId, p.owner_id, "Member");
+    if (emailDomain(p.email) !== domain || await orgRole(ctx, orgId, p.owner_id)) continue;
+    await addMember(ctx, orgId, p.owner_id, "Member");
     joined++;
   }
   return joined;
 }
 
 /** After a person's address is confirmed (or an identity provider vouched for it): join the organizations that verified its domain. */
-export function joinForUser(ctx: Ctx, userId: number): string[] {
-  const user = ctx.db.prepare("SELECT email, email_verified_at FROM users WHERE owner_id = ?").get(userId) as { email: string; email_verified_at: string | null } | undefined;
+export async function joinForUser(ctx: Ctx, userId: number): Promise<string[]> {
+  const user = await ctx.db.get("SELECT email, email_verified_at FROM users WHERE owner_id = ?", userId) as { email: string; email_verified_at: string | null } | undefined;
   if (!user?.email_verified_at) return [];
-  const orgs = ctx.db
-    .prepare("SELECT d.org_id, o.handle FROM org_domains d JOIN owners o ON o.id = d.org_id WHERE d.domain = ? AND d.verified_at IS NOT NULL AND d.auto_join = 1")
-    .all(emailDomain(user.email)) as { org_id: number; handle: string }[];
+  const orgs = await ctx.db.all("SELECT d.org_id, o.handle FROM org_domains d JOIN owners o ON o.id = d.org_id WHERE d.domain = ? AND d.verified_at IS NOT NULL AND d.auto_join = 1", emailDomain(user.email)) as { org_id: number; handle: string }[];
   const joined: string[] = [];
   for (const o of orgs) {
-    if (orgRole(ctx, o.org_id, userId)) continue;
-    addMember(ctx, o.org_id, userId, "Member");
+    if (await orgRole(ctx, o.org_id, userId)) continue;
+    await addMember(ctx, o.org_id, userId, "Member");
     joined.push(o.handle);
   }
   return joined;

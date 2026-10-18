@@ -30,7 +30,7 @@ async function signup(handle: string, email = `${handle}@example.org`) {
   assert.equal(res.status, 201);
   tokens[handle] = ((await res.json()) as { token: string }).token;
 }
-const verify = (handle: string) => ctx.db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(handle);
+const verify = async (handle: string) => await ctx.db.run("UPDATE users SET email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)", handle);
 const lastInviteLink = (to: string) => {
   const mail = [...sentEmails].reverse().find((m) => m.to === to && m.kind === "repo-invite");
   const m = mail?.text.match(/\/invite\?token=([\w-]+)/);
@@ -38,10 +38,10 @@ const lastInviteLink = (to: string) => {
 };
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   await signup("rhea");
-  verify("rhea");
+  await verify("rhea");
   assert.equal((await call("POST", "/repos", "rhea", { name: "basin", visibility: "private" })).status, 201);
 });
 
@@ -62,7 +62,7 @@ test("inviting an address with no account sends a one-time link and lists the in
 test("only the invited address, confirmed, can accept; then the person is a collaborator and the link is spent", async () => {
   const token = lastInviteLink("kofi@field.example")!;
   await signup("someoneelse");
-  verify("someoneelse");
+  await verify("someoneelse");
   const wrong = await call("POST", "/invites/accept", "someoneelse", { token });
   assert.equal(wrong.status, 403);
   assert.equal(wrong.json.error.code, "invite_email_mismatch");
@@ -72,7 +72,7 @@ test("only the invited address, confirmed, can accept; then the person is a coll
   const early = await call("POST", "/invites/accept", "kofi", { token });
   assert.equal(early.status, 403);
   assert.equal(early.json.error.code, "email_unverified");
-  verify("kofi");
+  await verify("kofi");
   const ok = await call("POST", "/invites/accept", "kofi", { token });
   assert.equal(ok.status, 200);
   assert.deepEqual([ok.json.repo, ok.json.role], ["rhea/basin", "Write"]);

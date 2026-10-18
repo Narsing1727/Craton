@@ -53,7 +53,7 @@ function frame(data: Buffer) {
 
 async function peakFor(kind: string, chunks: number) {
   const store = new SlowStore(kind);
-  const app = createApp({ db: openDb(":memory:"), store } as Ctx);
+  const app = await createApp({ db: await openDb(":memory:"), store } as Ctx);
   const headers = { "content-type": "application/json" };
   const signup = await app.request("/v1/auth/signup", { method: "POST", headers, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   const token = ((await signup.json()) as { token: string }).token;

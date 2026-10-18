@@ -53,7 +53,7 @@ async function call(who: string, method: string, path: string, body?: unknown) {
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "arjun", "lakshmi", "outsider"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
@@ -61,10 +61,10 @@ before(async () => {
   }
   assert.equal((await call("rhea", "POST", "/repos", { name: "basin", visibility: "private" })).status, 201);
   // Sharing needs a confirmed email.
-  ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'rhea')").run(new Date().toISOString());
+  await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'rhea')", new Date().toISOString());
   for (const u of ["arjun", "lakshmi"]) assert.equal((await call("rhea", "PUT", `/repos/rhea/basin/collaborators/${u}`, { role: "Write" })).status, 201);
-  const rhea = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number };
-  const repo = getRepoFor(ctx, "rhea", "basin", rhea.id, "write");
+  const rhea = await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number };
+  const repo = await getRepoFor(ctx, "rhea", "basin", rhea.id, "write");
   await commitFiles(ctx, repo, {
     branch: "main", author: "rhea", message: "Initial", timestamp: new Date(),
     changes: { "CODEOWNERS": Buffer.from("terrain/** @arjun\n*.shp @lakshmi\n*.md @outsider @rhea\n"), "terrain/a.tif": Buffer.from("a"), "vectors/c.shp": Buffer.from("c"), "README.md": Buffer.from("r") },
@@ -94,8 +94,8 @@ test("the owners endpoint lists each owner with their files and where they stand
 });
 
 test("the author and people who cannot see the repository are never asked", async () => {
-  const rhea = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number };
-  const repo = getRepoFor(ctx, "rhea", "basin", rhea.id, "write");
+  const rhea = await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number };
+  const repo = await getRepoFor(ctx, "rhea", "basin", rhea.id, "write");
   await commitFiles(ctx, repo, { branch: "docs", from: "main", author: "rhea", message: "Docs", timestamp: new Date(), changes: { "README.md": Buffer.from("r2") } });
   const made = await call("rhea", "POST", "/repos/rhea/basin/pulls", { title: "Docs only", source: "docs" });
   assert.equal(made.status, 201, JSON.stringify(made.json));
@@ -117,8 +117,8 @@ test("with owner approval required, merging waits for every owner and for approv
 });
 
 test("an approval of an earlier version of the branch no longer counts", async () => {
-  const rhea = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number };
-  const repo = getRepoFor(ctx, "rhea", "basin", rhea.id, "write");
+  const rhea = await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number };
+  const repo = await getRepoFor(ctx, "rhea", "basin", rhea.id, "write");
   await commitFiles(ctx, repo, { branch: "terr2", from: "main", author: "rhea", message: "Terrain again", timestamp: new Date(), changes: { "terrain/a.tif": Buffer.from("a3") } });
   const made = await call("rhea", "POST", "/repos/rhea/basin/pulls", { title: "Terrain again", source: "terr2" });
   assert.equal(made.status, 201, JSON.stringify(made.json));

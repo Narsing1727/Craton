@@ -63,14 +63,14 @@ const csv = Buffer.from(gaugesCsv(20));
 const readme = Buffer.from("# Test basin\n\nTerrain and gauges.\n");
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol"]) {
     const r = await call("POST", "/auth/signup", null, { username: u, email: `${u}@example.org`, password: "a-very-long-password" });
     assert.equal(r.status, 201, r.text);
     tokens[u] = r.json.token;
     // Tests act as people who confirmed their email (publishing needs it).
-    ctx.db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')").run();
+    await ctx.db.run("UPDATE users SET email_verified_at = now_iso()");
   }
   assert.equal((await call("POST", "/repos", "alice", { name: "basin", visibility: "public" })).status, 201);
   await push("alice", "alice/basin", { "README.md": readme, "terrain/dem.tif": dem, "gauges.csv": csv }, "main", "Initial import");

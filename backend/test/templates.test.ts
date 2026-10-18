@@ -26,12 +26,12 @@ async function call(method: string, path: string, who: string | null, body?: unk
   } catch {}
   return { status: res.status, json, text };
 }
-const repoOf = () => getRepoFor(ctx, "alice", "basin", (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'alice'").get() as { id: number }).id);
-const put = (branch: string, files: Record<string, string>, from?: string) =>
-  commitFiles(ctx, repoOf(), { branch, author: "alice", message: "templates", timestamp: new Date(), from, changes: Object.fromEntries(Object.entries(files).map(([k, v]) => [k, Buffer.from(v)])) });
+const repoOf = async () => getRepoFor(ctx, "alice", "basin", (await ctx.db.get("SELECT id FROM owners WHERE handle = 'alice'") as { id: number }).id);
+const put = async (branch: string, files: Record<string, string>, from?: string) =>
+  commitFiles(ctx, await repoOf(), { branch, author: "alice", message: "templates", timestamp: new Date(), from, changes: Object.fromEntries(Object.entries(files).map(([k, v]) => [k, Buffer.from(v)])) });
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });

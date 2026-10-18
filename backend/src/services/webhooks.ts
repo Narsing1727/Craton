@@ -146,18 +146,18 @@ function hookJson(r: HookRow) {
   return { id: r.id, url: r.url, format: r.format, events: JSON.parse(r.events) as string[], active: Boolean(r.active), pausedReason: r.paused_reason, createdAt: r.created_at };
 }
 
-function findHook(ctx: Ctx, repo: RepoRow, id: number): HookRow {
-  const row = ctx.db.prepare("SELECT * FROM webhooks WHERE id = ? AND repo_id = ?").get(id, repo.id) as HookRow | undefined;
+async function findHook(ctx: Ctx, repo: RepoRow, id: number): Promise<HookRow> {
+  const row = await ctx.db.get("SELECT * FROM webhooks WHERE id = ? AND repo_id = ?", id, repo.id) as HookRow | undefined;
   if (!row) throw notFound("Webhook");
   return row;
 }
 
-export function listHooks(ctx: Ctx, repo: RepoRow) {
-  const rows = ctx.db.prepare("SELECT * FROM webhooks WHERE repo_id = ? ORDER BY id").all(repo.id) as HookRow[];
-  return rows.map((r) => {
-    const last = ctx.db.prepare("SELECT status, response_code, created_at FROM webhook_deliveries WHERE webhook_id = ? AND status != 'pending' ORDER BY id DESC LIMIT 1").get(r.id) as { status: string; response_code: number | null; created_at: string } | undefined;
+export async function listHooks(ctx: Ctx, repo: RepoRow) {
+  const rows = await ctx.db.all("SELECT * FROM webhooks WHERE repo_id = ? ORDER BY id", repo.id) as HookRow[];
+  return (await Promise.all(rows.map(async (r) => {
+    const last = await ctx.db.get("SELECT status, response_code, created_at FROM webhook_deliveries WHERE webhook_id = ? AND status != 'pending' ORDER BY id DESC LIMIT 1", r.id) as { status: string; response_code: number | null; created_at: string } | undefined;
     return { ...hookJson(r), lastDelivery: last ? { status: last.status, responseCode: last.response_code, at: last.created_at } : null };
-  });
+  })));
 }
 
 /** The format asked for, or the one the address implies (Slack, Teams and Discord have their own webhook hosts). */
@@ -167,42 +167,40 @@ const chooseFormat = (asked: unknown, url: string): Format => {
   return asked as Format;
 };
 
-export function createHook(ctx: Ctx, repo: RepoRow, userId: number, input: { url: string; events: string[]; format?: string }) {
+export async function createHook(ctx: Ctx, repo: RepoRow, userId: number, input: { url: string; events: string[]; format?: string }) {
   const url = validateUrl(input.url).toString();
   const format = chooseFormat(input.format, url);
   const events = cleanEvents(input.events);
-  if ((ctx.db.prepare("SELECT COUNT(*) AS n FROM webhooks WHERE repo_id = ?").get(repo.id) as { n: number }).n >= 10) throw badRequest("A repository can have up to ten webhooks.");
+  if ((await ctx.db.get("SELECT COUNT(*) AS n FROM webhooks WHERE repo_id = ?", repo.id) as { n: number }).n >= 10) throw badRequest("A repository can have up to ten webhooks.");
   const secret = newSecret();
-  const id = Number(ctx.db.prepare("INSERT INTO webhooks (repo_id, url, secret, events, created_by, format) VALUES (?, ?, ?, ?, ?, ?)").run(repo.id, url, secret, JSON.stringify(events), userId, format).lastInsertRowid);
+  const id = Number((await ctx.db.insert("INSERT INTO webhooks (repo_id, url, secret, events, created_by, format) VALUES (?, ?, ?, ?, ?, ?)", repo.id, url, secret, JSON.stringify(events), userId, format)));
   // The secret is shown once, here. A chat room does not check signatures, so a chat webhook has none to show.
-  return format === "json" ? { ...hookJson(findHook(ctx, repo, id)), secret } : hookJson(findHook(ctx, repo, id));
+  return format === "json" ? { ...hookJson(await findHook(ctx, repo, id)), secret } : hookJson(await findHook(ctx, repo, id));
 }
 
-export function updateHook(ctx: Ctx, repo: RepoRow, id: number, patch: { url?: string; events?: string[]; active?: boolean; format?: string }) {
-  findHook(ctx, repo, id);
+export async function updateHook(ctx: Ctx, repo: RepoRow, id: number, patch: { url?: string; events?: string[]; active?: boolean; format?: string }) {
+  await findHook(ctx, repo, id);
   if (patch.url !== undefined) {
     const url = validateUrl(patch.url).toString();
     // A new address implies its own format unless one is given with it.
-    ctx.db.prepare("UPDATE webhooks SET url = ?, format = ? WHERE id = ?").run(url, chooseFormat(patch.format, url), id);
+    await ctx.db.run("UPDATE webhooks SET url = ?, format = ? WHERE id = ?", url, chooseFormat(patch.format, url), id);
   } else if (patch.format !== undefined) {
-    ctx.db.prepare("UPDATE webhooks SET format = ? WHERE id = ?").run(chooseFormat(patch.format, findHook(ctx, repo, id).url), id);
+    await ctx.db.run("UPDATE webhooks SET format = ? WHERE id = ?", chooseFormat(patch.format, (await findHook(ctx, repo, id)).url), id);
   }
-  if (patch.events !== undefined) ctx.db.prepare("UPDATE webhooks SET events = ? WHERE id = ?").run(JSON.stringify(cleanEvents(patch.events)), id);
+  if (patch.events !== undefined) await ctx.db.run("UPDATE webhooks SET events = ? WHERE id = ?", JSON.stringify(cleanEvents(patch.events)), id);
   // Resuming or pausing by hand clears the automatic pause's explanation.
-  if (patch.active !== undefined) ctx.db.prepare("UPDATE webhooks SET active = ?, paused_reason = NULL WHERE id = ?").run(patch.active ? 1 : 0, id);
-  return hookJson(findHook(ctx, repo, id));
+  if (patch.active !== undefined) await ctx.db.run("UPDATE webhooks SET active = ?, paused_reason = NULL WHERE id = ?", patch.active ? 1 : 0, id);
+  return hookJson(await findHook(ctx, repo, id));
 }
 
-export function deleteHook(ctx: Ctx, repo: RepoRow, id: number) {
-  findHook(ctx, repo, id);
-  ctx.db.prepare("DELETE FROM webhooks WHERE id = ?").run(id);
+export async function deleteHook(ctx: Ctx, repo: RepoRow, id: number) {
+  await findHook(ctx, repo, id);
+  await ctx.db.run("DELETE FROM webhooks WHERE id = ?", id);
 }
 
-export function listDeliveries(ctx: Ctx, repo: RepoRow, hookId: number) {
-  findHook(ctx, repo, hookId);
-  const rows = ctx.db
-    .prepare("SELECT id, event, message_id, attempt, status, response_code, error, next_attempt_at, created_at, delivered_at FROM webhook_deliveries WHERE webhook_id = ? ORDER BY id DESC LIMIT 50")
-    .all(hookId) as { id: number; event: string; message_id: string; attempt: number; status: string; response_code: number | null; error: string | null; next_attempt_at: string | null; created_at: string; delivered_at: string | null }[];
+export async function listDeliveries(ctx: Ctx, repo: RepoRow, hookId: number) {
+  await findHook(ctx, repo, hookId);
+  const rows = await ctx.db.all("SELECT id, event, message_id, attempt, status, response_code, error, next_attempt_at, created_at, delivered_at FROM webhook_deliveries WHERE webhook_id = ? ORDER BY id DESC LIMIT 50", hookId) as { id: number; event: string; message_id: string; attempt: number; status: string; response_code: number | null; error: string | null; next_attempt_at: string | null; created_at: string; delivered_at: string | null }[];
   return rows.map((r) => ({ id: r.id, event: r.event, messageId: r.message_id, attempts: r.attempt, status: r.status, responseCode: r.response_code, error: r.error, nextAttemptAt: r.next_attempt_at, createdAt: r.created_at, deliveredAt: r.delivered_at }));
 }
 
@@ -216,14 +214,14 @@ function envelope(repo: RepoRow, event: WebhookEvent, messageId: string, data: u
 }
 
 /** Queue an event for every active webhook subscribed to it, and start delivering. Never throws. */
-export function emit(ctx: Ctx, repo: RepoRow, event: WebhookEvent, data: unknown) {
+export async function emit(ctx: Ctx, repo: RepoRow, event: WebhookEvent, data: unknown) {
   try {
-    const hooks = ctx.db.prepare("SELECT * FROM webhooks WHERE repo_id = ? AND active = 1").all(repo.id) as HookRow[];
+    const hooks = await ctx.db.all("SELECT * FROM webhooks WHERE repo_id = ? AND active = 1", repo.id) as HookRow[];
     let queued = 0;
     for (const h of hooks) {
       if (event !== "ping" && !(JSON.parse(h.events) as string[]).includes(event)) continue;
       const messageId = `msg_${randomUUID().replace(/-/g, "")}`;
-      ctx.db.prepare("INSERT INTO webhook_deliveries (webhook_id, event, message_id, payload, status, next_attempt_at) VALUES (?, ?, ?, ?, 'pending', ?)").run(h.id, event, messageId, envelope(repo, event, messageId, data), now());
+      await ctx.db.run("INSERT INTO webhook_deliveries (webhook_id, event, message_id, payload, status, next_attempt_at) VALUES (?, ?, ?, ?, 'pending', ?)", h.id, event, messageId, envelope(repo, event, messageId, data), now());
       queued++;
     }
     if (queued && config.webhooks.autoDeliver) setImmediate(() => void deliverDue(ctx));
@@ -233,19 +231,19 @@ export function emit(ctx: Ctx, repo: RepoRow, event: WebhookEvent, data: unknown
 }
 
 /** Send a test event to one webhook, whatever its subscriptions. */
-export function ping(ctx: Ctx, repo: RepoRow, hookId: number) {
-  const h = findHook(ctx, repo, hookId);
+export async function ping(ctx: Ctx, repo: RepoRow, hookId: number) {
+  const h = await findHook(ctx, repo, hookId);
   const messageId = `msg_${randomUUID().replace(/-/g, "")}`;
-  ctx.db.prepare("INSERT INTO webhook_deliveries (webhook_id, event, message_id, payload, status, next_attempt_at) VALUES (?, 'ping', ?, ?, 'pending', ?)").run(h.id, messageId, envelope(repo, "ping", messageId, { zen: "Craton webhooks are working." }), now());
+  await ctx.db.run("INSERT INTO webhook_deliveries (webhook_id, event, message_id, payload, status, next_attempt_at) VALUES (?, 'ping', ?, ?, 'pending', ?)", h.id, messageId, envelope(repo, "ping", messageId, { zen: "Craton webhooks are working." }), now());
   if (config.webhooks.autoDeliver) setImmediate(() => void deliverDue(ctx));
 }
 
 /** Put a delivery back in the queue (same message id, as receivers de-duplicate on it) and send it. */
-export function redeliver(ctx: Ctx, repo: RepoRow, hookId: number, deliveryId: number) {
-  findHook(ctx, repo, hookId);
-  const row = ctx.db.prepare("SELECT id FROM webhook_deliveries WHERE id = ? AND webhook_id = ?").get(deliveryId, hookId);
+export async function redeliver(ctx: Ctx, repo: RepoRow, hookId: number, deliveryId: number) {
+  await findHook(ctx, repo, hookId);
+  const row = await ctx.db.get("SELECT id FROM webhook_deliveries WHERE id = ? AND webhook_id = ?", deliveryId, hookId);
   if (!row) throw notFound("Delivery");
-  ctx.db.prepare("UPDATE webhook_deliveries SET status = 'pending', attempt = 0, error = NULL, next_attempt_at = ? WHERE id = ?").run(now(), deliveryId);
+  await ctx.db.run("UPDATE webhook_deliveries SET status = 'pending', attempt = 0, error = NULL, next_attempt_at = ? WHERE id = ?", now(), deliveryId);
   if (config.webhooks.autoDeliver) setImmediate(() => void deliverDue(ctx));
 }
 
@@ -290,23 +288,24 @@ export const PAUSE_AFTER_FAILURES = 10;
  * A receiver that has failed its last ten finished deliveries (each already retried to exhaustion) is not coming back
  * by itself: pause the webhook, say why, and tell the repository's admins once. A person resumes it from Settings.
  */
-function pauseIfDead(ctx: Ctx, webhookId: number, url: string, lastError: string) {
-  const last = ctx.db.prepare("SELECT status FROM webhook_deliveries WHERE webhook_id = ? AND status IN ('succeeded','failed') ORDER BY id DESC LIMIT ?").all(webhookId, PAUSE_AFTER_FAILURES) as { status: string }[];
+async function pauseIfDead(ctx: Ctx, webhookId: number, url: string, lastError: string) {
+  const last = await ctx.db.all("SELECT status FROM webhook_deliveries WHERE webhook_id = ? AND status IN ('succeeded','failed') ORDER BY id DESC LIMIT ?", webhookId, PAUSE_AFTER_FAILURES) as { status: string }[];
   if (last.length < PAUSE_AFTER_FAILURES || last.some((r) => r.status !== "failed")) return;
-  const hook = ctx.db.prepare("SELECT w.active, r.id AS repo_id, r.name, o.handle AS owner, o.id AS owner_id, o.kind FROM webhooks w JOIN repos r ON r.id = w.repo_id JOIN owners o ON o.id = r.owner_id WHERE w.id = ?").get(webhookId) as
+  const hook = await ctx.db.get("SELECT w.active, r.id AS repo_id, r.name, o.handle AS owner, o.id AS owner_id, o.kind FROM webhooks w JOIN repos r ON r.id = w.repo_id JOIN owners o ON o.id = r.owner_id WHERE w.id = ?", webhookId) as
     | { active: number; repo_id: number; name: string; owner: string; owner_id: number; kind: string }
     | undefined;
   if (!hook || !hook.active) return;
   const reason = `Paused automatically after ${PAUSE_AFTER_FAILURES} failed deliveries in a row. Last error: ${lastError}`.slice(0, 300);
-  ctx.db.prepare("UPDATE webhooks SET active = 0, paused_reason = ? WHERE id = ?").run(reason, webhookId);
+  // Only the delivery that actually flips it from active to paused tells the admins (several can finish together).
+  if (!(await ctx.db.run("UPDATE webhooks SET active = 0, paused_reason = ? WHERE id = ? AND active = 1", reason, webhookId)).changes) return;
   const admins = new Set<string>();
-  const addEmail = (sql: string, ...args: number[]) => {
-    for (const row of ctx.db.prepare(sql).all(...args) as { email: string }[]) admins.add(row.email);
+  const addEmail = async (sql: string, ...args: number[]) => {
+    for (const row of await ctx.db.all(sql, ...args) as { email: string }[]) admins.add(row.email);
   };
-  if (hook.kind === "org") addEmail("SELECT u.email FROM memberships m JOIN users u ON u.owner_id = m.user_id WHERE m.org_id = ? AND m.role = 'Owner'", hook.owner_id);
-  else addEmail("SELECT email FROM users WHERE owner_id = ?", hook.owner_id);
-  addEmail("SELECT u.email FROM collaborators c JOIN users u ON u.owner_id = c.user_id WHERE c.repo_id = ? AND c.role = 'Admin'", hook.repo_id);
-  for (const to of admins) if (wantsEmail(ctx, to, "webhook_paused")) void sendWebhookPausedEmail(to, `${hook.owner}/${hook.name}`, url, lastError, `${config.webUrl}/${hook.owner}/${hook.name}/settings/webhooks`);
+  if (hook.kind === "org") await addEmail("SELECT u.email FROM memberships m JOIN users u ON u.owner_id = m.user_id WHERE m.org_id = ? AND m.role = 'Owner'", hook.owner_id);
+  else await addEmail("SELECT email FROM users WHERE owner_id = ?", hook.owner_id);
+  await addEmail("SELECT u.email FROM collaborators c JOIN users u ON u.owner_id = c.user_id WHERE c.repo_id = ? AND c.role = 'Admin'", hook.repo_id);
+  for (const to of admins) if (await wantsEmail(ctx, to, "webhook_paused")) void sendWebhookPausedEmail(to, `${hook.owner}/${hook.name}`, url, lastError, `${config.webUrl}/${hook.owner}/${hook.name}/settings/webhooks`);
 }
 
 async function attempt(ctx: Ctx, d: DueRow) {
@@ -333,24 +332,20 @@ async function attempt(ctx: Ctx, d: DueRow) {
   }
   const tries = d.attempt + 1;
   if (result.ok) {
-    ctx.db.prepare("UPDATE webhook_deliveries SET status = 'succeeded', attempt = ?, response_code = ?, error = NULL, next_attempt_at = NULL, delivered_at = ? WHERE id = ?").run(tries, result.code, now(), d.id);
+    await ctx.db.run("UPDATE webhook_deliveries SET status = 'succeeded', attempt = ?, response_code = ?, error = NULL, next_attempt_at = NULL, delivered_at = ? WHERE id = ?", tries, result.code, now(), d.id);
   } else if (tries >= BACKOFF_MS.length) {
-    ctx.db.prepare("UPDATE webhook_deliveries SET status = 'failed', attempt = ?, response_code = ?, error = ?, next_attempt_at = NULL WHERE id = ?").run(tries, result.code, result.error, d.id);
-    pauseIfDead(ctx, d.webhook_id, d.url, result.error ?? `HTTP ${result.code}`);
+    await ctx.db.run("UPDATE webhook_deliveries SET status = 'failed', attempt = ?, response_code = ?, error = ?, next_attempt_at = NULL WHERE id = ?", tries, result.code, result.error, d.id);
+    await pauseIfDead(ctx, d.webhook_id, d.url, result.error ?? `HTTP ${result.code}`);
   } else {
-    ctx.db.prepare("UPDATE webhook_deliveries SET attempt = ?, response_code = ?, error = ?, next_attempt_at = ? WHERE id = ?").run(tries, result.code, result.error, new Date(Date.now() + BACKOFF_MS[tries]).toISOString(), d.id);
+    await ctx.db.run("UPDATE webhook_deliveries SET attempt = ?, response_code = ?, error = ?, next_attempt_at = ? WHERE id = ?", tries, result.code, result.error, new Date(Date.now() + BACKOFF_MS[tries]).toISOString(), d.id);
   }
 }
 
 /** Send everything that is due. Safe to call from a timer and from emit() at once. */
 export async function deliverDue(ctx: Ctx) {
-  const due = ctx.db
-    .prepare(
-      `SELECT d.id, d.webhook_id, d.event, d.message_id, d.payload, d.attempt, w.url, w.secret, w.format, o.handle AS owner, r.name AS repo_name
+  const due = await ctx.db.all(`SELECT d.id, d.webhook_id, d.event, d.message_id, d.payload, d.attempt, w.url, w.secret, w.format, o.handle AS owner, r.name AS repo_name
        FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id JOIN repos r ON r.id = w.repo_id JOIN owners o ON o.id = r.owner_id
-       WHERE d.status = 'pending' AND d.next_attempt_at <= ? ORDER BY d.id LIMIT 25`,
-    )
-    .all(now()) as DueRow[];
+       WHERE d.status = 'pending' AND d.next_attempt_at <= ? ORDER BY d.id LIMIT 25`, now()) as DueRow[];
   await Promise.all(
     due
       .filter((d) => !inflight.has(d.id))

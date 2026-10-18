@@ -1,5 +1,6 @@
 // Milestones: real records per repository, who may change them, and how issues follow them.
 
+import { statement } from "../src/db/db.ts";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
@@ -25,17 +26,17 @@ async function call(method: string, path: string, who: string | null, body?: unk
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol", "dave"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
   }
   assert.equal((await call("POST", "/repos", "alice", { name: "basin", visibility: "private" })).status, 201);
-  const repo = ctx.db.prepare("SELECT id FROM repos WHERE name = 'basin'").get() as { id: number };
-  const grant = ctx.db.prepare("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, (SELECT id FROM owners WHERE handle = ?), ?)");
-  grant.run(repo.id, "bob", "Write");
-  grant.run(repo.id, "carol", "Read");
+  const repo = await ctx.db.get("SELECT id FROM repos WHERE name = 'basin'") as { id: number };
+  const grant = statement(ctx.db, "INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, (SELECT id FROM owners WHERE handle = ?), ?)");
+  await grant.run(repo.id, "bob", "Write");
+  await grant.run(repo.id, "carol", "Read");
 });
 
 const titles = async () => ((await call("GET", "/repos/alice/basin/milestones", "alice")).json as { title: string }[]).map((m) => m.title);
@@ -139,5 +140,5 @@ test("milestones belong to their repository", async () => {
 
 test("deleting a repository removes its milestones", async () => {
   assert.equal((await call("DELETE", "/repos/dave/other", "dave", {})).status, 204);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM milestones WHERE repo_id NOT IN (SELECT id FROM repos)").get() as { n: number }).n, 0);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM milestones WHERE repo_id NOT IN (SELECT id FROM repos)") as { n: number }).n, 0);
 });

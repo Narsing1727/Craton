@@ -93,7 +93,7 @@ before(async () => {
   });
   await new Promise<void>((r) => receiver.listen(0, "127.0.0.1", r));
   receiverUrl = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}/services/T0/B0/xyz`;
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;

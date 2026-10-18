@@ -1312,7 +1312,7 @@ if (!run) {
   help();
   process.exitCode = 2;
 } else {
-  run().catch((err) => {
+  await run().catch((err) => {
     process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
     // 2 is a usage mistake (wrong arguments), 1 is anything that went wrong while doing the job.
     process.exitCode = err instanceof Error && /^Usage:/.test(err.message) ? 2 : 1;

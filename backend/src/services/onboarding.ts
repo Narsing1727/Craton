@@ -17,20 +17,20 @@ export type ChecklistItem = { id: string; done: boolean };
  * Activation steps, each tied to something the user does in the product. Account creation is
  * always done, so the list never starts at zero.
  */
-export function checklist(ctx: Ctx, user: User): ChecklistItem[] {
-  const owners = writableOwners(ctx, user.id);
-  const repos = listRepos(ctx, user.id).filter((r) => owners.includes(r.owner));
+export async function checklist(ctx: Ctx, user: User): Promise<ChecklistItem[]> {
+  const owners = await writableOwners(ctx, user.id);
+  const repos = (await listRepos(ctx, user.id)).filter((r) => owners.includes(r.owner));
   const ids = repos.map((r) => r.id);
-  const inRepos = (sql: string, ...args: (string | number)[]) =>
-    ids.length ? Boolean(ctx.db.prepare(sql.replace("{ids}", ids.join(","))).get(...args)) : false;
+  const inRepos = async (sql: string, ...args: (string | number)[]) =>
+    ids.length ? Boolean(await ctx.db.get(sql.replace("{ids}", ids.join(",")), ...args)) : false;
 
   return [
     { id: "account", done: true },
     { id: "repository", done: repos.length > 0 },
-    { id: "merge", done: inRepos("SELECT 1 FROM pulls WHERE repo_id IN ({ids}) AND state = 'merged' LIMIT 1") },
-    { id: "cli", done: Boolean(ctx.db.prepare("SELECT 1 FROM tokens WHERE user_id = ? AND kind = 'pat' AND last_used_at IS NOT NULL LIMIT 1").get(user.id)) },
+    { id: "merge", done: await inRepos("SELECT 1 FROM pulls WHERE repo_id IN ({ids}) AND state = 'merged' LIMIT 1") },
+    { id: "cli", done: Boolean(await ctx.db.get("SELECT 1 FROM tokens WHERE user_id = ? AND kind = 'pat' AND last_used_at IS NOT NULL LIMIT 1", user.id)) },
     // A push of their own (the push endpoint the CLI uses), not a merge or branch made in the app.
-    { id: "push", done: inRepos("SELECT 1 FROM ref_log WHERE repo_id IN ({ids}) AND actor = ? AND via = 'push' LIMIT 1", user.handle) },
+    { id: "push", done: await inRepos("SELECT 1 FROM ref_log WHERE repo_id IN ({ids}) AND actor = ? AND via = 'push' LIMIT 1", user.handle) },
   ];
 }
 
@@ -86,7 +86,7 @@ export async function importSample(ctx: Ctx, repo: RepoRow, user: User) {
     timestamp: at(1),
     changes: { "terrain/basin_dem.tif": dem({ from: 420, to: 480, offset: -0.35 }) },
   });
-  createPull(ctx, repo, user.id, {
+  await createPull(ctx, repo, user.id, {
     title: "Re-survey the right bank after bank erosion",
     body: "The 2024 survey found the right bank 0.35 m lower between rows 420 and 480. Only those rows changed, so only a few chunks are new. Checks passed; review the change and merge it.",
     source: "sample-resurvey",

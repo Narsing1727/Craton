@@ -38,7 +38,7 @@ export class FsStore implements ChunkStore {
     await fs.mkdir(path.dirname(file), { recursive: true });
     const tmp = `${file}.${randomUUID()}.tmp`;
     await fs.writeFile(tmp, stored);
-    const swap = fs.rename(tmp, file); // replaces the old file in one step
+    const swap: Promise<void> = fs.rename(tmp, file); // replaces the old file in one step
     this.replacing.set(hash, swap.then(() => undefined, () => undefined));
     try {
       await swap;

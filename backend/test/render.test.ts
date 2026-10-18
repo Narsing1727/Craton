@@ -241,7 +241,7 @@ function pixel(png: Buffer, x: number, y: number) {
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "sol"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
@@ -286,8 +286,8 @@ test("a shapefile renders as SVG, and a diff counts added, changed and unchanged
   const features = catchments(7);
   features[2].ring = features[2].ring.map(([x, y]) => [x + 300, y]);
   const set = shapefile(features);
-  const owner = ctx.db.prepare("SELECT o.id FROM owners o WHERE o.handle = 'rhea'").get() as { id: number };
-  await commitFiles(ctx, getRepoFor(ctx, "rhea", "basin", owner.id), {
+  const owner = await ctx.db.get("SELECT o.id FROM owners o WHERE o.handle = 'rhea'") as { id: number };
+  await commitFiles(ctx, await getRepoFor(ctx, "rhea", "basin", owner.id), {
     branch: "catchments-v2",
     from: "main",
     author: "rhea",
@@ -301,8 +301,8 @@ test("a shapefile renders as SVG, and a diff counts added, changed and unchanged
 });
 
 test("a change only in the attribute table still counts as a changed feature", async () => {
-  const owner = ctx.db.prepare("SELECT o.id FROM owners o WHERE o.handle = 'rhea'").get() as { id: number };
-  const repo = getRepoFor(ctx, "rhea", "basin", owner.id);
+  const owner = await ctx.db.get("SELECT o.id FROM owners o WHERE o.handle = 'rhea'") as { id: number };
+  const repo = await getRepoFor(ctx, "rhea", "basin", owner.id);
   const files = (crest: number) => Object.fromEntries(Object.entries(shapefile(levees(crest))).map(([ext, buf]) => [`vectors/levees.${ext}`, buf]));
   await commitFiles(ctx, repo, { branch: "main", author: "rhea", message: "Levees", timestamp: new Date(), changes: files(4.0) });
   await commitFiles(ctx, repo, { branch: "raise-crest", from: "main", author: "rhea", message: "Raise crest", timestamp: new Date(), changes: files(4.5) });
@@ -391,8 +391,8 @@ test("JSON is compressed when asked (never otherwise), PNGs are left alone, and 
 test("warming a pushed commit draws its previews ahead of the first viewer", async () => {
   const refs = (await (await raw("/repos/rhea/basin/refs")).json()) as { branches: { name: string; commit_id: string }[] };
   const tip = refs.branches.find((b) => b.name === "sample-resurvey")!.commit_id;
-  const ownerId = (ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get("rhea") as { id: number }).id;
-  const repo = getRepoFor(ctx, "rhea", "basin", ownerId);
+  const ownerId = (await ctx.db.get("SELECT id FROM owners WHERE handle = ?", "rhea") as { id: number }).id;
+  const repo = await getRepoFor(ctx, "rhea", "basin", ownerId);
   const timed = async (size: number) => {
     const t = performance.now();
     const res = await raw(`/repos/rhea/basin/render/sample-resurvey/terrain/basin_dem.tif?base=main&size=${size}`);

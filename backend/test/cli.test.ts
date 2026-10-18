@@ -50,7 +50,7 @@ async function api(method: string, p: string, body?: unknown, auth?: string) {
     headers: { "content-type": "application/json", ...(auth ? { authorization: `Bearer ${auth}` } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
-  return res.json() as Promise<any>;
+  return await res.json() as Promise<any>;
 }
 
 before(async () => {

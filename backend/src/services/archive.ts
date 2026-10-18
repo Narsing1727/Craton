@@ -71,10 +71,10 @@ function centralEntry(name: Buffer, time: number, date: number, crc: number, siz
   return c;
 }
 
-export function planArchive(ctx: Ctx, repo: RepoRow, ref: string, folder = "") {
-  const commitId = resolveRef(ctx, repo, ref);
-  const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
-  const tree = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+export async function planArchive(ctx: Ctx, repo: RepoRow, ref: string, folder = "") {
+  const commitId = await resolveRef(ctx, repo, ref);
+  const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
+  const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
 
   const dir = folder.replace(/^\/+|\/+$/g, "");
   if (dir.split("/").some((part) => part === ".." || part === ".")) throw new ApiError(400, "bad_request", "That folder path isn’t valid.");
@@ -82,11 +82,11 @@ export function planArchive(ctx: Ctx, repo: RepoRow, ref: string, folder = "") {
   if (!inside.length) throw notFound(dir ? `Folder ${dir}` : "Files in this commit");
 
   const root = dir ? dir.split("/").pop()! : `${repo.name}-${commitId.slice(0, 7)}`;
-  const entries: Entry[] = inside.map((e) => ({
+  const entries: Entry[] = (await Promise.all(inside.map(async (e) => ({
     name: Buffer.from(`${root}/${dir ? e.path.slice(dir.length + 1) : e.path}`, "utf8"),
-    blob: getObject<BlobObject>(ctx, repo, e.blob, "blob"),
+    blob: await getObject<BlobObject>(ctx, repo, e.blob, "blob"),
     size: e.size,
-  }));
+  }))));
 
   const total = entries.reduce((n, e) => n + e.size, 0);
   if (entries.length > MAX_ENTRIES || total > ZIP_LIMIT || entries.some((e) => e.size > ZIP_LIMIT)) {
@@ -102,11 +102,11 @@ export function planArchive(ctx: Ctx, repo: RepoRow, ref: string, folder = "") {
  * One ZIP of the default branch of each repository a person owns (a folder per repository), for the account data
  * export. Empty repositories are skipped. Over the ZIP limits it refuses and points to the CLI, like any archive.
  */
-export function planAccountBundle(ctx: Ctx, repos: RepoRow[], handle: string) {
-  const parts: ReturnType<typeof planArchive>[] = [];
+export async function planAccountBundle(ctx: Ctx, repos: RepoRow[], handle: string) {
+  const parts: Awaited<ReturnType<typeof planArchive>>[] = [];
   for (const repo of repos) {
     try {
-      parts.push(planArchive(ctx, repo, repo.default_branch));
+      parts.push(await planArchive(ctx, repo, repo.default_branch));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) continue; // nothing committed yet
       throw err;
@@ -125,7 +125,7 @@ export function planAccountBundle(ctx: Ctx, repos: RepoRow[], handle: string) {
 }
 
 /** The archive as a byte stream. Stops reading chunks as soon as the consumer goes away. */
-export function archiveStream(ctx: Ctx, plan: ReturnType<typeof planArchive>): ReadableStream<Uint8Array> {
+export function archiveStream(ctx: Ctx, plan: Awaited<ReturnType<typeof planArchive>>): ReadableStream<Uint8Array> {
   const { time, date } = dosTime(plan.timestamp);
   const central: Buffer[] = [];
   let offset = 0;

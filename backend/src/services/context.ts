@@ -9,8 +9,8 @@ import { config, r2Enabled } from "../config.ts";
 /** Everything a service needs: the database and the chunk byte store. */
 export type Ctx = { db: DB; store: ChunkStore };
 
-export function createContext(opts?: { dbFile?: string; store?: ChunkStore }): Ctx {
-  const db = openDb(opts?.dbFile ?? path.join(config.dataDir, "craton.db"));
+export async function createContext(opts?: { database?: string; store?: ChunkStore }): Promise<Ctx> {
+  const db = await openDb(opts?.database ?? (config.database.url || `pglite:${path.join(config.dataDir, "pgdata")}`), { poolMax: config.database.poolMax, caFile: config.database.caFile || undefined });
   const store =
     opts?.store ??
     (r2Enabled()
@@ -18,6 +18,16 @@ export function createContext(opts?: { dbFile?: string; store?: ChunkStore }): C
       : new FsStore(path.join(config.dataDir, "chunks")));
   return { db, store };
 }
+
+/** Do `fn` with a context whose database is one transaction: everything it writes commits together or not at all. */
+export const inTransaction = <T>(ctx: Ctx, fn: (ctx: Ctx) => Promise<T>): Promise<T> => ctx.db.tx((db) => fn({ ...ctx, db }));
+
+/** Serialise the people who number things in one repository (issues and pull requests share a counter): held until the transaction ends. */
+export const lockNumbering = (db: DB, repoId: number) => db.get("SELECT pg_advisory_xact_lock(7266, ?::int)", repoId);
+
+/** Whether a database error is a violated unique constraint (Postgres code 23505), a missing referenced row (23503) or a failed check (23514). */
+export const isUnique = (err: unknown) => (err as { code?: string })?.code === "23505";
+export const isForeignKey = (err: unknown) => (err as { code?: string })?.code === "23503";
 
 /** Errors that map to HTTP status codes and a stable `code` for clients. */
 export class ApiError extends Error {

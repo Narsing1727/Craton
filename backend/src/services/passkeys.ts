@@ -51,27 +51,27 @@ function bytes(v: unknown, what: string, max = 16384): Buffer {
 
 // ── Challenges ───────────────────────────────────────────────────────────────
 
-function newChallenge(ctx: Ctx, kind: "create" | "get", userId: number | null) {
-  ctx.db.prepare("DELETE FROM passkey_challenges WHERE expires_at < ?").run(iso());
+async function newChallenge(ctx: Ctx, kind: "create" | "get", userId: number | null) {
+  await ctx.db.run("DELETE FROM passkey_challenges WHERE expires_at < ?", iso());
   const challenge = b64u(randomBytes(32));
-  ctx.db.prepare("INSERT INTO passkey_challenges (hash, kind, user_id, expires_at) VALUES (?, ?, ?, ?)").run(sha256(challenge).toString("hex"), kind, userId, iso(CHALLENGE_MINUTES * 60_000));
+  await ctx.db.run("INSERT INTO passkey_challenges (hash, kind, user_id, expires_at) VALUES (?, ?, ?, ?)", sha256(challenge).toString("hex"), kind, userId, iso(CHALLENGE_MINUTES * 60_000));
   return challenge;
 }
 
 /** Single use: gone as soon as it is looked at, whatever happens next. */
-function consumeChallenge(ctx: Ctx, challenge: string, kind: "create" | "get", userId: number | null) {
+async function consumeChallenge(ctx: Ctx, challenge: string, kind: "create" | "get", userId: number | null) {
   const hash = sha256(challenge).toString("hex");
-  const row = ctx.db.prepare("SELECT kind, user_id, expires_at FROM passkey_challenges WHERE hash = ?").get(hash) as { kind: string; user_id: number | null; expires_at: string } | undefined;
-  ctx.db.prepare("DELETE FROM passkey_challenges WHERE hash = ?").run(hash);
+  const row = await ctx.db.get("SELECT kind, user_id, expires_at FROM passkey_challenges WHERE hash = ?", hash) as { kind: string; user_id: number | null; expires_at: string } | undefined;
+  await ctx.db.run("DELETE FROM passkey_challenges WHERE hash = ?", hash);
   if (!row || row.expires_at < iso()) throw bad("This passkey request expired or was already used. Start again.");
   if (row.kind !== kind || row.user_id !== userId) throw bad("This passkey request was not made for this step.");
 }
 
-function userHandle(ctx: Ctx, userId: number): string {
-  const row = ctx.db.prepare("SELECT handle FROM passkey_users WHERE user_id = ?").get(userId) as { handle: string } | undefined;
+async function userHandle(ctx: Ctx, userId: number): Promise<string> {
+  const row = await ctx.db.get("SELECT handle FROM passkey_users WHERE user_id = ?", userId) as { handle: string } | undefined;
   if (row) return row.handle;
   const handle = b64u(randomBytes(32));
-  ctx.db.prepare("INSERT INTO passkey_users (user_id, handle) VALUES (?, ?)").run(userId, handle);
+  await ctx.db.run("INSERT INTO passkey_users (user_id, handle) VALUES (?, ?)", userId, handle);
   return handle;
 }
 
@@ -143,13 +143,13 @@ function signatureOk(alg: number, spki: Buffer, data: Buffer, signature: Buffer)
 
 export type PasskeyRow = { id: string; name: string; created_at: string; last_used_at: string | null; transports: string; device_type: string; backed_up: number };
 
-export function registrationOptions(ctx: Ctx, user: { id: number; handle: string; name: string }) {
-  const have = ctx.db.prepare("SELECT id, transports FROM passkeys WHERE user_id = ?").all(user.id) as { id: string; transports: string }[];
+export async function registrationOptions(ctx: Ctx, user: { id: number; handle: string; name: string }) {
+  const have = await ctx.db.all("SELECT id, transports FROM passkeys WHERE user_id = ?", user.id) as { id: string; transports: string }[];
   if (have.length >= MAX_PER_USER) throw conflict("too_many", `An account can have up to ${MAX_PER_USER} passkeys. Remove one first.`);
   return {
-    challenge: newChallenge(ctx, "create", user.id),
+    challenge: await newChallenge(ctx, "create", user.id),
     rp: { id: rpId(), name: "Craton" },
-    user: { id: userHandle(ctx, user.id), name: user.handle, displayName: user.name || user.handle },
+    user: { id: await userHandle(ctx, user.id), name: user.handle, displayName: user.name || user.handle },
     pubKeyCredParams: ALGS.map((alg) => ({ type: "public-key", alg })),
     timeout: CHALLENGE_MINUTES * 60_000,
     attestation: "none",
@@ -160,11 +160,11 @@ export function registrationOptions(ctx: Ctx, user: { id: number; handle: string
 
 type Registration = { id?: unknown; rawId?: unknown; type?: unknown; response?: { clientDataJSON?: unknown; attestationObject?: unknown; transports?: unknown } };
 
-export function finishRegistration(ctx: Ctx, user: { id: number }, input: { credential?: Registration; name?: unknown }) {
+export async function finishRegistration(ctx: Ctx, user: { id: number }, input: { credential?: Registration; name?: unknown }) {
   const cred = input.credential;
   if (!cred || typeof cred !== "object" || cred.type !== "public-key" || !cred.response) throw bad("The browser sent no passkey.");
   const clientData = bytes(cred.response.clientDataJSON, "client data");
-  consumeChallenge(ctx, checkClientData(clientData, "webauthn.create"), "create", user.id);
+  await consumeChallenge(ctx, checkClientData(clientData, "webauthn.create"), "create", user.id);
 
   let attestation: unknown;
   try {
@@ -190,20 +190,18 @@ export function finishRegistration(ctx: Ctx, user: { id: number }, input: { cred
   const { alg, spki } = coseToSpki(cose);
 
   const id = b64u(credentialId);
-  if (ctx.db.prepare("SELECT 1 FROM passkeys WHERE id = ?").get(id)) throw conflict("passkey_exists", "That passkey is already registered.");
+  if (await ctx.db.get("SELECT 1 FROM passkeys WHERE id = ?", id)) throw conflict("passkey_exists", "That passkey is already registered.");
   const name = (typeof input.name === "string" ? input.name : "").replace(/\s+/g, " ").trim().slice(0, 60) || "Passkey";
   const transports = Array.isArray(cred.response.transports) ? cred.response.transports.filter((t): t is string => typeof t === "string" && /^[a-z-]{1,16}$/.test(t)).slice(0, 6).join(",") : "";
-  ctx.db
-    .prepare("INSERT INTO passkeys (id, user_id, name, public_key, alg, sign_count, transports, device_type, backed_up) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(id, user.id, name, spki, alg, auth.counter, transports, auth.flags & FLAG_BE ? "multiDevice" : "singleDevice", auth.flags & FLAG_BS ? 1 : 0);
+  await ctx.db.run("INSERT INTO passkeys (id, user_id, name, public_key, alg, sign_count, transports, device_type, backed_up) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", id, user.id, name, spki, alg, auth.counter, transports, auth.flags & FLAG_BE ? "multiDevice" : "singleDevice", auth.flags & FLAG_BS ? 1 : 0);
   return { id, name };
 }
 
 // ── Signing in ───────────────────────────────────────────────────────────────
 
 /** Options for the browser: no list of credentials, so the device offers whichever passkeys it holds for this site. */
-export function loginOptions(ctx: Ctx) {
-  return { challenge: newChallenge(ctx, "get", null), rpId: rpId(), timeout: CHALLENGE_MINUTES * 60_000, userVerification: "preferred", allowCredentials: [] as unknown[] };
+export async function loginOptions(ctx: Ctx) {
+  return { challenge: await newChallenge(ctx, "get", null), rpId: rpId(), timeout: CHALLENGE_MINUTES * 60_000, userVerification: "preferred", allowCredentials: [] as unknown[] };
 }
 
 type Assertion = { id?: unknown; rawId?: unknown; type?: unknown; response?: { clientDataJSON?: unknown; authenticatorData?: unknown; signature?: unknown; userHandle?: unknown } };
@@ -211,14 +209,14 @@ type Assertion = { id?: unknown; rawId?: unknown; type?: unknown; response?: { c
 const refused = () => new ApiError(401, "invalid_passkey", "That passkey couldn’t be verified. Try again, or sign in another way.");
 
 /** Who this assertion proves, and whether the authenticator also verified the person (a PIN, fingerprint or face). */
-export function finishLogin(ctx: Ctx, input: { credential?: Assertion }): { userId: number; userVerified: boolean; credentialId: string; rolledBack: boolean } {
+export async function finishLogin(ctx: Ctx, input: { credential?: Assertion }): Promise<{ userId: number; userVerified: boolean; credentialId: string; rolledBack: boolean }> {
   const cred = input.credential;
   if (!cred || typeof cred !== "object" || cred.type !== "public-key" || !cred.response) throw bad("The browser sent no passkey.");
   const clientDataRaw = bytes(cred.response.clientDataJSON, "client data");
-  consumeChallenge(ctx, checkClientData(clientDataRaw, "webauthn.get"), "get", null);
+  await consumeChallenge(ctx, checkClientData(clientDataRaw, "webauthn.get"), "get", null);
 
   const credentialId = b64u(bytes(cred.rawId, "credential id", 1023));
-  const row = ctx.db.prepare("SELECT user_id, public_key, alg, sign_count FROM passkeys WHERE id = ?").get(credentialId) as { user_id: number; public_key: Buffer; alg: number; sign_count: number } | undefined;
+  const row = await ctx.db.get("SELECT user_id, public_key, alg, sign_count FROM passkeys WHERE id = ?", credentialId) as { user_id: number; public_key: Buffer; alg: number; sign_count: number } | undefined;
   if (!row) throw refused();
 
   const authData = bytes(cred.response.authenticatorData, "authenticator data", 4096);
@@ -226,7 +224,7 @@ export function finishLogin(ctx: Ctx, input: { credential?: Assertion }): { user
   checkAuthData(auth);
   // When the device returns who it thinks the account is, it must be this account.
   if (typeof cred.response.userHandle === "string" && cred.response.userHandle.length > 0) {
-    const expected = ctx.db.prepare("SELECT handle FROM passkey_users WHERE user_id = ?").get(row.user_id) as { handle: string } | undefined;
+    const expected = await ctx.db.get("SELECT handle FROM passkey_users WHERE user_id = ?", row.user_id) as { handle: string } | undefined;
     if (!expected || expected.handle !== cred.response.userHandle) throw refused();
   }
   const signature = bytes(cred.response.signature, "signature", 2048);
@@ -235,17 +233,15 @@ export function finishLogin(ctx: Ctx, input: { credential?: Assertion }): { user
   // A counter that does not move forward means the key may have been copied. Counters of zero (synced passkeys) are exempt.
   const rolledBack = (row.sign_count > 0 || auth.counter > 0) && auth.counter <= row.sign_count;
   if (!rolledBack) {
-    ctx.db
-      .prepare("UPDATE passkeys SET sign_count = ?, last_used_at = ?, backed_up = ?, device_type = ? WHERE id = ?")
-      .run(auth.counter, iso(), auth.flags & FLAG_BS ? 1 : 0, auth.flags & FLAG_BE ? "multiDevice" : "singleDevice", credentialId);
+    await ctx.db.run("UPDATE passkeys SET sign_count = ?, last_used_at = ?, backed_up = ?, device_type = ? WHERE id = ?", auth.counter, iso(), auth.flags & FLAG_BS ? 1 : 0, auth.flags & FLAG_BE ? "multiDevice" : "singleDevice", credentialId);
   }
   return { userId: row.user_id, userVerified: Boolean(auth.flags & FLAG_UV), credentialId, rolledBack };
 }
 
 // ── Managing ─────────────────────────────────────────────────────────────────
 
-export function listPasskeys(ctx: Ctx, userId: number) {
-  return (ctx.db.prepare("SELECT id, name, created_at, last_used_at, transports, device_type, backed_up FROM passkeys WHERE user_id = ? ORDER BY created_at").all(userId) as PasskeyRow[]).map((p) => ({
+export async function listPasskeys(ctx: Ctx, userId: number) {
+  return (await ctx.db.all("SELECT id, name, created_at, last_used_at, transports, device_type, backed_up FROM passkeys WHERE user_id = ? ORDER BY created_at", userId) as PasskeyRow[]).map((p) => ({
     id: p.id,
     name: p.name,
     createdAt: p.created_at,
@@ -256,14 +252,14 @@ export function listPasskeys(ctx: Ctx, userId: number) {
   }));
 }
 
-export const countPasskeys = (ctx: Ctx, userId: number) => (ctx.db.prepare("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?").get(userId) as { n: number }).n;
+export const countPasskeys = async (ctx: Ctx, userId: number) => (await ctx.db.get("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?", userId) as { n: number }).n;
 
-export function renamePasskey(ctx: Ctx, userId: number, id: string, name: unknown) {
+export async function renamePasskey(ctx: Ctx, userId: number, id: string, name: unknown) {
   const clean = (typeof name === "string" ? name : "").replace(/\s+/g, " ").trim().slice(0, 60);
   if (!clean) throw badRequest("Give the passkey a name, such as “Work laptop”.");
-  if (Number(ctx.db.prepare("UPDATE passkeys SET name = ? WHERE id = ? AND user_id = ?").run(clean, id, userId).changes) === 0) throw notFound("Passkey");
+  if (Number((await ctx.db.run("UPDATE passkeys SET name = ? WHERE id = ? AND user_id = ?", clean, id, userId)).changes) === 0) throw notFound("Passkey");
 }
 
-export function removePasskey(ctx: Ctx, userId: number, id: string) {
-  if (Number(ctx.db.prepare("DELETE FROM passkeys WHERE id = ? AND user_id = ?").run(id, userId).changes) === 0) throw notFound("Passkey");
+export async function removePasskey(ctx: Ctx, userId: number, id: string) {
+  if (Number((await ctx.db.run("DELETE FROM passkeys WHERE id = ? AND user_id = ?", id, userId)).changes) === 0) throw notFound("Passkey");
 }

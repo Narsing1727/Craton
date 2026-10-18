@@ -29,12 +29,12 @@ async function call(method: string, path: string, who: string | null, body?: unk
   return { status: res.status, json, text };
 }
 
-const repoOf = (owner: string, name: string) => getRepoFor(ctx, owner, name, (ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get(owner) as { id: number }).id);
+const repoOf = async (owner: string, name: string) => getRepoFor(ctx, owner, name, (await ctx.db.get("SELECT id FROM owners WHERE handle = ?", owner) as { id: number }).id);
 const names = async (query: string, who: string | null = "rhea") => ((await call("GET", `/repos${query}`, who)).json as { name: string }[]).map((r) => r.name).sort();
-const extentRows = () => (ctx.db.prepare("SELECT COUNT(*) AS n FROM blob_extents").get() as { n: number }).n;
+const extentRows = async () => (await ctx.db.get("SELECT COUNT(*) AS n FROM blob_extents") as { n: number }).n;
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "ines"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
@@ -43,22 +43,22 @@ before(async () => {
   }
   // Kerala (zone 43N), a raster and a shapefile; an Alpine tile in geographic degrees; a repository with no map data.
   for (const [who, name, vis] of [["rhea", "kerala", "private"], ["rhea", "alps", "private"], ["rhea", "tables", "private"], ["ines", "hidden", "private"]] as const) assert.equal((await call("POST", "/repos", who, { name, visibility: vis })).status, 201, name);
-  await commitFiles(ctx, repoOf("rhea", "kerala"), {
+  await commitFiles(ctx, await repoOf("rhea", "kerala"), {
     branch: "main",
     author: "rhea",
     message: "Basin",
     timestamp: new Date(),
     changes: { "terrain/dem.tif": geotiff({ width: 512, height: 512, epsg: 32643, nodata: -9999, seed: 3 }), ...Object.fromEntries(Object.entries(shapefile(catchments(6))).map(([ext, b]) => [`vectors/catch.${ext}`, b])) },
   });
-  await commitFiles(ctx, repoOf("rhea", "alps"), {
+  await commitFiles(ctx, await repoOf("rhea", "alps"), {
     branch: "main",
     author: "rhea",
     message: "Tile",
     timestamp: new Date(),
     changes: { "tile.tif": geotiff({ width: 100, height: 100, epsg: 4326, nodata: null, seed: 4, origin: [7.0, 46.5], pixelSize: 0.001 }) },
   });
-  await commitFiles(ctx, repoOf("rhea", "tables"), { branch: "main", author: "rhea", message: "CSV", timestamp: new Date(), changes: { "a.csv": Buffer.from("x,y\n1,2\n") } });
-  await commitFiles(ctx, repoOf("ines", "hidden"), { branch: "main", author: "ines", message: "Secret tile", timestamp: new Date(), changes: { "t.tif": geotiff({ width: 64, height: 64, epsg: 32643, nodata: null, seed: 5 }) } });
+  await commitFiles(ctx, await repoOf("rhea", "tables"), { branch: "main", author: "rhea", message: "CSV", timestamp: new Date(), changes: { "a.csv": Buffer.from("x,y\n1,2\n") } });
+  await commitFiles(ctx, await repoOf("ines", "hidden"), { branch: "main", author: "ines", message: "Secret tile", timestamp: new Date(), changes: { "t.tif": geotiff({ width: 64, height: 64, epsg: 32643, nodata: null, seed: 5 }) } });
   await backfillFootprints(ctx);
 });
 
@@ -125,19 +125,19 @@ test("a file's own page reports where it is", async () => {
 });
 
 test("each file version is worked out once, and a changed file is worked out again", async () => {
-  const kerala = repoOf("rhea", "kerala");
-  const before = extentRows();
+  const kerala = await repoOf("rhea", "kerala");
+  const before = await extentRows();
   await refreshFootprint(ctx, kerala);
-  assert.equal(extentRows(), before, "nothing new to compute for unchanged files");
+  assert.equal(await extentRows(), before, "nothing new to compute for unchanged files");
   await commitFiles(ctx, kerala, { branch: "main", author: "rhea", message: "Bigger DEM", timestamp: new Date(), changes: { "terrain/dem.tif": geotiff({ width: 1024, height: 1024, epsg: 32643, nodata: -9999, seed: 3 }) } });
   await refreshFootprint(ctx, kerala);
-  assert.equal(extentRows(), before + 1, "the new version of the DEM is one new row");
+  assert.equal(await extentRows(), before + 1, "the new version of the DEM is one new row");
   const dem = (await call("GET", "/repos/rhea/kerala/file/main/terrain/dem.tif", "rhea")).json.extent as number[];
   assert.ok(dem[3] - dem[1] > 0.0185, "the bigger raster covers about 2 km, twice as much");
 });
 
 test("a push to the default branch updates the footprint by itself", async () => {
-  const alps = repoOf("rhea", "alps");
+  const alps = await repoOf("rhea", "alps");
   const form = new FormData();
   form.append("file", new File([new Uint8Array(geotiff({ width: 100, height: 100, epsg: 4326, nodata: null, seed: 4, origin: [8.0, 47.5], pixelSize: 0.001 }))], "tile2.tif"));
   form.append("paths", JSON.stringify(["tile2.tif"]));

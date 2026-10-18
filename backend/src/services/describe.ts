@@ -21,7 +21,7 @@ export function isDescribable(path: string) {
 
 export async function describeStructured(ctx: Ctx, repo: RepoRow, blobId: string, path: string): Promise<string[] | null> {
   if (!isDescribable(path)) return null;
-  const blob = getObject<BlobObject>(ctx, repo, blobId, "blob");
+  const blob = await getObject<BlobObject>(ctx, repo, blobId, "blob");
   const reader = new BlobReader(ctx, blob);
   const read = (o: number, l: number) => reader.read(o, l);
   try {

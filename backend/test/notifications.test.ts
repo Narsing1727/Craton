@@ -29,12 +29,12 @@ async function call(method: string, path: string, who: string | null, body?: unk
 const accessEmailsTo = (who: string) => sentEmails.filter((e) => e.kind === "repo-access" && e.to === `${who}@example.org`);
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(new Date().toISOString(), u);
+    await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)", new Date().toISOString(), u);
   }
   assert.equal((await call("POST", "/repos", "alice", { name: "basin", visibility: "public" })).status, 201);
 });
@@ -69,7 +69,7 @@ test("a repository created without saying starts with the visibility a person ch
   assert.equal((await call("GET", "/user", "carol")).json.defaultVisibility, "public");
   assert.equal((await call("PATCH", "/user", "carol", { defaultVisibility: "secret" })).status, 400);
   assert.equal((await call("PATCH", "/user", "carol", { defaultVisibility: "private" })).json.defaultVisibility, "private");
-  ctx.db.prepare("UPDATE users SET plan = 'team' WHERE owner_id = (SELECT id FROM owners WHERE handle = 'carol')").run();
+  await ctx.db.run("UPDATE users SET plan = 'team' WHERE owner_id = (SELECT id FROM owners WHERE handle = 'carol')");
   assert.equal((await call("POST", "/repos", "carol", { name: "quiet" })).json.visibility, "private", "left unsaid, it follows the choice");
   assert.equal((await call("POST", "/repos", "carol", { name: "open", visibility: "public" })).json.visibility, "public", "said, it wins");
 });

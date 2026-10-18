@@ -3,6 +3,7 @@
 // tree. Nothing is changed; the report names what is wrong. Run `npm run fsck` (OPERATING.md) after a restore, a disk problem, or
 // before and after turning on the cold tier.
 
+import { statement } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
 import { mapLimit, decodeAny } from "./chunks.ts";
 import { verifyTiles, forgetRebuiltTiles } from "./tiles.ts";
@@ -38,7 +39,7 @@ export async function fsck(ctx: Ctx, opts: { quick?: boolean; repair?: boolean; 
   };
 
   if (opts.repair) await repairRows(ctx, report);
-  const rows = ctx.db.prepare("SELECT hash, size, codec FROM chunks").all() as { hash: string; size: number; codec: string }[];
+  const rows = await ctx.db.all("SELECT hash, size, codec FROM chunks") as { hash: string; size: number; codec: string }[];
   const known = new Set(rows.map((r) => r.hash));
 
   // Every chunk: its bytes are there, decode, and hash to the name; the form the database says is the form the bytes are in.
@@ -67,7 +68,7 @@ export async function fsck(ctx: Ctx, opts: { quick?: boolean; repair?: boolean; 
   } else report.chunks.checked = rows.length;
 
   // What stored differences and cold chunks are built on.
-  const refs = ctx.db.prepare("SELECT chunk_hash, ref_hash FROM chunk_refs").all() as { chunk_hash: string; ref_hash: string }[];
+  const refs = await ctx.db.all("SELECT chunk_hash, ref_hash FROM chunk_refs") as { chunk_hash: string; ref_hash: string }[];
   for (const r of refs) {
     report.bases.checked++;
     if (!known.has(r.ref_hash)) report.bases.bad.push(`${r.chunk_hash.slice(0, 12)} is built on ${r.ref_hash.slice(0, 12)}, which is not stored`);
@@ -76,9 +77,9 @@ export async function fsck(ctx: Ctx, opts: { quick?: boolean; repair?: boolean; 
       if (base && (isRefDelta(base) || isPieces(base))) report.bases.bad.push(`${r.chunk_hash.slice(0, 12)} is built on ${r.ref_hash.slice(0, 12)}, which is itself stored as a difference or in pieces`);
     }
   }
-  const tileRows = ctx.db.prepare("SELECT key FROM tiles").all() as { key: string }[];
+  const tileRows = await ctx.db.all("SELECT key FROM tiles") as { key: string }[];
   const tileKeys = new Set(tileRows.map((t) => t.key));
-  for (const m of ctx.db.prepare("SELECT chunk_hash, tile_key FROM chunk_tiles").all() as { chunk_hash: string; tile_key: string }[]) {
+  for (const m of await ctx.db.all("SELECT chunk_hash, tile_key FROM chunk_tiles") as { chunk_hash: string; tile_key: string }[]) {
     if (!tileKeys.has(m.tile_key)) report.tiles.bad.push(`chunk ${m.chunk_hash.slice(0, 12)} needs tile ${m.tile_key.slice(0, 12)}, which is not stored`);
   }
   if (!opts.quick) {
@@ -88,7 +89,7 @@ export async function fsck(ctx: Ctx, opts: { quick?: boolean; repair?: boolean; 
   } else report.tiles.checked = tileRows.length;
 
   // Every file (blob): its chunks are all stored, in sizes that add up to the file's.
-  const blobs = ctx.db.prepare("SELECT o.id, o.body FROM objects o WHERE o.type = 'blob'").all() as { id: string; body: string }[];
+  const blobs = await ctx.db.all("SELECT o.id, o.body FROM objects o WHERE o.type = 'blob'") as { id: string; body: string }[];
   for (const b of blobs) {
     report.files.checked++;
     try {
@@ -103,7 +104,7 @@ export async function fsck(ctx: Ctx, opts: { quick?: boolean; repair?: boolean; 
   }
 
   // Every commit: the Merkle root over its tree.
-  const objects = new Map((ctx.db.prepare("SELECT id, type, body FROM objects WHERE type IN ('tree', 'commit')").all() as { id: string; type: string; body: string }[]).map((o) => [o.id, o]));
+  const objects = new Map((await ctx.db.all("SELECT id, type, body FROM objects WHERE type IN ('tree', 'commit')") as { id: string; type: string; body: string }[]).map((o) => [o.id, o]));
   for (const o of objects.values()) {
     if (o.type !== "commit") continue;
     report.commits.checked++;
@@ -127,8 +128,8 @@ export async function fsck(ctx: Ctx, opts: { quick?: boolean; repair?: boolean; 
  * the rows that say what it is built on (so garbage collection keeps those), the form it is kept in, and the tiles it names.
  */
 async function repairRows(ctx: Ctx, report: FsckReport) {
-  const rows = ctx.db.prepare("SELECT hash, codec, stored_size FROM chunks").all() as { hash: string; codec: string; stored_size: number }[];
-  const tileRow = ctx.db.prepare("SELECT stored_size FROM tiles WHERE key = ?");
+  const rows = await ctx.db.all("SELECT hash, codec, stored_size FROM chunks") as { hash: string; codec: string; stored_size: number }[];
+  const tileRow = statement(ctx.db, "SELECT stored_size FROM tiles WHERE key = ?");
   for (const row of rows) {
     const stored = await ctx.store.get(row.hash);
     if (!stored) continue;
@@ -137,11 +138,11 @@ async function repairRows(ctx: Ctx, report: FsckReport) {
       const info = refDeltaInfo(stored);
       let changed = row.codec !== "ref-delta";
       for (const r of info.refs) {
-        const had = ctx.db.prepare("SELECT 1 FROM chunk_refs WHERE chunk_hash = ? AND ref_hash = ?").get(row.hash, r.hash);
-        if (!had) (ctx.db.prepare("INSERT INTO chunk_refs (chunk_hash, ref_hash) VALUES (?, ?)").run(row.hash, r.hash), (changed = true));
+        const had = await ctx.db.get("SELECT 1 FROM chunk_refs WHERE chunk_hash = ? AND ref_hash = ?", row.hash, r.hash);
+        if (!had) (await ctx.db.run("INSERT INTO chunk_refs (chunk_hash, ref_hash) VALUES (?, ?)", row.hash, r.hash), (changed = true));
       }
       if (changed || row.stored_size !== stored.length) {
-        ctx.db.prepare("UPDATE chunks SET codec = 'ref-delta', stored_size = ? WHERE hash = ?").run(stored.length, row.hash);
+        await ctx.db.run("UPDATE chunks SET codec = 'ref-delta', stored_size = ? WHERE hash = ?", stored.length, row.hash);
         report.repaired.push(`${row.hash.slice(0, 12)}: recorded as a difference from ${info.refs.length} chunk${info.refs.length === 1 ? "" : "s"}`);
       }
     } else if (form === "tiles") {
@@ -150,29 +151,29 @@ async function repairRows(ctx: Ctx, report: FsckReport) {
       let changed = row.codec !== "tiles";
       for (const p of pieces) {
         if (p.kind !== "tile") continue;
-        let t = tileRow.get(p.key) as { stored_size: number } | undefined;
+        let t = await tileRow.get(p.key) as { stored_size: number } | undefined;
         if (!t) {
           const payload = await ctx.store.get(p.key);
           if (!payload) continue; // fsck reports it as a tile that is not stored
           const info = tileInfo(payload);
-          ctx.db.prepare("INSERT OR IGNORE INTO tiles (key, stream_len, raw_len, stored_size, kind, base_key) VALUES (?, ?, ?, ?, ?, ?)").run(p.key, info.streamLength, info.rawLength, payload.length, info.kind, info.baseKey);
+          await ctx.db.run("INSERT INTO tiles (key, stream_len, raw_len, stored_size, kind, base_key) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", p.key, info.streamLength, info.rawLength, payload.length, info.kind, info.baseKey);
           t = { stored_size: payload.length };
           report.repaired.push(`tile ${p.key.slice(0, 12)}: recorded`);
           changed = true;
         }
-        const len = (ctx.db.prepare("SELECT stream_len FROM tiles WHERE key = ?").get(p.key) as { stream_len: number }).stream_len;
+        const len = (await ctx.db.get("SELECT stream_len FROM tiles WHERE key = ?", p.key) as { stream_len: number }).stream_len;
         share += Math.ceil((t.stored_size * (p.to - p.from)) / len);
-        if (!ctx.db.prepare("SELECT 1 FROM chunk_tiles WHERE chunk_hash = ? AND tile_key = ?").get(row.hash, p.key)) {
-          ctx.db.prepare("INSERT INTO chunk_tiles (chunk_hash, tile_key) VALUES (?, ?)").run(row.hash, p.key);
+        if (!await ctx.db.get("SELECT 1 FROM chunk_tiles WHERE chunk_hash = ? AND tile_key = ?", row.hash, p.key)) {
+          await ctx.db.run("INSERT INTO chunk_tiles (chunk_hash, tile_key) VALUES (?, ?)", row.hash, p.key);
           changed = true;
         }
       }
       if (changed) {
-        ctx.db.prepare("UPDATE chunks SET codec = 'tiles', stored_size = ? WHERE hash = ?").run(stored.length + share, row.hash);
+        await ctx.db.run("UPDATE chunks SET codec = 'tiles', stored_size = ? WHERE hash = ?", stored.length + share, row.hash);
         report.repaired.push(`${row.hash.slice(0, 12)}: recorded as pieces of ${pieces.filter((p) => p.kind === "tile").length} tile${pieces.filter((p) => p.kind === "tile").length === 1 ? "" : "s"}`);
       }
     } else if (form && (row.codec === "ref-delta" || row.codec === "tiles")) {
-      ctx.db.prepare("UPDATE chunks SET codec = ?, stored_size = ? WHERE hash = ?").run(form, stored.length, row.hash);
+      await ctx.db.run("UPDATE chunks SET codec = ?, stored_size = ? WHERE hash = ?", form, stored.length, row.hash);
       report.repaired.push(`${row.hash.slice(0, 12)}: recorded as ${form}, which is what its bytes are`);
     }
   }

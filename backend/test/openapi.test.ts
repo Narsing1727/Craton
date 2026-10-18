@@ -16,7 +16,7 @@ test("route patterns become OpenAPI paths and tags", () => {
 });
 
 test("the served document lists real routes with their parameters, without needing a token", async () => {
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const res = await app.request("/v1/openapi.json");
   assert.equal(res.status, 200);
   const doc = (await res.json()) as any;
@@ -60,7 +60,7 @@ function violations(value: unknown, schema: S, components: Record<string, S>, at
 }
 
 test("every documented response schema matches what the server really returns", async () => {
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const signup = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   const token = ((await signup.json()) as { token: string }).token;
   const auth = { authorization: `Bearer ${token}` };
@@ -92,7 +92,7 @@ test("every documented response schema matches what the server really returns", 
 
 test("every documented request example is accepted by the real endpoint, and its schema's required fields are in it", async () => {
   const { requests } = await import("../src/api/openapi-schemas.ts");
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const signup = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   const token = ((await signup.json()) as { token: string }).token;
   const send = (method: string, path: string, body?: unknown) =>
@@ -130,7 +130,7 @@ test("documented query parameters are ones the server really reads", async () =>
   const { queries } = await import("../src/api/openapi-schemas.ts");
   const fs = await import("node:fs");
   const source = fs.readFileSync(new URL("../src/api/app.ts", import.meta.url), "utf8");
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const doc = (await (await app.request("/v1/openapi.json")).json()) as { paths: Record<string, Record<string, S>> };
   for (const [key, list] of Object.entries(queries)) {
     const [method, path] = key.split(" ");

@@ -29,7 +29,7 @@ async function call(method: string, path: string, who: string | null, body?: unk
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   const r = await call("POST", "/auth/signup", null, { username: "nina", email: "nina@example.org", password: "a-very-long-password" });
   assert.equal(r.status, 201, r.text);
@@ -97,8 +97,8 @@ test("using a CLI token and pushing check off the last steps", async () => {
   // Creating a branch in the app isn't a push; pushing a commit is.
   assert.equal((await call("POST", "/repos/nina/sample-basin/branches", "ninaPat", { name: "my-change", from: "main" })).status, 201);
   assert.ok(!(await call("GET", "/user/onboarding", "nina")).json.find((i: any) => i.id === "push").done);
-  const ninaId = (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'nina'").get() as { id: number }).id;
-  const repo = getRepoFor(ctx, "nina", "sample-basin", ninaId, "write");
+  const ninaId = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'nina'") as { id: number }).id;
+  const repo = await getRepoFor(ctx, "nina", "sample-basin", ninaId, "write");
   await commitFiles(ctx, repo, { branch: "my-change", author: "nina", message: "Add notes", timestamp: new Date(), changes: { "notes.md": Buffer.from("# Notes") } });
   list = (await call("GET", "/user/onboarding", "nina")).json;
   assert.ok(list.every((i: any) => i.done), JSON.stringify(list));
@@ -120,7 +120,7 @@ test("password reset: same answer for unknown accounts, one-time link, signs out
   assert.equal(known.status, 202);
   assert.deepEqual(unknown.json, known.json);
 
-  const reset = requestPasswordReset(ctx, "nina")!;
+  const reset = (await requestPasswordReset(ctx, "nina"))!;
   assert.equal((await call("POST", "/auth/reset", null, { token: reset.token, password: "short" })).status, 400);
   const ok = await call("POST", "/auth/reset", null, { token: reset.token, password: "another-long-password" });
   assert.equal(ok.status, 200, ok.text);

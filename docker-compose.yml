@@ -1,0 +1,26 @@
+# A local PostgreSQL for Craton, the same major version as the AWS RDS / Aurora instance it will run on later.
+#
+#   docker compose up -d db
+#   set CRATON_DATABASE_URL=postgres://craton:craton@localhost:5433/craton      (PowerShell: $env:CRATON_DATABASE_URL = "...")
+#   cd backend && npm start
+#
+# Without CRATON_DATABASE_URL the backend runs Postgres inside its own process (PGlite) and needs none of this.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: craton
+      POSTGRES_PASSWORD: craton
+      POSTGRES_DB: craton
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - craton-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U craton -d craton"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  craton-pgdata:

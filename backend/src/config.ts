@@ -44,6 +44,18 @@ export const config = {
   accessLog: { enabled: env.CRATON_ACCESS_LOG === "1", write: (line: string) => void process.stdout.write(line + String.fromCharCode(10)) } as { enabled: boolean; write: (line: string) => void },
   /** Where the SQLite database and local chunk store live. */
   dataDir: path.resolve(env.CRATON_DATA_DIR ?? path.join(root, "data")),
+
+  /**
+   * The database: PostgreSQL. CRATON_DATABASE_URL (or DATABASE_URL) is a connection string such as
+   * postgres://user:password@host:5432/craton?sslmode=require (AWS RDS or Aurora included). Without one, a development checkout
+   * runs Postgres inside this process (PGlite) and keeps it in <data dir>/pgdata. `caFile` is a certificate bundle to verify an RDS
+   * server against (the AWS global bundle); `poolMax` is how many connections the server may hold.
+   */
+  database: {
+    url: env.CRATON_DATABASE_URL ?? env.DATABASE_URL ?? "",
+    caFile: env.CRATON_DB_CA ?? "",
+    poolMax: Math.max(1, Math.min(200, Math.floor(Number(env.CRATON_DB_POOL_MAX ?? 10)) || 10)),
+  },
   /** Where the web app lives, for links the API writes (password reset). */
   webUrl: (env.CRATON_WEB_URL ?? "http://localhost:3100").replace(/\/+$/, ""),
   /** Origins allowed to call the API from a browser. */

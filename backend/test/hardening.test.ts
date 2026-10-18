@@ -14,7 +14,7 @@ const call = (method: string, path: string, body?: string | Uint8Array | null, h
   app.request(`/v1${path}`, { method, headers: { authorization: `Bearer ${token}`, ...headers }, body });
 
 before(async () => {
-  app = createApp({ db: openDb(":memory:"), store: new MemoryStore() } as Ctx);
+  app = createApp({ db: await openDb(":memory:"), store: new MemoryStore() } as Ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
   const made = await call("POST", "/repos", JSON.stringify({ name: "basin", visibility: "private", sample: true }), { "content-type": "application/json" });
@@ -87,7 +87,7 @@ test("/ready says yes when database and store work, and 503 naming the part that
   const body = (await ok.json()) as { ready: boolean; checks: Record<string, string> };
   assert.deepEqual([body.ready, body.checks.database, body.checks.store], [true, "ok", "ok"]);
 
-  const broken = createApp({ db: openDb(":memory:"), store: { kind: "broken", put: async () => { throw new Error("disk is full"); }, get: async () => null, has: async () => false, delete: async () => {} } } as unknown as Ctx);
+  const broken = await createApp({ db: await openDb(":memory:"), store: { kind: "broken", put: async () => { throw new Error("disk is full"); }, get: async () => null, has: async () => false, delete: async () => {} } } as unknown as Ctx);
   const bad = await broken.request("/v1/ready");
   assert.equal(bad.status, 503);
   const detail = (await bad.json()) as { ready: boolean; checks: Record<string, string> };

@@ -1,5 +1,6 @@
 // The inbox: what concerns a person and why, and their read / unread / done marks kept on the server.
 
+import { statement } from "../src/db/db.ts";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
@@ -30,26 +31,26 @@ async function call(method: string, path: string, who: string | null, body?: unk
 type Item = { key: string; actor: string; type: string; text: string; detail: string; read: boolean; done: boolean; reason: string; href: string };
 const inbox = async (who: string, view = "inbox") => (await call("GET", `/user/inbox?view=${view}`, who)).json as { items: Item[]; unread: number };
 const keysOf = (r: { items: Item[] }) => r.items.map((i) => `${i.actor}:${i.type}:${i.reason}`).sort();
-const repoOf = () => getRepoFor(ctx, "alice", "basin", (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'alice'").get() as { id: number }).id);
+const repoOf = async () => getRepoFor(ctx, "alice", "basin", (await ctx.db.get("SELECT id FROM owners WHERE handle = 'alice'") as { id: number }).id);
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of people) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
   }
   assert.equal((await call("POST", "/repos", "alice", { name: "basin", visibility: "private" })).status, 201);
-  const repo = repoOf();
-  const grant = ctx.db.prepare("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, (SELECT id FROM owners WHERE handle = ?), ?)");
-  grant.run(repo.id, "bob", "Write");
-  for (const u of ["carol", "dave", "eve"]) grant.run(repo.id, u, "Read");
+  const repo = await repoOf();
+  const grant = statement(ctx.db, "INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, (SELECT id FROM owners WHERE handle = ?), ?)");
+  await grant.run(repo.id, "bob", "Write");
+  for (const u of ["carol", "dave", "eve"]) await grant.run(repo.id, u, "Read");
   // Everyone opens their inbox once now, so their "first look" baseline is set before the activity below.
   for (const u of people) await inbox(u);
 });
 
 test("work by others in a repository you can write to arrives; your own work and a stranger's view do not", async () => {
-  await commitFiles(ctx, repoOf(), { branch: "main", author: "alice", message: "Initial model", timestamp: new Date(), changes: { "a.txt": Buffer.from("a") } });
+  await commitFiles(ctx, await repoOf(), { branch: "main", author: "alice", message: "Initial model", timestamp: new Date(), changes: { "a.txt": Buffer.from("a") } });
   assert.deepEqual(keysOf(await inbox("bob")), ["alice:commit:activity"], "a writer sees the push");
   assert.deepEqual(keysOf(await inbox("alice")), [], "your own push never appears");
   assert.deepEqual(keysOf(await inbox("carol")), [], "a reader isn't told about every push");
@@ -152,21 +153,21 @@ test("mark all as read is one write, clears explicit marks, and leaves done item
 });
 
 test("the first look is a week back at most, and never earlier than the account", async () => {
-  const [row] = ctx.db.prepare("SELECT inbox_read_before AS b, (SELECT created_at FROM owners WHERE id = owner_id) AS joined FROM users WHERE owner_id = (SELECT id FROM owners WHERE handle = 'frank')").all() as { b: string; joined: string }[];
+  const [row] = await ctx.db.all("SELECT inbox_read_before AS b, (SELECT created_at FROM owners WHERE id = owner_id) AS joined FROM users WHERE owner_id = (SELECT id FROM owners WHERE handle = 'frank')") as { b: string; joined: string }[];
   assert.equal(row.b, row.joined, "a new account's baseline is when it joined");
   // An old account: only the last week counts, even though it is older.
-  ctx.db.prepare("UPDATE owners SET created_at = ? WHERE handle = 'frank'").run(new Date(Date.now() - 90 * 86_400_000).toISOString());
-  ctx.db.prepare("UPDATE users SET inbox_read_before = NULL WHERE owner_id = (SELECT id FROM owners WHERE handle = 'frank')").run();
+  await ctx.db.run("UPDATE owners SET created_at = ? WHERE handle = 'frank'", new Date(Date.now() - 90 * 86_400_000).toISOString());
+  await ctx.db.run("UPDATE users SET inbox_read_before = NULL WHERE owner_id = (SELECT id FROM owners WHERE handle = 'frank')");
   await inbox("frank");
-  const b = (ctx.db.prepare("SELECT inbox_read_before AS b FROM users WHERE owner_id = (SELECT id FROM owners WHERE handle = 'frank')").get() as { b: string }).b;
+  const b = (await ctx.db.get("SELECT inbox_read_before AS b FROM users WHERE owner_id = (SELECT id FROM owners WHERE handle = 'frank')") as { b: string }).b;
   const age = Date.now() - new Date(b).getTime();
   assert.ok(age > 6.9 * 86_400_000 && age < 7.1 * 86_400_000, `baseline is about a week ago (${(age / 86_400_000).toFixed(2)} days)`);
 });
 
 test("an item older than the baseline starts read", async () => {
   // Move bob's baseline into the future: everything so far is 'before' it.
-  ctx.db.prepare("UPDATE users SET inbox_read_before = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'bob')").run(new Date(Date.now() + 60_000).toISOString());
-  ctx.db.prepare("DELETE FROM inbox_state WHERE user_id = (SELECT id FROM owners WHERE handle = 'bob')").run();
+  await ctx.db.run("UPDATE users SET inbox_read_before = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'bob')", new Date(Date.now() + 60_000).toISOString());
+  await ctx.db.run("DELETE FROM inbox_state WHERE user_id = (SELECT id FROM owners WHERE handle = 'bob')");
   const bob = await inbox("bob");
   assert.ok(bob.items.length > 0 && bob.unread === 0);
   await call("POST", "/user/inbox/unread", "bob", { keys: [bob.items[0].key] });
@@ -190,12 +191,12 @@ test("a mark on a key that matches nothing is harmless", async () => {
 
 test("deleting a repository takes its history with it, so a new one that reuses the id starts clean", async () => {
   assert.equal((await call("POST", "/repos", "eve", { name: "scratch", visibility: "private" })).status, 201);
-  const eveId = (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'eve'").get() as { id: number }).id;
-  const old = getRepoFor(ctx, "eve", "scratch", eveId);
+  const eveId = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'eve'") as { id: number }).id;
+  const old = await getRepoFor(ctx, "eve", "scratch", eveId);
   await commitFiles(ctx, old, { branch: "main", author: "eve", message: "secret survey", timestamp: new Date(), changes: { "s.txt": Buffer.from("s") } });
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM ref_log WHERE repo_id = ?").get(old.id) as { n: number }).n, 1);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM ref_log WHERE repo_id = ?", old.id) as { n: number }).n, 1);
   assert.equal((await call("DELETE", "/repos/eve/scratch", "eve", {})).status, 204);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM ref_log WHERE repo_id = ?").get(old.id) as { n: number }).n, 0, "no orphaned history");
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM ref_log WHERE repo_id = ?", old.id) as { n: number }).n, 0, "no orphaned history");
   assert.equal((await call("POST", "/repos", "frank", { name: "fresh", visibility: "private" })).status, 201);
   const feed = (await call("GET", "/repos/frank/fresh/activity", "frank")).json as { detail: string }[];
   assert.ok(!feed.some((e) => e.detail === "secret survey"), "a new repository never shows another's history");
@@ -205,7 +206,7 @@ test("a lock held for more than a week reminds its holder, and the reminder goes
   assert.equal((await call("POST", "/repos/alice/basin/locks", "bob", { path: "model/plan.p01", reason: "recalibrating" })).status, 201);
   const before = await inbox("bob");
   assert.ok(!before.items.some((i) => i.type === "lock"), "a fresh lock needs no reminder");
-  ctx.db.prepare("UPDATE file_locks SET created_at = ? WHERE path = 'model/plan.p01'").run(new Date(Date.now() - 9 * 86_400_000).toISOString());
+  await ctx.db.run("UPDATE file_locks SET created_at = ? WHERE path = 'model/plan.p01'", new Date(Date.now() - 9 * 86_400_000).toISOString());
   const stale = await inbox("bob");
   const reminder = stale.items.find((i) => i.type === "lock");
   assert.ok(reminder, "the old lock now shows up");

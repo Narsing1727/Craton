@@ -63,8 +63,8 @@ async function flush() {
 }
 
 /** Make a pending delivery due now, as if its backoff had passed. */
-function makeDue() {
-  ctx.db.prepare("UPDATE webhook_deliveries SET next_attempt_at = ? WHERE status = 'pending'").run(new Date(Date.now() - 1000).toISOString());
+async function makeDue() {
+  await ctx.db.run("UPDATE webhook_deliveries SET next_attempt_at = ? WHERE status = 'pending'", new Date(Date.now() - 1000).toISOString());
 }
 
 before(async () => {
@@ -82,16 +82,16 @@ before(async () => {
   await new Promise<void>((r) => receiver.listen(0, "127.0.0.1", r));
   receiverUrl = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}/hook`;
 
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "sol", "ines"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ids[u] = (ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get(u) as { id: number }).id;
+    ids[u] = (await ctx.db.get("SELECT id FROM owners WHERE handle = ?", u) as { id: number }).id;
   }
   assert.equal((await call("POST", "/repos", "rhea", { name: "basin", visibility: "private" })).status, 201);
-  ctx.db.prepare("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, ?, 'Write')").run(repoOf().id, ids.sol);
-  await commitFiles(ctx, repoOf(), { branch: "main", author: "rhea", message: "Initial", timestamp: new Date(), changes: { "README.md": bytes("a") } });
+  await ctx.db.run("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, ?, 'Write')", (await repoOf()).id, ids.sol);
+  await commitFiles(ctx, await repoOf(), { branch: "main", author: "rhea", message: "Initial", timestamp: new Date(), changes: { "README.md": bytes("a") } });
 });
 
 after(async () => {
@@ -169,8 +169,8 @@ test("creating a webhook queues a signed ping, which a receiver can verify", asy
 
 test("a push is delivered with the branch, before and after, and the new commits", async () => {
   received.length = 0;
-  const repo = repoOf();
-  const tip = resolveRef(ctx, repo, "main");
+  const repo = await repoOf();
+  const tip = await resolveRef(ctx, repo, "main");
   // Build a commit the way the CLI does, register it, then move the branch through the real endpoint.
   const data = bytes("b");
   const chunks = [];
@@ -181,10 +181,10 @@ test("a push is delivered with the branch, before and after, and the new commits
     chunks.push({ hash, size: s.length });
   }
   const blob: BlobObject = { type: "blob", size: data.length, sha256: sha256Hex(data), chunks };
-  const parentTree = getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, tip, "commit").tree, "tree");
+  const parentTree = await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, tip, "commit")).tree, "tree");
   const tree = makeTree([...parentTree.entries, { path: "notes.txt", blob: objectId(blob), size: data.length }]);
   const commit = makeCommit({ tree: objectId(tree), parents: [tip], author: "rhea", message: "Add notes", timestamp: new Date().toISOString() }, tree);
-  registerObjects(ctx, repo, [blob, tree, commit]);
+  await registerObjects(ctx, repo, [blob, tree, commit]);
   const pushed = await call("POST", "/repos/rhea/basin/refs/heads/main", "rhea", { commit: objectId(commit), expected: tip });
   assert.equal(pushed.status, 200, pushed.text);
 
@@ -204,7 +204,7 @@ test("a push is delivered with the branch, before and after, and the new commits
 test("a release and a pull request each produce their own event", async () => {
   received.length = 0;
   assert.equal((await call("POST", "/repos/rhea/basin/releases", "rhea", { tag: "v1.0.0", title: "First", target: "main" })).status, 201);
-  await commitFiles(ctx, repoOf(), { branch: "feature", from: "main", author: "rhea", message: "Feature work", timestamp: new Date(), changes: { "feature.txt": bytes("c") } });
+  await commitFiles(ctx, await repoOf(), { branch: "feature", from: "main", author: "rhea", message: "Feature work", timestamp: new Date(), changes: { "feature.txt": bytes("c") } });
   const pr = await call("POST", "/repos/rhea/basin/pulls", "rhea", { title: "Add feature", source: "feature", target: "main" });
   assert.equal(pr.status, 201, pr.text);
   await flush();
@@ -244,7 +244,7 @@ test("a webhook only receives the events it asked for, and a paused one receives
   received.length = 0;
   await call("PATCH", `/repos/rhea/basin/webhooks/${hookId}`, "rhea", { active: false });
   await call("POST", "/repos/rhea/basin/releases", "rhea", { tag: "v1.1.0", title: "Second", target: "main" });
-  await commitFiles(ctx, repoOf(), { branch: "other", from: "main", author: "rhea", message: "More", timestamp: new Date(), changes: { "x.txt": bytes("d") } });
+  await commitFiles(ctx, await repoOf(), { branch: "other", from: "main", author: "rhea", message: "More", timestamp: new Date(), changes: { "x.txt": bytes("d") } });
   await flush();
   const events = received.map((r) => r.headers["x-craton-event"]);
   assert.deepEqual(events, ["release"], "the release-only hook got the release; the paused hook got nothing");
@@ -272,7 +272,7 @@ test("a failing receiver is retried with backoff, keeping the same message id an
   assert.equal(received.length, 1, "nothing is sent before the backoff has passed");
 
   respondWith = 200;
-  makeDue();
+  await makeDue();
   await new Promise((r) => setTimeout(r, 1100)); // so the second timestamp can differ
   await flush();
   assert.equal(received.length, 2);
@@ -291,14 +291,14 @@ test("after the last attempt a delivery is marked failed, and can be replayed fr
   respondWith = 503;
   await call("POST", `/repos/rhea/basin/webhooks/${hookId}/ping`, "rhea");
   for (let i = 0; i < 6; i++) {
-    makeDue();
+    await makeDue();
     await flush();
   }
   assert.equal(received.length, 6, "six attempts in all");
   let log = (await call("GET", `/repos/rhea/basin/webhooks/${hookId}/deliveries`, "rhea")).json;
   assert.equal(log[0].status, "failed");
   assert.equal(log[0].attempts, 6);
-  makeDue();
+  await makeDue();
   await flush();
   assert.equal(received.length, 6, "a failed delivery is not retried again by itself");
 
@@ -327,7 +327,7 @@ test("a webhook saved in development cannot be used to reach a private address o
   const log = (await call("GET", `/repos/rhea/basin/webhooks/${hookId}/deliveries`, "rhea")).json;
   assert.equal(log[0].status, "pending");
   assert.match(log[0].error, /private network/);
-  makeDue();
+  await makeDue();
   await flush(); // allowed again: now it goes through
   assert.equal(received.length, 1);
 });
@@ -378,7 +378,7 @@ test("a repository can have at most ten webhooks, and deleting one removes its l
   for (const h of list.filter((h: any) => h.id !== hookId)) await call("DELETE", `/repos/rhea/basin/webhooks/${h.id}`, "rhea");
   assert.equal((await call("DELETE", `/repos/rhea/basin/webhooks/${hookId}`, "rhea")).status, 204);
   assert.equal((await call("GET", `/repos/rhea/basin/webhooks/${hookId}/deliveries`, "rhea")).status, 404);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM webhook_deliveries WHERE webhook_id = ?").get(hookId) as { n: number }).n, 0);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM webhook_deliveries WHERE webhook_id = ?", hookId) as { n: number }).n, 0);
 });
 
 test("the documented payload fields are exactly the fields that are delivered, for every event", async () => {
@@ -405,8 +405,8 @@ test("the documented payload fields are exactly the fields that are delivered, f
   const up = await app.request("/v1/repos/rhea/basin/upload", { method: "POST", headers: { authorization: `Bearer ${tokens.rhea}` }, body: form });
   assert.equal(up.status, 201, await up.text());
   // pull requests: opened, merged, closed
-  await commitFiles(ctx, repoOf(), { branch: "doc-a", from: "main", author: "rhea", message: "A", timestamp: new Date(), changes: { "a.txt": bytes("a") } });
-  await commitFiles(ctx, repoOf(), { branch: "doc-b", from: "main", author: "rhea", message: "B", timestamp: new Date(), changes: { "b.txt": bytes("b") } });
+  await commitFiles(ctx, await repoOf(), { branch: "doc-a", from: "main", author: "rhea", message: "A", timestamp: new Date(), changes: { "a.txt": bytes("a") } });
+  await commitFiles(ctx, await repoOf(), { branch: "doc-b", from: "main", author: "rhea", message: "B", timestamp: new Date(), changes: { "b.txt": bytes("b") } });
   const a = await call("POST", "/repos/rhea/basin/pulls", "rhea", { title: "A", source: "doc-a" });
   const b = await call("POST", "/repos/rhea/basin/pulls", "rhea", { title: "B", source: "doc-b" });
   assert.equal((await call("POST", `/repos/rhea/basin/pulls/${a.json.number}/merge`, "rhea")).status, 200);
@@ -452,7 +452,7 @@ test("a receiver that fails ten finished deliveries in a row is paused with a re
   }
   // Each delivery is retried six times before it counts as failed.
   for (let round = 0; round < 7; round++) {
-    makeDue();
+    await makeDue();
     await flush();
   }
   const list = (await call("GET", "/repos/rhea/basin/webhooks", "rhea")).json.webhooks as { id: number; active: boolean; pausedReason: string | null }[];
@@ -468,7 +468,7 @@ test("a receiver that fails ten finished deliveries in a row is paused with a re
   // A paused webhook is sent nothing more, and a person can resume it, which clears the explanation.
   const before = received.length;
   await call("POST", "/repos/rhea/basin/releases", "rhea", { tag: "v8.1.0", title: "After", target: "main" });
-  makeDue();
+  await makeDue();
   await flush();
   assert.equal(received.length, before, "nothing is delivered to a paused webhook");
   const resumed = await call("PATCH", `/repos/rhea/basin/webhooks/${hook.json.id}`, "rhea", { active: true });

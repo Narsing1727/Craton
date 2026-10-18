@@ -28,7 +28,7 @@ const getText: GetText = async (p) => {
 };
 
 before(async () => {
-  const ctx: Ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  const ctx: Ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;

@@ -8,7 +8,7 @@ import { MemoryStore } from "../src/storage/chunk-store.ts";
 import { geotiff } from "../src/dev/fixtures.ts";
 
 test("failing checks after an upload send one email to the uploader; passing ones send none", async () => {
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const j = (path: string, method: string, token: string | null, body?: unknown) =>
     app.request(`/v1${path}`, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { "content-type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const signup = await j("/auth/signup", "POST", null, { username: "rhea", email: "rhea@example.org", password: "a-very-long-password" });

@@ -66,14 +66,14 @@ export async function createRelease(ctx: Ctx, repo: RepoRow, authorId: number, i
   const run = cleanRun(input.run);
   const tag = input.tag?.trim();
   if (!SEMVER.test(tag ?? "")) throw badRequest("Use a version like v1.3.0 or v1.3.0-rc.1.");
-  if (ctx.db.prepare("SELECT 1 FROM releases WHERE repo_id = ? AND tag = ?").get(repo.id, tag)) throw conflict("release_exists", `${tag} already exists.`);
-  const commitId = resolveRef(ctx, repo, input.target ?? repo.default_branch);
-  const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
-  const tree = getObject<TreeObject>(ctx, repo, commit.tree, "tree");
+  if (await ctx.db.get("SELECT 1 FROM releases WHERE repo_id = ? AND tag = ?", repo.id, tag)) throw conflict("release_exists", `${tag} already exists.`);
+  const commitId = await resolveRef(ctx, repo, input.target ?? repo.default_branch);
+  const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
+  const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
 
   const checksums: { path: string; size: number; sha256: string }[] = [];
   for (const e of tree.entries) {
-    const blob = getObject<BlobObject>(ctx, repo, e.blob, "blob");
+    const blob = await getObject<BlobObject>(ctx, repo, e.blob, "blob");
     const reader = new BlobReader(ctx, blob);
     const hash = createHash("sha256");
     for (let off = 0; off < blob.size; off += 4 * 1024 * 1024) hash.update(await reader.read(off, 4 * 1024 * 1024));
@@ -82,17 +82,13 @@ export async function createRelease(ctx: Ctx, repo: RepoRow, authorId: number, i
     checksums.push({ path: e.path, size: e.size, sha256: digest });
   }
 
-  ctx.db
-    .prepare("INSERT INTO releases (repo_id, tag, commit_id, title, notes, prerelease, merkle_root, checksums, author_id, run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(repo.id, tag, commitId, input.title?.trim() || tag, input.notes ?? "", input.prerelease ? 1 : 0, commit.merkleRoot, JSON.stringify(checksums), authorId, run ? JSON.stringify(run) : null);
-  ctx.db.prepare("INSERT OR IGNORE INTO refs (repo_id, kind, name, commit_id) VALUES (?, 'tag', ?, ?)").run(repo.id, tag, commitId);
-  return listReleases(ctx, repo).find((r) => r.tag === tag)!;
+  await ctx.db.run("INSERT INTO releases (repo_id, tag, commit_id, title, notes, prerelease, merkle_root, checksums, author_id, run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", repo.id, tag, commitId, input.title?.trim() || tag, input.notes ?? "", input.prerelease ? 1 : 0, commit.merkleRoot, JSON.stringify(checksums), authorId, run ? JSON.stringify(run) : null);
+  await ctx.db.run("INSERT INTO refs (repo_id, kind, name, commit_id) VALUES (?, 'tag', ?, ?) ON CONFLICT DO NOTHING", repo.id, tag, commitId);
+  return (await listReleases(ctx, repo)).find((r) => r.tag === tag)!;
 }
 
-export function listReleases(ctx: Ctx, repo: RepoRow) {
-  const rows = ctx.db
-    .prepare("SELECT r.*, o.handle AS author FROM releases r JOIN owners o ON o.id = r.author_id WHERE r.repo_id = ? ORDER BY r.id DESC")
-    .all(repo.id) as { tag: string; commit_id: string; title: string; notes: string; prerelease: number; merkle_root: string; checksums: string; run: string | null; author: string; created_at: string }[];
+export async function listReleases(ctx: Ctx, repo: RepoRow) {
+  const rows = await ctx.db.all("SELECT r.*, o.handle AS author FROM releases r JOIN owners o ON o.id = r.author_id WHERE r.repo_id = ? ORDER BY r.id DESC", repo.id) as { tag: string; commit_id: string; title: string; notes: string; prerelease: number; merkle_root: string; checksums: string; run: string | null; author: string; created_at: string }[];
   return rows.map((r, i) => {
     const checksums = JSON.parse(r.checksums) as { path: string; size: number; sha256: string }[];
     return {

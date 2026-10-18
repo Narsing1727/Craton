@@ -29,7 +29,7 @@ const handles = async (who: string) => ((await call("GET", `${R}/collaborators`,
 const visibleTo = async (who: string) => ((await call("GET", "/repos", who)).json as { owner: string; name: string }[]).some((r) => r.owner === "alice" && r.name === "basin");
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol", "dave", "erin"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
@@ -43,7 +43,7 @@ test("sharing needs a confirmed email, like inviting to an organization", async 
   const res = await call("PUT", `${R}/collaborators/bob`, "alice", { role: "Write" });
   assert.equal(res.status, 403);
   assert.equal(res.json.error.code, "email_unverified");
-  ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')").run(new Date().toISOString());
+  await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')", new Date().toISOString());
 });
 
 test("an admin adds people with a role; they are told by email; the repository becomes theirs to see", async () => {
@@ -106,14 +106,14 @@ test("what can't be added, and what is checked", async () => {
 });
 
 test("removing someone ends their access and releases their file locks", async () => {
-  ctx.db.prepare("INSERT INTO file_locks (repo_id, path, user_id, reason) VALUES ((SELECT id FROM repos WHERE name = 'basin'), 'dem.tif', (SELECT id FROM owners WHERE handle = 'carol'), '')").run();
+  await ctx.db.run("INSERT INTO file_locks (repo_id, path, user_id, reason) VALUES ((SELECT id FROM repos WHERE name = 'basin'), 'dem.tif', (SELECT id FROM owners WHERE handle = 'carol'), '')");
   assert.equal((await call("DELETE", `${R}/collaborators/carol`, "bob")).status, 403, "only an admin removes");
   const gone = await call("DELETE", `${R}/collaborators/carol`, "alice");
   assert.equal(gone.status, 200);
   assert.ok(!gone.json.some((c: any) => c.handle === "carol"));
   assert.equal((await call("GET", R, "carol")).status, 404);
   assert.equal(await visibleTo("carol"), false);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM file_locks WHERE user_id = (SELECT id FROM owners WHERE handle = 'carol')").get() as { n: number }).n, 0);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM file_locks WHERE user_id = (SELECT id FROM owners WHERE handle = 'carol')") as { n: number }).n, 0);
   assert.equal((await call("DELETE", `${R}/collaborators/carol`, "alice")).status, 404, "already gone");
 });
 
@@ -126,5 +126,5 @@ test("you can always leave a repository that was shared with you", async () => {
 
 test("deleting a repository removes who it was shared with", async () => {
   assert.equal((await call("DELETE", R, "alice", {})).status, 204);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM collaborators").get() as { n: number }).n, 0);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM collaborators") as { n: number }).n, 0);
 });

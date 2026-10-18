@@ -116,15 +116,15 @@ const get = (path: string, who: string | null, headers: Record<string, string> =
   app.request(`/v1${path}`, { headers: { ...(who ? { authorization: `Bearer ${tokens[who]}` } : {}), ...headers } });
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "ines"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
   }
   await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${tokens.rhea}`, "content-type": "application/json" }, body: JSON.stringify({ name: "basin", visibility: "private" }) });
-  const owner = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number };
-  const repo = getRepoFor(ctx, "rhea", "basin", owner.id);
+  const owner = await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number };
+  const repo = await getRepoFor(ctx, "rhea", "basin", owner.id);
   await commitFiles(ctx, repo, { branch: "main", author: "rhea", message: "Gauges", timestamp: new Date(), changes: { "gauges.csv": Buffer.from(gauges()), "notes.txt": Buffer.from("hello") } });
   await commitFiles(ctx, repo, { branch: "fix", from: "main", author: "rhea", message: "Correct G2", timestamp: new Date(), changes: { "gauges.csv": Buffer.from(gauges().replace("3.40,80.0", "3.55,84.5")) } });
 });

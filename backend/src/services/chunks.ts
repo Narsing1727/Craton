@@ -4,6 +4,7 @@
 // the requester may see (public, plus the repository owner's scope). Answering against every chunk
 // would let anyone test whether some other customer stored a given file.
 
+import { statement } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
 import { badRequest, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
@@ -23,25 +24,25 @@ export function visibleScopes(repo: Pick<RepoRow, "visibility" | "owner_id">): s
   return ["public", `owner:${repo.owner_id}`, repoScope(repo)].filter((v, i, a) => a.indexOf(v) === i);
 }
 
-function inScopes(ctx: Ctx, hashes: string[], scopes: string[]): Set<string> {
+async function inScopes(ctx: Ctx, hashes: string[], scopes: string[]): Promise<Set<string>> {
   const found = new Set<string>();
   const marks = scopes.map(() => "?").join(",");
-  const stmt = ctx.db.prepare(`SELECT DISTINCT hash FROM chunk_scopes WHERE hash = ? AND scope IN (${marks})`);
-  for (const h of hashes) if (stmt.get(h, ...scopes)) found.add(h);
+  const stmt = statement(ctx.db, `SELECT DISTINCT hash FROM chunk_scopes WHERE hash = ? AND scope IN (${marks})`);
+  for (const h of hashes) if (await stmt.get(h, ...scopes)) found.add(h);
   return found;
 }
 
 /** Of `hashes`, which must the client upload before it can push to `repo`? */
-export function missingChunks(ctx: Ctx, repo: RepoRow, hashes: string[]): string[] {
+export async function missingChunks(ctx: Ctx, repo: RepoRow, hashes: string[]): Promise<string[]> {
   for (const h of hashes) if (!HASH.test(h)) throw badRequest(`Invalid chunk hash: ${h}`);
   const unique = [...new Set(hashes)];
-  const have = inScopes(ctx, unique, visibleScopes(repo));
+  const have = await inScopes(ctx, unique, visibleScopes(repo));
   return unique.filter((h) => !have.has(h));
 }
 
 /** Whether this repository can already reference the chunk (its own, its owner's, or public data). */
-export function visibleToRepo(ctx: Ctx, repo: RepoRow, hash: string) {
-  return inScopes(ctx, [hash], visibleScopes(repo)).has(hash);
+export async function visibleToRepo(ctx: Ctx, repo: RepoRow, hash: string) {
+  return (await inScopes(ctx, [hash], visibleScopes(repo))).has(hash);
 }
 
 /** Store one chunk after verifying its bytes hash to its claimed id. */
@@ -49,20 +50,20 @@ export async function putChunk(ctx: Ctx, repo: RepoRow, hash: string, data: Buff
   if (!HASH.test(hash)) throw badRequest("Invalid chunk hash.");
   if (data.length > config.chunking.max) throw badRequest(`Chunks are at most ${config.chunking.max} bytes.`);
   if (sha256Hex(data) !== hash) throw badRequest("Chunk bytes don’t match their hash.");
-  const exists = ctx.db.prepare("SELECT 1 FROM chunks WHERE hash = ?").get(hash);
+  const exists = await ctx.db.get("SELECT 1 FROM chunks WHERE hash = ?", hash);
   // Report dedup only against chunks this repository could already see: saying "someone else has
   // these bytes" would tell an uploader what's inside other people's private repositories.
-  const deduplicated = visibleToRepo(ctx, repo, hash);
+  const deduplicated = await visibleToRepo(ctx, repo, hash);
   let storedSize = 0;
   if (!exists) {
     // First time anyone uploads these bytes: compress (verified lossless) and store them.
     const { stored, codec } = compressChunk(data, hash, hint);
     storedSize = stored.length;
     await ctx.store.put(hash, stored);
-    ctx.db.prepare("INSERT OR IGNORE INTO chunks (hash, size, stored_size, codec) VALUES (?, ?, ?, ?)").run(hash, data.length, stored.length, codec);
+    await ctx.db.run("INSERT INTO chunks (hash, size, stored_size, codec) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", hash, data.length, stored.length, codec);
   }
   // The client proved it has the bytes, so it may now reference the chunk from this repository.
-  ctx.db.prepare("INSERT OR IGNORE INTO chunk_scopes (hash, scope) VALUES (?, ?)").run(hash, repoScope(repo));
+  await ctx.db.run("INSERT INTO chunk_scopes (hash, scope) VALUES (?, ?) ON CONFLICT DO NOTHING", hash, repoScope(repo));
   return { hash, size: data.length, deduplicated, storedSize: exists ? null : storedSize };
 }
 
@@ -113,20 +114,20 @@ export async function putStored(ctx: Ctx, repo: RepoRow, hash: string, stored: B
     throw badRequest(`Chunk ${hash.slice(0, 12)} could not be decoded, or is larger than ${config.chunking.max} bytes.`);
   }
   if (sha256Hex(data) !== hash) throw badRequest("Chunk bytes don’t match their hash.");
-  const exists = ctx.db.prepare("SELECT 1 FROM chunks WHERE hash = ?").get(hash);
-  const deduplicated = visibleToRepo(ctx, repo, hash);
+  const exists = await ctx.db.get("SELECT 1 FROM chunks WHERE hash = ?", hash);
+  const deduplicated = await visibleToRepo(ctx, repo, hash);
   if (!exists) {
     await ctx.store.put(hash, stored);
-    ctx.db.prepare("INSERT OR IGNORE INTO chunks (hash, size, stored_size, codec) VALUES (?, ?, ?, ?)").run(hash, data.length, stored.length, codec);
+    await ctx.db.run("INSERT INTO chunks (hash, size, stored_size, codec) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", hash, data.length, stored.length, codec);
   }
-  ctx.db.prepare("INSERT OR IGNORE INTO chunk_scopes (hash, scope) VALUES (?, ?)").run(hash, repoScope(repo));
+  await ctx.db.run("INSERT INTO chunk_scopes (hash, scope) VALUES (?, ?) ON CONFLICT DO NOTHING", hash, repoScope(repo));
   return { hash, size: data.length, deduplicated };
 }
 
 /** Raw bytes of a chunk, if `repo` may reference it. */
 export async function getChunk(ctx: Ctx, repo: RepoRow, hash: string): Promise<Buffer> {
   if (!HASH.test(hash)) throw badRequest("Invalid chunk hash.");
-  const allowed = ctx.db.prepare("SELECT 1 FROM repo_chunks WHERE repo_id = ? AND hash = ?").get(repo.id, hash);
+  const allowed = await ctx.db.get("SELECT 1 FROM repo_chunks WHERE repo_id = ? AND hash = ?", repo.id, hash);
   if (!allowed) throw notFound("Chunk");
   return readChunk(ctx, hash);
 }
@@ -134,7 +135,7 @@ export async function getChunk(ctx: Ctx, repo: RepoRow, hash: string): Promise<B
 /** A chunk as stored (first byte = encoding), if `repo` may reference it; the client decodes and verifies it. */
 export async function getStoredChunk(ctx: Ctx, repo: RepoRow, hash: string): Promise<Buffer> {
   if (!HASH.test(hash)) throw badRequest("Invalid chunk hash.");
-  const allowed = ctx.db.prepare("SELECT 1 FROM repo_chunks WHERE repo_id = ? AND hash = ?").get(repo.id, hash);
+  const allowed = await ctx.db.get("SELECT 1 FROM repo_chunks WHERE repo_id = ? AND hash = ?", repo.id, hash);
   if (!allowed) throw notFound("Chunk");
   const stored = await ctx.store.get(hash);
   if (!stored) throw notFound("Chunk bytes");

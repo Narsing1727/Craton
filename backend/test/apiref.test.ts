@@ -10,7 +10,7 @@ import { openDb } from "../src/db/db.ts";
 import { MemoryStore } from "../src/storage/chunk-store.ts";
 
 async function served() {
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const doc = (await (await app.request("/v1/openapi.json")).json()) as { paths: Record<string, Record<string, unknown>> };
   const ops = new Set<string>();
   for (const [p, methods] of Object.entries(doc.paths)) for (const m of Object.keys(methods)) ops.add(`${m.toUpperCase()} ${p.replace(/\{[^}]+\}/g, "{}")}`);

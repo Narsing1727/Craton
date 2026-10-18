@@ -29,13 +29,13 @@ const signUp = async (u: string, email: string, confirm = true) => {
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email, password: "a-very-long-password" }) });
   assert.equal(res.status, 201);
   tokens[u] = ((await res.json()) as { token: string }).token;
-  if (confirm) ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE lower(email) = lower(?)").run(new Date().toISOString(), email);
+  if (confirm) await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE lower(email) = lower(?)", new Date().toISOString(), email);
 };
 const members = async (org: string) => ((await call("GET", `/owners/${org}`, null)).json.members as { handle: string; role: string }[]).map((m) => `${m.handle}:${m.role}`).sort();
 let dns: Record<string, string[][]> = {};
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   resolver.txt = async (name: string) => {
     if (!(name in dns)) throw Object.assign(new Error("no data"), { code: "ENODATA" });

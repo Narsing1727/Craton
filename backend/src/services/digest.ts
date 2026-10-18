@@ -19,13 +19,13 @@ export const unsubscribeToken = (userId: number) => `${userId}.${signValue("dige
 const unsubscribeUrl = (userId: number) => `${config.webUrl}/digest/unsubscribe?token=${unsubscribeToken(userId)}`;
 
 /** Turn the digest off for whoever the token was made for. The token is checked in constant time by comparing signatures. */
-export function unsubscribe(ctx: Ctx, token: unknown): string {
+export async function unsubscribe(ctx: Ctx, token: unknown): Promise<string> {
   const [id, sig] = String(token ?? "").split(".");
   const userId = Number(id);
   if (!Number.isSafeInteger(userId) || !sig || sig !== signValue("digest-unsubscribe", String(userId))) throw badRequest("That unsubscribe link isn’t valid. Turn the weekly email off in Settings → Profile.");
-  const row = ctx.db.prepare("SELECT o.handle FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.id = ?").get(userId) as { handle: string } | undefined;
+  const row = await ctx.db.get("SELECT o.handle FROM owners o JOIN users u ON u.owner_id = o.id WHERE o.id = ?", userId) as { handle: string } | undefined;
   if (!row) throw badRequest("That account doesn’t exist any more.");
-  ctx.db.prepare("UPDATE users SET digest = 'off' WHERE owner_id = ?").run(userId);
+  await ctx.db.run("UPDATE users SET digest = 'off' WHERE owner_id = ?", userId);
   return row.handle;
 }
 
@@ -37,17 +37,13 @@ type Due = { owner_id: number; handle: string; email: string; digest_sent_at: st
  */
 export async function sendDue(ctx: Ctx, at: Date = new Date()): Promise<number> {
   const cutoff = new Date(at.getTime() - WEEK_MS).toISOString();
-  const due = ctx.db
-    .prepare(
-      `SELECT u.owner_id, o.handle, u.email, u.digest_sent_at FROM users u JOIN owners o ON o.id = u.owner_id
-       WHERE u.digest = 'weekly' AND u.email_verified_at IS NOT NULL AND (u.digest_sent_at IS NULL OR u.digest_sent_at <= ?)`,
-    )
-    .all(cutoff) as Due[];
+  const due = await ctx.db.all(`SELECT u.owner_id, o.handle, u.email, u.digest_sent_at FROM users u JOIN owners o ON o.id = u.owner_id
+       WHERE u.digest = 'weekly' AND u.email_verified_at IS NOT NULL AND (u.digest_sent_at IS NULL OR u.digest_sent_at <= ?)`, cutoff) as Due[];
   let sent = 0;
   for (const u of due) {
     const since = u.digest_sent_at ?? cutoff;
-    const items = listInbox(ctx, { id: u.owner_id, handle: u.handle }, { view: "inbox", limit: 200 }).items.filter((i) => !i.read && i.at > since);
-    ctx.db.prepare("UPDATE users SET digest_sent_at = ? WHERE owner_id = ?").run(at.toISOString(), u.owner_id);
+    const items = (await listInbox(ctx, { id: u.owner_id, handle: u.handle }, { view: "inbox", limit: 200 })).items.filter((i) => !i.read && i.at > since);
+    await ctx.db.run("UPDATE users SET digest_sent_at = ? WHERE owner_id = ?", at.toISOString(), u.owner_id);
     if (!items.length) continue;
     const mentions = items.filter((i) => i.reason === "mention").length;
     await sendDigestEmail(

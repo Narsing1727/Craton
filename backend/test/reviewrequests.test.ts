@@ -28,12 +28,12 @@ type Item = { type: string; reason: string; actor: string; text: string; href: s
 const inbox = async (who: string) => ((await call("GET", "/user/inbox", who)).json as { items: Item[] }).items;
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of people) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ctx.db.prepare("UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(u);
+    await ctx.db.run("UPDATE users SET email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)", u);
   }
   assert.equal((await call("POST", "/repos", "rhea", { name: "basin", visibility: "private", sample: true })).status, 201);
   assert.equal((await call("PUT", "/repos/rhea/basin/collaborators/sol", "rhea", { role: "Write" })).status, 201);

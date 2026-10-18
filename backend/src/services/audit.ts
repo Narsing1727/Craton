@@ -78,10 +78,10 @@ export type RequestFacts = {
 };
 
 /** Called after every API response; keeps the few that belong in the log. */
-export function recordRequest(ctx: Ctx, r: RequestFacts) {
+export async function recordRequest(ctx: Ctx, r: RequestFacts) {
   if (!r.actor) return;
   try {
-    if (r.actor.tokenKind === "pat") recordTokenRequest(ctx, r);
+    if (r.actor.tokenKind === "pat") await recordTokenRequest(ctx, r);
     if (r.unmatched || !MUTATING.has(r.method)) return;
     // Only what happens to repositories and organizations; account changes have their own personal security log.
     if (!(r.route.startsWith("/repos/") || r.route.startsWith("/orgs/"))) return;
@@ -91,31 +91,12 @@ export function recordRequest(ctx: Ctx, r: RequestFacts) {
     if (!(r.status < 400 || refused)) return;
 
     const handle = r.params.owner ?? r.params.org;
-    const owner = handle ? (ctx.db.prepare("SELECT id, handle FROM owners WHERE handle = ?").get(handle.toLowerCase()) as { id: number; handle: string } | undefined) : undefined;
+    const owner = handle ? (await ctx.db.get("SELECT id, handle FROM owners WHERE handle = ?", handle.toLowerCase()) as { id: number; handle: string } | undefined) : undefined;
     const params: Record<string, string> = {};
     for (const [k, v] of Object.entries(r.params)) if (!SECRET_PARAMS.has(k) && k !== "owner" && k !== "org" && k !== "repo") params[k] = String(v).slice(0, 200);
-    const info = ctx.db
-      .prepare(
-        "INSERT INTO audit_events (owner_id, owner_handle, repo, actor_id, actor_handle, token_id, token_kind, action, method, route, params, status, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        owner?.id ?? null,
-        owner?.handle ?? handle ?? null,
-        r.params.repo?.toLowerCase() ?? null,
-        r.actor.id,
-        r.actor.handle,
-        r.actor.tokenId,
-        r.actor.tokenKind,
-        labelFor(r.method, r.route),
-        r.method,
-        r.route,
-        JSON.stringify(params),
-        r.status,
-        r.ip?.slice(0, 64) ?? null,
-        r.userAgent?.slice(0, 200) ?? null,
-      );
-    if (Number(info.lastInsertRowid) % 100 === 0) {
-      ctx.db.prepare("DELETE FROM audit_events WHERE at < ?").run(new Date(Date.now() - RETAIN_DAYS * 86_400_000).toISOString());
+    const info = await ctx.db.insert("INSERT INTO audit_events (owner_id, owner_handle, repo, actor_id, actor_handle, token_id, token_kind, action, method, route, params, status, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", owner?.id ?? null, owner?.handle ?? handle ?? null, r.params.repo?.toLowerCase() ?? null, r.actor.id, r.actor.handle, r.actor.tokenId, r.actor.tokenKind, labelFor(r.method, r.route), r.method, r.route, JSON.stringify(params), r.status, r.ip?.slice(0, 64) ?? null, r.userAgent?.slice(0, 200) ?? null);
+    if (info % 100 === 0) {
+      await ctx.db.run("DELETE FROM audit_events WHERE at < ?", new Date(Date.now() - RETAIN_DAYS * 86_400_000).toISOString());
     }
   } catch {
     // A log that cannot be written must never make the request it describes fail.
@@ -126,23 +107,19 @@ export function recordRequest(ctx: Ctx, r: RequestFacts) {
  * An entry the request log cannot know on its own, such as a push that a scan stopped or one an administrator let
  * through on purpose. Same shape as any other entry; `params` must never carry a secret.
  */
-export function recordNote(ctx: Ctx, n: { repo: { id: number; owner: string; name: string }; ownerId: number; actor: { id: number; handle: string; tokenId: number; tokenKind: string }; action: string; route: string; params: Record<string, string | number>; status: number }) {
+export async function recordNote(ctx: Ctx, n: { repo: { id: number; owner: string; name: string }; ownerId: number; actor: { id: number; handle: string; tokenId: number; tokenKind: string }; action: string; route: string; params: Record<string, string | number>; status: number }) {
   try {
-    ctx.db
-      .prepare(
-        "INSERT INTO audit_events (owner_id, owner_handle, repo, actor_id, actor_handle, token_id, token_kind, action, method, route, params, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'POST', ?, ?, ?)",
-      )
-      .run(n.ownerId, n.repo.owner.toLowerCase(), n.repo.name.toLowerCase(), n.actor.id, n.actor.handle, n.actor.tokenId, n.actor.tokenKind, n.action, n.route, JSON.stringify(n.params), n.status);
+    await ctx.db.run("INSERT INTO audit_events (owner_id, owner_handle, repo, actor_id, actor_handle, token_id, token_kind, action, method, route, params, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'POST', ?, ?, ?)", n.ownerId, n.repo.owner.toLowerCase(), n.repo.name.toLowerCase(), n.actor.id, n.actor.handle, n.actor.tokenId, n.actor.tokenKind, n.action, n.route, JSON.stringify(n.params), n.status);
   } catch {
     // Same rule as above: the log never breaks the request.
   }
 }
 
-function recordTokenRequest(ctx: Ctx, r: RequestFacts) {
+async function recordTokenRequest(ctx: Ctx, r: RequestFacts) {
   const id = r.actor!.tokenId;
-  const info = ctx.db.prepare("INSERT INTO token_requests (token_id, method, route, status, ms, ip) VALUES (?, ?, ?, ?, ?, ?)").run(id, r.method, r.route, r.status, Math.round(r.ms * 10) / 10, r.ip?.slice(0, 64) ?? null);
-  if (Number(info.lastInsertRowid) % 20 === 0) {
-    ctx.db.prepare("DELETE FROM token_requests WHERE token_id = ? AND id NOT IN (SELECT id FROM token_requests WHERE token_id = ? ORDER BY id DESC LIMIT ?)").run(id, id, TOKEN_KEEP);
+  const info = await ctx.db.insert("INSERT INTO token_requests (token_id, method, route, status, ms, ip) VALUES (?, ?, ?, ?, ?, ?)", id, r.method, r.route, r.status, Math.round(r.ms * 10) / 10, r.ip?.slice(0, 64) ?? null);
+  if (info % 20 === 0) {
+    await ctx.db.run("DELETE FROM token_requests WHERE token_id = ? AND id NOT IN (SELECT id FROM token_requests WHERE token_id = ? ORDER BY id DESC LIMIT ?)", id, id, TOKEN_KEEP);
   }
 }
 
@@ -193,7 +170,7 @@ const toEvent = (r: Row): AuditEvent => ({
   ip: r.ip,
 });
 
-export function listEvents(ctx: Ctx, ownerId: number, opts: { repo?: string; actor?: string; outcome?: string; before?: number; limit?: number; max?: number } = {}) {
+export async function listEvents(ctx: Ctx, ownerId: number, opts: { repo?: string; actor?: string; outcome?: string; before?: number; limit?: number; max?: number } = {}) {
   const where = ["owner_id = ?"];
   const args: (string | number)[] = [ownerId];
   if (opts.repo) {
@@ -211,7 +188,7 @@ export function listEvents(ctx: Ctx, ownerId: number, opts: { repo?: string; act
     args.push(opts.before);
   }
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), opts.max ?? 500);
-  const rows = ctx.db.prepare(`SELECT * FROM audit_events WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...args, limit + 1) as Row[];
+  const rows = await ctx.db.all(`SELECT * FROM audit_events WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`, ...args, limit + 1) as Row[];
   const more = rows.length > limit;
   const events = rows.slice(0, limit).map(toEvent);
   return { events, next: more ? events[events.length - 1].id : null };
@@ -230,8 +207,8 @@ export function eventsCsv(events: AuditEvent[]): string {
   return [head.join(","), ...lines].join("\n") + "\n";
 }
 
-export function tokenRequests(ctx: Ctx, tokenId: number, limit = 100) {
-  const rows = ctx.db.prepare("SELECT at, method, route, status, ms, ip FROM token_requests WHERE token_id = ? ORDER BY id DESC LIMIT ?").all(tokenId, Math.min(limit, TOKEN_KEEP)) as {
+export async function tokenRequests(ctx: Ctx, tokenId: number, limit = 100) {
+  const rows = await ctx.db.all("SELECT at, method, route, status, ms, ip FROM token_requests WHERE token_id = ? ORDER BY id DESC LIMIT ?", tokenId, Math.min(limit, TOKEN_KEEP)) as {
     at: string;
     method: string;
     route: string;

@@ -1,6 +1,8 @@
 // The cold tier for DEFLATE GeoTIFFs, on files written by GDAL: old versions are kept as their pixels (a later one as a difference),
 // the tip stays as uploaded, and every way of reading any version still gives exactly the bytes that were uploaded.
 
+import { sumAsync } from "../src/core/async.ts";
+import { everyAsync, filterAsync } from "../src/core/async.ts";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -28,7 +30,7 @@ let ctx: Ctx;
 let app: ReturnType<typeof createApp>;
 let token = "";
 let dir = "";
-let repo: ReturnType<typeof findRepo>;
+let repo: Awaited<ReturnType<typeof findRepo>>;
 
 const fixture = (name: string) => fs.readFileSync(path.join(import.meta.dirname, "fixtures", name));
 const V1 = fixture("deflate_tiled.tif");
@@ -48,46 +50,46 @@ async function upload(name: string, data: Buffer, message: string) {
   return ((await res.json()) as { commit: string }).commit;
 }
 const raw = async (ref: string, name: string) => Buffer.from(await (await app.request(`/v1/repos/alice/dem/raw/${ref}/${name}`, { headers: { authorization: `Bearer ${token}` } })).arrayBuffer());
-const blobOf = (commit: string, name = "dem.tif") => {
-  const tree = getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, commit, "commit").tree, "tree");
-  return { id: tree.entries.find((e) => e.path === name)!.blob, blob: getObject<BlobObject>(ctx, repo, tree.entries.find((e) => e.path === name)!.blob, "blob") };
+const blobOf = async (commit: string, name = "dem.tif") => {
+  const tree = await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, commit, "commit")).tree, "tree");
+  return { id: tree.entries.find((e) => e.path === name)!.blob, blob: await getObject<BlobObject>(ctx, repo, tree.entries.find((e) => e.path === name)!.blob, "blob") };
 };
-const row = (hash: string) => ctx.db.prepare("SELECT codec, stored_size FROM chunks WHERE hash = ?").get(hash) as { codec: string; stored_size: number };
-const stored = (commit: string, name = "dem.tif") => blobOf(commit, name).blob.chunks.reduce((n, c) => n + row(c.hash).stored_size, 0);
-const codecs = (commit: string, name = "dem.tif") => new Set(blobOf(commit, name).blob.chunks.map((c) => row(c.hash).codec));
+const row = async (hash: string) => await ctx.db.get("SELECT codec, stored_size FROM chunks WHERE hash = ?", hash) as { codec: string; stored_size: number };
+const stored = async (commit: string, name = "dem.tif") => await sumAsync((await blobOf(commit, name)).blob.chunks, async (c) => (await row(c.hash)).stored_size);
+const codecs = async (commit: string, name = "dem.tif") => new Set((await Promise.all((await blobOf(commit, name)).blob.chunks.map(async (c) => (await row(c.hash)).codec))));
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "craton-recode-"));
-  ctx = { db: openDb(":memory:"), store: new FsStore(dir) };
+  ctx = { db: await openDb(":memory:"), store: new FsStore(dir) };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "alice", email: "alice@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
-  ctx.db.prepare("UPDATE users SET plan = 'team', email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')").run();
+  await ctx.db.run("UPDATE users SET plan = 'team', email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')");
   assert.equal((await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "dem", visibility: "private" }) })).status, 201);
-  repo = findRepo(ctx, "alice", "dem");
+  repo = await findRepo(ctx, "alice", "dem");
   for (const [data, message] of [[V1, "original"], [V2, "datum shift"], [V3, "another datum shift"]] as const) commits.push(await upload("dem.tif", data, message));
 });
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 test("a dry run measures and changes nothing", async () => {
-  const before = [stored(commits[0]), stored(commits[1])];
+  const before = [await stored(commits[0]), await stored(commits[1])];
   const r = await recodeRepository(ctx, repo, { apply: false });
   assert.ok(r.tiles >= 12 && r.savedBytes > 0, JSON.stringify(r));
-  assert.deepEqual([stored(commits[0]), stored(commits[1])], before);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM tiles").get() as { n: number }).n, 0);
+  assert.deepEqual([await stored(commits[0]), await stored(commits[1])], before);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM tiles") as { n: number }).n, 0);
 });
 
 test("old versions are kept as pixels (the second as differences), and the tip stays exactly as uploaded", async () => {
-  const before = [stored(commits[0]), stored(commits[1]), stored(commits[2])];
+  const before = [await stored(commits[0]), await stored(commits[1]), await stored(commits[2])];
   const r = await recodeRepository(ctx, repo);
   assert.ok(r.chunks >= 4 && r.files === 2, JSON.stringify(r));
-  const after = [stored(commits[0]), stored(commits[1]), stored(commits[2])];
+  const after = [await stored(commits[0]), await stored(commits[1]), await stored(commits[2])];
   assert.ok(after[0] < before[0] * 0.8, `the first version: ${before[0]} -> ${after[0]}`);
   assert.ok(after[1] < before[1] * 0.2, `the shifted version, as differences: ${before[1]} -> ${after[1]}`);
   assert.equal(after[2], before[2], "the tip is untouched");
-  assert.deepEqual([...codecs(commits[2])], ["none"]);
-  assert.ok(codecs(commits[0]).has("tiles") && codecs(commits[1]).has("tiles"));
-  const kinds = ctx.db.prepare("SELECT kind, COUNT(*) AS n FROM tiles GROUP BY kind ORDER BY kind").all() as { kind: number; n: number }[];
+  assert.deepEqual([...await codecs(commits[2])], ["none"]);
+  assert.ok((await codecs(commits[0])).has("tiles") && (await codecs(commits[1])).has("tiles"));
+  const kinds = await ctx.db.all("SELECT kind, COUNT(*) AS n FROM tiles GROUP BY kind ORDER BY kind") as { kind: number; n: number }[];
   assert.deepEqual(kinds.map((k) => [k.kind, k.n]), [[1, 12], [2, 12]], "12 whole tiles, 12 differences");
 });
 
@@ -96,7 +98,7 @@ test("every version still downloads exactly as it was uploaded", async () => {
   assert.ok((await raw(commits[0], "dem.tif")).equals(V1), "the original");
   assert.ok((await raw(commits[1], "dem.tif")).equals(V2), "the shifted version");
   assert.ok((await raw(commits[2], "dem.tif")).equals(V3), "the tip");
-  for (const c of blobOf(commits[1]).blob.chunks) {
+  for (const c of (await blobOf(commits[1])).blob.chunks) {
     const direct = await app.request(`/v1/repos/alice/dem/chunks/${c.hash}`, { headers: { authorization: `Bearer ${token}` } });
     assert.equal(sha256Hex(Buffer.from(await direct.arrayBuffer())), c.hash);
   }
@@ -111,13 +113,13 @@ test("reading a cold file from the start makes each tile once, and starts the ne
   assert.ok(readAhead >= 6, `${readAhead} tiles were started ahead`);
   forgetRebuiltTiles();
   resetTileStats();
-  const fifth = (ctx.db.prepare("SELECT tile_key FROM blob_tiles WHERE blob_id = ? AND image = 0 AND idx = 5").get(blobOf(commits[0]).id) as { tile_key: string }).tile_key;
+  const fifth = (await ctx.db.get("SELECT tile_key FROM blob_tiles WHERE blob_id = ? AND image = 0 AND idx = 5", (await blobOf(commits[0])).id) as { tile_key: string }).tile_key;
   await tileStream(ctx, fifth);
   assert.equal(tileStats().readAhead, 0, "a tile asked for out of order starts nothing ahead");
 });
 
 test("a client is sent chunks it can decode on its own, and cannot upload the cold form", async () => {
-  const cold = blobOf(commits[1]).blob.chunks.filter((c) => row(c.hash).codec === "tiles");
+  const cold = (await filterAsync((await blobOf(commits[1])).blob.chunks, async (c) => (await row(c.hash)).codec === "tiles"));
   assert.ok(cold.length >= 3);
   for (const c of cold) {
     assert.ok(isPieces((await ctx.store.get(c.hash))!), "stored as pieces");
@@ -133,13 +135,13 @@ test("every stored tile makes its original stream again", async () => {
 });
 
 test("a damaged tile is never read as the chunk it is part of", async () => {
-  const key = (ctx.db.prepare("SELECT key FROM tiles WHERE kind = 1 LIMIT 1").get() as { key: string }).key;
+  const key = (await ctx.db.get("SELECT key FROM tiles WHERE kind = 1 LIMIT 1") as { key: string }).key;
   const good = (await ctx.store.get(key))!;
   const bad = Buffer.from(good);
   bad[bad.length - 5] ^= 0xff;
   await ctx.store.replace(key, bad);
   forgetRebuiltTiles();
-  const victim = blobOf(commits[0]).blob.chunks.find((c) => (ctx.db.prepare("SELECT 1 FROM chunk_tiles WHERE chunk_hash = ? AND tile_key = ?").get(c.hash, key)))!;
+  const victim = (await filterAsync((await blobOf(commits[0])).blob.chunks, async (c) => Boolean(await ctx.db.get("SELECT 1 FROM chunk_tiles WHERE chunk_hash = ? AND tile_key = ?", c.hash, key))))[0];
   await assert.rejects(readChunk(ctx, victim.hash));
   await ctx.store.replace(key, good);
   forgetRebuiltTiles();
@@ -157,10 +159,10 @@ test("garbage collection keeps the tiles chunks are made of, and removes them wh
   forgetRebuiltTiles();
   assert.ok((await raw(commits[1], "dem.tif")).equals(V2));
   // Take the first two versions out of the repository: their chunks and then their tiles are no longer needed.
-  for (const id of [blobOf(commits[0]).id, blobOf(commits[1]).id]) ctx.db.prepare("DELETE FROM repo_objects WHERE object_id = ?").run(id);
+  for (const id of [(await blobOf(commits[0])).id, (await blobOf(commits[1])).id]) await ctx.db.run("DELETE FROM repo_objects WHERE object_id = ?", id);
   const swept = await collectGarbage(ctx, { apply: true, graceDays: 30, now: Date.now() + 40 * 86_400_000 });
   assert.ok(swept.removed > 0 && swept.tilesRemoved === 24, JSON.stringify(swept));
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM tiles").get() as { n: number }).n, 0);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM tiles") as { n: number }).n, 0);
   assert.ok((await raw(commits[2], "dem.tif")).equals(V3), "the tip is still there");
 });
 
@@ -170,7 +172,7 @@ test("a tile that cannot be made again is kept as it is, and the rest of the fil
   broken[segments[3].offset + 40] ^= 0x55; // one byte inside one tile's stream
   const first = await upload("odd.tif", broken, "odd one");
   await upload("odd.tif", V3, "odd two");
-  const r = await recodeBlob(ctx, repo, blobOf(first, "odd.tif").id);
+  const r = await recodeBlob(ctx, repo, (await blobOf(first, "odd.tif")).id);
   assert.ok(r.tiles + r.reused === 11 && r.chunks > 0, JSON.stringify(r));
   forgetRebuiltTiles();
   assert.ok((await raw(first, "odd.tif")).equals(broken), "the damaged tile comes back as it was, damage and all");
@@ -182,7 +184,7 @@ test("with it switched on, a push makes the old version cold after the answer", 
     const a = await upload("auto.tif", V1, "auto one");
     await upload("auto.tif", V2, "auto two");
     await repackIdle();
-    assert.ok(codecs(a, "auto.tif").has("tiles"), "the superseded version is cold");
+    assert.ok((await codecs(a, "auto.tif")).has("tiles"), "the superseded version is cold");
     forgetRebuiltTiles();
     assert.ok((await raw(a, "auto.tif")).equals(V1));
   } finally {
@@ -193,14 +195,14 @@ test("with it switched on, a push makes the old version cold after the answer", 
 test("chunks the tip is made of stay exactly as uploaded even when an old version shares them", async () => {
   const old = await upload("share.tif", POLD, "share one");
   const tip = await upload("share.tif", PTIP, "share two (a small edit)");
-  const tipChunks = new Set(blobOf(tip, "share.tif").blob.chunks.map((c) => c.hash));
-  const mine = blobOf(old, "share.tif").blob.chunks;
+  const tipChunks = new Set((await blobOf(tip, "share.tif")).blob.chunks.map((c) => c.hash));
+  const mine = (await blobOf(old, "share.tif")).blob.chunks;
   const shared = mine.filter((c) => tipChunks.has(c.hash));
   assert.ok(shared.length >= 1 && shared.length < mine.length, `${shared.length} of ${mine.length} shared`);
-  const tipBefore = stored(tip, "share.tif");
+  const tipBefore = await stored(tip, "share.tif");
   await recodeRepository(ctx, repo);
-  assert.equal(stored(tip, "share.tif"), tipBefore, "the tip is untouched");
-  assert.ok(shared.every((c) => row(c.hash).codec !== "tiles"), "so are the chunks it shares with the old version");
+  assert.equal(await stored(tip, "share.tif"), tipBefore, "the tip is untouched");
+  assert.ok((await everyAsync(shared, async (c) => (await row(c.hash)).codec !== "tiles")), "so are the chunks it shares with the old version");
   assert.ok((await raw(old, "share.tif")).equals(POLD));
   assert.ok((await raw(tip, "share.tif")).equals(PTIP));
 });

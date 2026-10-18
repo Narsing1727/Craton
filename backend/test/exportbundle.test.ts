@@ -27,7 +27,7 @@ function listZip(zip: Buffer) {
 }
 
 test("the bundle has a folder per owned repository and nothing from anyone else's", async () => {
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const call = (path: string, method: string, token: string, body?: unknown) =>
     app.request(`/v1${path}`, { method, headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const tokens: Record<string, string> = {};
@@ -54,7 +54,7 @@ test("the bundle has a folder per owned repository and nothing from anyone else'
 });
 
 test("an organization's owners can download its repositories; members and strangers cannot", async () => {
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const call = (path: string, method: string, token: string, body?: unknown) =>
     app.request(`/v1${path}`, { method, headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const tokens: Record<string, string> = {};

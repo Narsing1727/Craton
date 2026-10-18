@@ -45,25 +45,25 @@ type Row = {
   created_at: string;
 };
 
-const rowOf = (ctx: Ctx, orgId: number) => ctx.db.prepare("SELECT * FROM org_sso WHERE org_id = ?").get(orgId) as Row | undefined;
+const rowOf = async (ctx: Ctx, orgId: number) => await ctx.db.get("SELECT * FROM org_sso WHERE org_id = ?", orgId) as Row | undefined;
 
-function ownedOrg(ctx: Ctx, orgHandle: string, actorId: number) {
-  const org = getOwner(ctx, orgHandle);
+async function ownedOrg(ctx: Ctx, orgHandle: string, actorId: number) {
+  const org = await getOwner(ctx, orgHandle);
   if (org.kind !== "org") throw notFound(`Organization ${orgHandle}`);
-  const role = orgRole(ctx, org.id, actorId);
+  const role = await orgRole(ctx, org.id, actorId);
   if (!role) throw notFound(`Organization ${orgHandle}`);
   if (role !== "Owner") throw forbidden(`Only owners of ${org.handle} can manage single sign-on.`);
   return org;
 }
 
-const view = (ctx: Ctx, orgId: number, r: Row | undefined) =>
+const view = async (ctx: Ctx, orgId: number, r: Row | undefined) =>
   r
-    ? { configured: true, issuer: r.issuer, clientId: r.client_id, hasSecret: true, enforced: Boolean(r.enforced), testedAt: r.tested_at, redirectUri: redirectUri(), domains: verifiedDomains(ctx, orgId) }
-    : { configured: false, redirectUri: redirectUri(), domains: verifiedDomains(ctx, orgId) };
+    ? { configured: true, issuer: r.issuer, clientId: r.client_id, hasSecret: true, enforced: Boolean(r.enforced), testedAt: r.tested_at, redirectUri: redirectUri(), domains: await verifiedDomains(ctx, orgId) }
+    : { configured: false, redirectUri: redirectUri(), domains: await verifiedDomains(ctx, orgId) };
 
-export function getConfig(ctx: Ctx, orgHandle: string, actorId: number) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
-  return view(ctx, org.id, rowOf(ctx, org.id));
+export async function getConfig(ctx: Ctx, orgHandle: string, actorId: number) {
+  const org = await ownedOrg(ctx, orgHandle, actorId);
+  return view(ctx, org.id, await rowOf(ctx, org.id));
 }
 
 // ── Setting it up ────────────────────────────────────────────────────────────
@@ -108,9 +108,9 @@ async function discover(issuerInput: string) {
 }
 
 export async function configure(ctx: Ctx, orgHandle: string, actorId: number, input: { issuer?: unknown; clientId?: unknown; clientSecret?: unknown }) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
-  if (verifiedDomains(ctx, org.id).length === 0) throw badRequest(`Verify a domain for ${org.handle} first (Settings → Domains): single sign-on only applies to addresses at a domain the organization has proved it controls.`);
-  const existing = rowOf(ctx, org.id);
+  const org = await ownedOrg(ctx, orgHandle, actorId);
+  if ((await verifiedDomains(ctx, org.id)).length === 0) throw badRequest(`Verify a domain for ${org.handle} first (Settings → Domains): single sign-on only applies to addresses at a domain the organization has proved it controls.`);
+  const existing = await rowOf(ctx, org.id);
   const clientId = String(input.clientId ?? "").trim();
   const secretGiven = typeof input.clientSecret === "string" && input.clientSecret.length > 0;
   if (!input.issuer || !clientId) throw badRequest("Give the issuer and the client id from your identity provider.");
@@ -120,34 +120,30 @@ export async function configure(ctx: Ctx, orgHandle: string, actorId: number, in
   const secret = secretGiven ? encryptSecret(String(input.clientSecret)) : existing!.client_secret;
   // A changed provider or client has not been tested, so it cannot stay enforced.
   const same = existing && existing.issuer === found.issuer && existing.client_id === clientId;
-  ctx.db
-    .prepare(
-      `INSERT INTO org_sso (org_id, issuer, client_id, client_secret, auth_url, token_url, jwks_url, auth_method, enforced, tested_at)
+  await ctx.db.run(`INSERT INTO org_sso (org_id, issuer, client_id, client_secret, auth_url, token_url, jwks_url, auth_method, enforced, tested_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
        ON CONFLICT (org_id) DO UPDATE SET issuer = excluded.issuer, client_id = excluded.client_id, client_secret = excluded.client_secret, auth_url = excluded.auth_url,
          token_url = excluded.token_url, jwks_url = excluded.jwks_url, auth_method = excluded.auth_method,
-         enforced = CASE WHEN ? THEN enforced ELSE 0 END, tested_at = CASE WHEN ? THEN tested_at ELSE NULL END`,
-    )
-    .run(org.id, found.issuer, clientId, secret, found.authUrl, found.tokenUrl, found.jwksUrl, found.authMethod, same ? 1 : 0, same ? 1 : 0);
-  return view(ctx, org.id, rowOf(ctx, org.id));
+         enforced = CASE WHEN (?::int) = 1 THEN org_sso.enforced ELSE 0 END, tested_at = CASE WHEN (?::int) = 1 THEN org_sso.tested_at ELSE NULL END`, org.id, found.issuer, clientId, secret, found.authUrl, found.tokenUrl, found.jwksUrl, found.authMethod, same ? 1 : 0, same ? 1 : 0);
+  return view(ctx, org.id, await rowOf(ctx, org.id));
 }
 
-export function setEnforced(ctx: Ctx, orgHandle: string, actorId: number, on: unknown) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
-  const row = rowOf(ctx, org.id);
+export async function setEnforced(ctx: Ctx, orgHandle: string, actorId: number, on: unknown) {
+  const org = await ownedOrg(ctx, orgHandle, actorId);
+  const row = await rowOf(ctx, org.id);
   if (!row) throw notFound("Single sign-on setup");
   if (typeof on !== "boolean") throw badRequest("Send { enforced: true } or { enforced: false }.");
   if (on && !row.tested_at) throw badRequest("Sign in through single sign-on once yourself before requiring it, so you know it works. (Owners are never locked out, but everyone else would be.)");
-  ctx.db.prepare("UPDATE org_sso SET enforced = ? WHERE org_id = ?").run(on ? 1 : 0, org.id);
-  return view(ctx, org.id, rowOf(ctx, org.id));
+  await ctx.db.run("UPDATE org_sso SET enforced = ? WHERE org_id = ?", on ? 1 : 0, org.id);
+  return view(ctx, org.id, await rowOf(ctx, org.id));
 }
 
-export function remove(ctx: Ctx, orgHandle: string, actorId: number) {
-  const org = ownedOrg(ctx, orgHandle, actorId);
-  if (!rowOf(ctx, org.id)) throw notFound("Single sign-on setup");
-  ctx.db.prepare("DELETE FROM org_sso WHERE org_id = ?").run(org.id);
+export async function remove(ctx: Ctx, orgHandle: string, actorId: number) {
+  const org = await ownedOrg(ctx, orgHandle, actorId);
+  if (!await rowOf(ctx, org.id)) throw notFound("Single sign-on setup");
+  await ctx.db.run("DELETE FROM org_sso WHERE org_id = ?", org.id);
   // People who signed in this way keep their accounts; the link just stops being usable.
-  ctx.db.prepare("DELETE FROM oauth_identities WHERE provider = ?").run(`${SSO_PREFIX}${org.id}`);
+  await ctx.db.run("DELETE FROM oauth_identities WHERE provider = ?", `${SSO_PREFIX}${org.id}`);
 }
 
 // ── Who has single sign-on ───────────────────────────────────────────────────
@@ -155,24 +151,22 @@ export function remove(ctx: Ctx, orgHandle: string, actorId: number) {
 const emailDomain = (email: string) => email.slice(email.lastIndexOf("@") + 1).toLowerCase();
 
 /** The organization whose verified domain this address is at, if it has single sign-on set up. */
-export function orgForEmail(ctx: Ctx, email: string): { orgId: number; handle: string; row: Row } | null {
-  const hit = ctx.db
-    .prepare("SELECT d.org_id, o.handle FROM org_domains d JOIN owners o ON o.id = d.org_id JOIN org_sso s ON s.org_id = d.org_id WHERE d.domain = ? AND d.verified_at IS NOT NULL")
-    .get(emailDomain(email)) as { org_id: number; handle: string } | undefined;
-  return hit ? { orgId: hit.org_id, handle: hit.handle, row: rowOf(ctx, hit.org_id)! } : null;
+export async function orgForEmail(ctx: Ctx, email: string): Promise<{ orgId: number; handle: string; row: Row } | null> {
+  const hit = await ctx.db.get("SELECT d.org_id, o.handle FROM org_domains d JOIN owners o ON o.id = d.org_id JOIN org_sso s ON s.org_id = d.org_id WHERE d.domain = ? AND d.verified_at IS NOT NULL", emailDomain(email)) as { org_id: number; handle: string } | undefined;
+  return hit ? { orgId: hit.org_id, handle: hit.handle, row: (await rowOf(ctx, hit.org_id))! } : null;
 }
 
 /**
  * Refuse a sign-in method that is not single sign-on for someone the organization requires it of: a member (not an owner)
  * whose confirmed address is at a verified domain of an organization that enforces SSO.
  */
-export function assertMethodAllowed(ctx: Ctx, userId: number, via: "password" | "google" | "github" | "passkey" | "sso") {
+export async function assertMethodAllowed(ctx: Ctx, userId: number, via: "password" | "google" | "github" | "passkey" | "sso") {
   if (via === "sso") return;
-  const u = ctx.db.prepare("SELECT email FROM users WHERE owner_id = ?").get(userId) as { email: string } | undefined;
+  const u = await ctx.db.get("SELECT email FROM users WHERE owner_id = ?", userId) as { email: string } | undefined;
   if (!u) return;
-  const org = orgForEmail(ctx, u.email);
+  const org = await orgForEmail(ctx, u.email);
   if (!org || !org.row.enforced) return;
-  const role = orgRole(ctx, org.orgId, userId);
+  const role = await orgRole(ctx, org.orgId, userId);
   if (!role || role === "Owner") return;
   throw new ApiError(403, "sso_required", `${org.handle} requires single sign-on for ${emailDomain(u.email)} addresses. Choose “Continue with single sign-on” and enter your work email.`, { organization: org.handle });
 }
@@ -181,18 +175,16 @@ export function assertMethodAllowed(ctx: Ctx, userId: number, via: "password" | 
 
 const safeNext = (n: string | null | undefined) => (n && n.startsWith("/") && !n.startsWith("//") && !n.includes("\\") && n.length <= 300 ? n : null);
 
-export function start(ctx: Ctx, input: { email?: unknown; next?: string | null }) {
+export async function start(ctx: Ctx, input: { email?: unknown; next?: string | null }) {
   const email = String(input.email ?? "").trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest("Enter your work email address.");
-  const org = orgForEmail(ctx, email);
+  const org = await orgForEmail(ctx, email);
   if (!org) throw new ApiError(404, "sso_not_configured", `No organization has single sign-on for ${emailDomain(email)} addresses. Sign in another way, or ask an owner of your organization to set it up.`);
-  ctx.db.prepare("DELETE FROM oauth_flows WHERE expires_at < ?").run(nowIso());
+  await ctx.db.run("DELETE FROM oauth_flows WHERE expires_at < ?", nowIso());
   const state = random(32);
   const verifier = random(48);
   const nonce = random(16);
-  ctx.db
-    .prepare("INSERT INTO oauth_flows (state_hash, verifier, nonce, next, link_user_id, expires_at, provider) VALUES (?, ?, ?, ?, NULL, ?, ?)")
-    .run(sha(state), verifier, nonce, safeNext(input.next), inMinutes(FLOW_MINUTES), `${SSO_PREFIX}${org.orgId}`);
+  await ctx.db.run("INSERT INTO oauth_flows (state_hash, verifier, nonce, next, link_user_id, expires_at, provider) VALUES (?, ?, ?, ?, NULL, ?, ?)", sha(state), verifier, nonce, safeNext(input.next), inMinutes(FLOW_MINUTES), `${SSO_PREFIX}${org.orgId}`);
   const q = new URLSearchParams({
     client_id: org.row.client_id,
     redirect_uri: redirectUri(),
@@ -267,15 +259,15 @@ export type SsoClaims = { sub: string; email: string; name: string };
 export async function finish(ctx: Ctx, input: { code: string; state: string }): Promise<{ claims: SsoClaims; next: string | null; orgId: number; orgHandle: string; provider: string }> {
   if (!input.code || !input.state) throw badRequest("The sign-in was cut short. Start again.");
   const stateHash = sha(input.state);
-  const flow = ctx.db.prepare("SELECT verifier, nonce, next, expires_at, provider FROM oauth_flows WHERE state_hash = ?").get(stateHash) as
+  const flow = await ctx.db.get("SELECT verifier, nonce, next, expires_at, provider FROM oauth_flows WHERE state_hash = ?", stateHash) as
     | { verifier: string; nonce: string; next: string | null; expires_at: string; provider: string }
     | undefined;
-  ctx.db.prepare("DELETE FROM oauth_flows WHERE state_hash = ?").run(stateHash); // single use, whatever happens next
+  await ctx.db.run("DELETE FROM oauth_flows WHERE state_hash = ?", stateHash); // single use, whatever happens next
   if (!flow || flow.expires_at < nowIso() || !flow.provider.startsWith(SSO_PREFIX)) throw badRequest("This sign-in expired or was already used. Start again.");
   const orgId = Number(flow.provider.slice(SSO_PREFIX.length));
-  const row = rowOf(ctx, orgId);
+  const row = await rowOf(ctx, orgId);
   if (!row) throw new ApiError(404, "sso_not_configured", "Single sign-on was turned off for this organization.");
-  const org = getOwner(ctx, (ctx.db.prepare("SELECT handle FROM owners WHERE id = ?").get(orgId) as { handle: string }).handle);
+  const org = await getOwner(ctx, (await ctx.db.get("SELECT handle FROM owners WHERE id = ?", orgId) as { handle: string }).handle);
 
   const form = new URLSearchParams({ grant_type: "authorization_code", code: input.code, redirect_uri: redirectUri(), code_verifier: flow.verifier });
   const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
@@ -294,19 +286,19 @@ export async function finish(ctx: Ctx, input: { code: string; state: string }): 
   if (reply.status !== 200 || !token.id_token) throw new ApiError(502, "sso_error", "Your identity provider didn’t accept the sign-in. Start again.");
   const claims = await verifyIdToken(row, token.id_token, flow.nonce);
   // The provider may only speak for the organization's own, verified, domains.
-  if (!verifiedDomains(ctx, orgId).includes(emailDomain(claims.email))) {
+  if (!(await verifiedDomains(ctx, orgId)).includes(emailDomain(claims.email))) {
     throw new ApiError(403, "domain_not_verified", `${claims.email} isn’t at a domain ${org.handle} has verified, so ${org.handle}’s single sign-on can’t vouch for it.`);
   }
   return { claims, next: safeNext(flow.next), orgId, orgHandle: org.handle, provider: flow.provider };
 }
 
 /** The first successful sign-in proves the setup works; only then can it be required. */
-export function markTested(ctx: Ctx, orgId: number) {
-  ctx.db.prepare("UPDATE org_sso SET tested_at = COALESCE(tested_at, ?) WHERE org_id = ?").run(nowIso(), orgId);
+export async function markTested(ctx: Ctx, orgId: number) {
+  await ctx.db.run("UPDATE org_sso SET tested_at = COALESCE(tested_at, ?) WHERE org_id = ?", nowIso(), orgId);
 }
 
 /** A person who came through the organization's provider belongs to the organization. */
-export function joinOrg(ctx: Ctx, orgId: number, userId: number) {
-  if (!orgRole(ctx, orgId, userId)) addMember(ctx, orgId, userId, "Member");
+export async function joinOrg(ctx: Ctx, orgId: number, userId: number) {
+  if (!await orgRole(ctx, orgId, userId)) await addMember(ctx, orgId, userId, "Member");
 }
 

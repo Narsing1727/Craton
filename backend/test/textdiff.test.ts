@@ -78,13 +78,13 @@ test("text is recognised by content: NUL bytes and invalid UTF-8 are not text, l
 let app: ReturnType<typeof createApp>;
 let token = "";
 before(async () => {
-  const ctx: Ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  const ctx: Ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
   await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "basin", visibility: "private" }) });
-  const owner = ctx.db.prepare("SELECT id FROM owners WHERE handle = 'rhea'").get() as { id: number };
-  const repo = getRepoFor(ctx, "rhea", "basin", owner.id, "write");
+  const owner = await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number };
+  const repo = await getRepoFor(ctx, "rhea", "basin", owner.id, "write");
   const plan1 = "Plan Title=Calibration\nGeom File=g01\nFlow File=u01\nProgram Version=6.4\nManning n=0.035\n";
   await commitFiles(ctx, repo, { branch: "main", author: "rhea", message: "Initial", timestamp: new Date(Date.now() - 5000), changes: { "model/river.p01": Buffer.from(plan1), "terrain/dem.bin": Buffer.from([0, 1, 2, 3]) } });
   await commitFiles(ctx, repo, { branch: "main", author: "rhea", message: "Raise n", timestamp: new Date(), changes: { "model/river.p01": Buffer.from(plan1.replace("0.035", "0.042")), "terrain/dem.bin": Buffer.from([0, 1, 2, 4]) } });

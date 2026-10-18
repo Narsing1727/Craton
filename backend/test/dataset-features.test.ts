@@ -32,17 +32,17 @@ const repoOf = (who: string) => getRepoFor(ctx, "rhea", "basin", ids[who]);
 const bytes = (s: string) => Buffer.from(s.repeat(2000));
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "sol", "ines"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ids[u] = (ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get(u) as { id: number }).id;
+    ids[u] = (await ctx.db.get("SELECT id FROM owners WHERE handle = ?", u) as { id: number }).id;
   }
   const made = await call("POST", "/repos", "rhea", { name: "basin", visibility: "private" });
   assert.equal(made.status, 201, made.text);
-  const repo = repoOf("rhea");
-  ctx.db.prepare("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, ?, 'Write')").run(repo.id, ids.sol);
+  const repo = await repoOf("rhea");
+  await ctx.db.run("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, ?, 'Write')", repo.id, ids.sol);
   await commitFiles(ctx, repo, {
     branch: "main",
     author: "rhea",
@@ -115,7 +115,7 @@ test("paths must be plain relative file paths, and strangers cannot lock", async
 });
 
 test("a push that changes a file locked by someone else is refused, naming the holder; the holder can still push it", async () => {
-  const repo = repoOf("rhea");
+  const repo = await repoOf("rhea");
   const attempt = commitFiles(ctx, repo, { branch: "main", author: "sol", message: "Tweak plan", timestamp: new Date(), changes: { "model/plan.p01": bytes("z") } });
   await assert.rejects(attempt, (err: any) => {
     assert.equal(err.status, 409);
@@ -130,7 +130,7 @@ test("a push that changes a file locked by someone else is refused, naming the h
 });
 
 test("deleting a locked file and branching around the lock are both caught", async () => {
-  const repo = repoOf("rhea");
+  const repo = await repoOf("rhea");
   await assert.rejects(commitFiles(ctx, repo, { branch: "main", author: "sol", message: "Remove plan", timestamp: new Date(), changes: { "model/plan.p01": null } }), { code: "locked" });
   // A new branch that edits the locked file can't be pushed either: it is measured from where it forks off main.
   await assert.rejects(commitFiles(ctx, repo, { branch: "sneaky", from: "main", author: "sol", message: "Edit on a branch", timestamp: new Date(), changes: { "model/plan.p01": bytes("q") } }), { code: "locked" });
@@ -146,7 +146,7 @@ test("only the holder can release a lock; an admin can force it; then the push g
 
   assert.equal((await call("DELETE", "/repos/rhea/basin/locks/model%2Fplan.p01?force=true", "rhea")).status, 204, "the owner can force");
   assert.equal((await call("DELETE", "/repos/rhea/basin/locks/model%2Fplan.p01", "rhea")).status, 404, "already released");
-  await commitFiles(ctx, repoOf("rhea"), { branch: "main", author: "sol", message: "Tweak plan", timestamp: new Date(), changes: { "model/plan.p01": bytes("w") } });
+  await commitFiles(ctx, await repoOf("rhea"), { branch: "main", author: "sol", message: "Tweak plan", timestamp: new Date(), changes: { "model/plan.p01": bytes("w") } });
 });
 
 test("the holder releases their own lock", async () => {
@@ -200,7 +200,7 @@ test("a CITATION.cff in the repository is returned as written and its authors, v
     'doi: "10.5281/zenodo.1234567"',
     "license: CC-BY-4.0",
   ].join("\n");
-  await commitFiles(ctx, repoOf("rhea"), { branch: "main", author: "rhea", message: "Add citation", timestamp: new Date(), changes: { "CITATION.cff": Buffer.from(`${cff}\n`) } });
+  await commitFiles(ctx, await repoOf("rhea"), { branch: "main", author: "rhea", message: "Add citation", timestamp: new Date(), changes: { "CITATION.cff": Buffer.from(`${cff}\n`) } });
   const c = await call("GET", "/repos/rhea/basin/citation", "rhea");
   assert.equal(c.json.source, "CITATION.cff");
   assert.equal(c.json.cff, `${cff}\n`, "returned exactly as the repository has it");
@@ -217,7 +217,7 @@ test("a stranger cannot read a private repository's citation", async () => {
 // ── Restoring an earlier version of a file ─────────────────────────────────
 
 test("restoring a file adds a new commit with the old bytes and keeps all history", async () => {
-  const repo = repoOf("rhea");
+  const repo = await repoOf("rhea");
   const read = async (ref: string) => {
     const r = await app.request(`/v1/repos/rhea/basin/raw/${ref}/model/plan.p01`, { headers: { authorization: `Bearer ${tokens.rhea}` } });
     return Buffer.from(await r.arrayBuffer());
@@ -259,7 +259,7 @@ test("restoring refuses when nothing would change, the version lacks the file, o
 test("restoring respects locks held by others, write access and privacy", async () => {
   const first = (await call("GET", "/repos/rhea/basin/commits?limit=100", "rhea")).json.find((c: any) => c.message === "Initial").sha;
   await call("POST", "/repos/rhea/basin/locks", "rhea", { path: "README.md", reason: "rewriting" });
-  await commitFiles(ctx, repoOf("rhea"), { branch: "main", author: "rhea", message: "Edit readme", timestamp: new Date(), changes: { "README.md": bytes("zz") } });
+  await commitFiles(ctx, await repoOf("rhea"), { branch: "main", author: "rhea", message: "Edit readme", timestamp: new Date(), changes: { "README.md": bytes("zz") } });
   const blocked = await call("POST", "/repos/rhea/basin/restore", "sol", { path: "README.md", from: first });
   assert.equal(blocked.status, 409);
   assert.equal(blocked.json.error.code, "locked");
@@ -276,7 +276,7 @@ test("a lock reports how long it has been held and becomes stale after a week", 
   assert.equal(made.json.stale, false);
   // Backdate it ten days, as if forgotten.
   const tenDays = new Date(Date.now() - 10 * 86_400_000).toISOString();
-  ctx.db.prepare("UPDATE file_locks SET created_at = ? WHERE path = 'model/old.g01'").run(tenDays);
+  await ctx.db.run("UPDATE file_locks SET created_at = ? WHERE path = 'model/old.g01'", tenDays);
   const list = await call("GET", "/repos/rhea/basin/locks", "sol");
   const old = (list.json as { path: string; ageDays: number; stale: boolean }[]).find((l) => l.path === "model/old.g01")!;
   assert.equal(old.ageDays, 10);

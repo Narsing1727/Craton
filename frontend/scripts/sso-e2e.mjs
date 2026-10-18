@@ -2,18 +2,16 @@
 // (:9101). Start the API with a THROWAWAY data folder and CRATON_WEBHOOKS_ALLOW_PRIVATE=1; this creates accounts.
 //
 //   node scripts/mock-oidc.mjs &
-//   CRATON_E2E_DB=<that folder>/craton.db npm run e2e:sso
+//   CRATON_E2E_DATABASE_URL=<postgres address> npm run e2e:sso
 //
 // Covers: an owner connects the provider; "Continue with single sign-on" with a work email; first sign-in -> username -> account
 // in the organization; the setup shows as tested; requiring it refuses a member's password; an address outside the verified domain.
 import fs from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { openE2eDb } from "./e2e-db.mjs";
 import { chromium } from "playwright-core";
 
 const WEB = "http://localhost:3100", API = "http://localhost:4000/v1", MOCK = "http://localhost:9101";
 const SHOTS = process.env.CRATON_E2E_SHOTS ?? "e2e-shots";
-const DB = process.env.CRATON_E2E_DB;
-if (!DB) throw new Error("Set CRATON_E2E_DB to the craton.db of the throwaway API.");
 fs.mkdirSync(SHOTS, { recursive: true });
 const edge = [process.env.CRATON_BROWSER, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe"].find((p) => p && fs.existsSync(p));
 if (!edge) throw new Error("No Chrome or Edge found. Set CRATON_BROWSER.");
@@ -36,12 +34,12 @@ const signup = async (u, email) => {
 const owner = `own${RUN}`, mate = `mate${RUN}`;
 const ownerTok = await signup(owner, `${owner}@${domain}`);
 const mateTok = await signup(mate, `${mate}@${domain}`);
-const db = new DatabaseSync(DB);
-db.prepare("UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z', onboarded_at = '2026-01-01T00:00:00.000Z' WHERE email IN (?, ?)").run(`${owner}@${domain}`, `${mate}@${domain}`);
+const db = await openE2eDb();
+await db.prepare("UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z', onboarded_at = '2026-01-01T00:00:00.000Z' WHERE email IN (?, ?)").run(`${owner}@${domain}`, `${mate}@${domain}`);
 await fetch(`${API}/orgs`, { method: "POST", headers: { authorization: `Bearer ${ownerTok}`, ...j }, body: JSON.stringify({ handle: org, name: "Lab" }) });
-db.prepare("INSERT INTO org_domains (org_id, domain, token, verified_at) VALUES ((SELECT id FROM owners WHERE handle = ?), ?, 't', '2026-01-01T00:00:00.000Z')").run(org, domain);
+await db.prepare("INSERT INTO org_domains (org_id, domain, token, verified_at) VALUES ((SELECT id FROM owners WHERE handle = ?), ?, 't', '2026-01-01T00:00:00.000Z')").run(org, domain);
 await fetch(`${API}/orgs/${org}/members`, { method: "POST", headers: { authorization: `Bearer ${ownerTok}`, ...j }, body: JSON.stringify({ handle: mate, role: "Member" }) });
-db.close();
+await db.close();
 
 // 1. The owner connects the provider.
 {

@@ -162,24 +162,24 @@ export function diffTables(base: string, head: string, before: string, after: st
   };
 }
 
-function entryAt(ctx: Ctx, repo: RepoRow, commitId: string, path: string) {
-  const commit = getObject<CommitObject>(ctx, repo, commitId, "commit");
-  return getObject<TreeObject>(ctx, repo, commit.tree, "tree").entries.find((e) => e.path === path) ?? null;
+async function entryAt(ctx: Ctx, repo: RepoRow, commitId: string, path: string) {
+  const commit = await getObject<CommitObject>(ctx, repo, commitId, "commit");
+  return (await getObject<TreeObject>(ctx, repo, commit.tree, "tree")).entries.find((e) => e.path === path) ?? null;
 }
 
 /** Identity of a table comparison, without reading anything: the two blobs. Used for the HTTP ETag. */
-export function tableDiffKey(ctx: Ctx, repo: RepoRow, base: string, head: string, path: string): string | null {
-  const a = entryAt(ctx, repo, resolveRef(ctx, repo, base), path), b = entryAt(ctx, repo, resolveRef(ctx, repo, head), path);
+export async function tableDiffKey(ctx: Ctx, repo: RepoRow, base: string, head: string, path: string): Promise<string | null> {
+  const a = await entryAt(ctx, repo, await resolveRef(ctx, repo, base), path), b = await entryAt(ctx, repo, await resolveRef(ctx, repo, head), path);
   return a && b ? `table:${a.blob}:${b.blob}` : null;
 }
 
 export async function tableDiff(ctx: Ctx, repo: RepoRow, base: string, head: string, path: string): Promise<TableDiff> {
   if (!/\.(csv|tsv)$/i.test(path)) throw badRequest("Table comparison works for .csv and .tsv files.");
-  const baseId = resolveRef(ctx, repo, base), headId = resolveRef(ctx, repo, head);
-  const a = entryAt(ctx, repo, baseId, path), b = entryAt(ctx, repo, headId, path);
+  const baseId = await resolveRef(ctx, repo, base), headId = await resolveRef(ctx, repo, head);
+  const a = await entryAt(ctx, repo, baseId, path), b = await entryAt(ctx, repo, headId, path);
   if (!a || !b) throw notFound(`${path} in both versions`);
   const read = async (blobId: string) => {
-    const blob = getObject<BlobObject>(ctx, repo, blobId, "blob");
+    const blob = await getObject<BlobObject>(ctx, repo, blobId, "blob");
     if (blob.size > MAX_BYTES) throw badRequest(`This table is over ${MAX_BYTES / 1024 / 1024} MB, which is too large to compare in the browser. Use the CLI.`);
     return (await new BlobReader(ctx, blob).readAll()).toString("utf8");
   };

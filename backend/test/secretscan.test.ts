@@ -55,23 +55,23 @@ const stripeKey = () => ["sk", "live", "0123456789abcdefghijklmnop"].join("_");
 const pemKey = () => ["-----BEGIN RSA PRIVATE KEY-----", "MIIEowIBAAKCAQEA0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH", "-----END RSA PRIVATE KEY-----"].join("\n");
 
 const repoOf = (name: string) => getRepoFor(ctx, "lab", name, ids.alice);
-const tipOf = (name: string, branch = "main") => resolveRef(ctx, repoOf(name), branch);
+const tipOf = async (name: string, branch = "main") => resolveRef(ctx, await repoOf(name), branch);
 const auditEvents = async () => (await call("GET", "/orgs/lab/audit-log", "alice")).json.events as any[];
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(new Date().toISOString(), u);
-    ids[u] = (ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get(u) as { id: number }).id;
+    await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)", new Date().toISOString(), u);
+    ids[u] = (await ctx.db.get("SELECT id FROM owners WHERE handle = ?", u) as { id: number }).id;
   }
   assert.equal((await call("POST", "/orgs", "alice", { handle: "lab", name: "Lab" })).status, 201);
   for (const [name, visibility] of [["basin", "private"], ["open", "public"]] as const) {
     assert.equal((await call("POST", "/repos", "alice", { name, visibility, owner: "lab" })).status, 201);
     assert.equal((await call("PUT", `/repos/lab/${name}/collaborators/bob`, "alice", { role: "Write" })).status, 201);
-    await commitFiles(ctx, repoOf(name), { branch: "main", changes: { "README.md": Buffer.from("# basin\n") }, message: "Start", author: "alice", timestamp: new Date() });
+    await commitFiles(ctx, await repoOf(name), { branch: "main", changes: { "README.md": Buffer.from("# basin\n") }, message: "Start", author: "alice", timestamp: new Date() });
   }
 });
 
@@ -100,14 +100,14 @@ test("sign-up and token creation hand out the new format, and tokens from before
   assert.match(made.json.token, /^crt_pat_/);
   // A token issued before the format changed: stored by hash like any other.
   const legacy = `bcn_pat_${crypto.randomBytes(24).toString("base64url")}`;
-  ctx.db.prepare("INSERT INTO tokens (user_id, token_hash, kind, note, scopes) VALUES (?, ?, 'pat', 'old', 'repo')").run(ids.alice, crypto.createHash("sha256").update(legacy).digest("hex"));
+  await ctx.db.run("INSERT INTO tokens (user_id, token_hash, kind, note, scopes) VALUES (?, ?, 'pat', 'old', 'repo')", ids.alice, crypto.createHash("sha256").update(legacy).digest("hex"));
   const res = await app.request("/v1/user", { headers: { authorization: `Bearer ${legacy}` } });
   assert.equal(res.status, 200);
 });
 
 // ── What is recognised ─────────────────────────────────────────────────────
 
-test("each kind of credential is found, with its line, and only a few characters are shown", () => {
+test("each kind of credential is found, with its line, and only a few characters are shown", async () => {
   const text = [
     "# settings",
     `aws_access_key_id = ${awsKey()}`,
@@ -118,7 +118,7 @@ test("each kind of credential is found, with its line, and only a few characters
     `key = AIza${"B".repeat(35)}`,
     `slack = xoxb-123456789012-123456789012-${"a1B2c3D4".repeat(3)}`,
   ].join("\n");
-  const found = scanText(ctx, "config/prod.env", text);
+  const found = await scanText(ctx, "config/prod.env", text);
   const byKind = Object.fromEntries(found.map((f) => [f.kind, f.line]));
   assert.deepEqual(byKind, {
     "AWS access key id": 2,
@@ -133,7 +133,7 @@ test("each kind of credential is found, with its line, and only a few characters
   for (const secret of [awsKey(), githubToken(), stripeKey(), "Sup3rS3cretPw", "MIIEowIBAAKC", "a1B2c3D4"]) assert.ok(!shown.includes(secret), `the findings never repeat ${secret.slice(0, 4)}…`);
 });
 
-test("lookalikes are not findings", () => {
+test("lookalikes are not findings", async () => {
   const lookalikes = [
     "ghp_" + "a".repeat(36), // right shape, wrong checksum
     "AKIAIOSFODNN7EXAMPLE", // the documentation key
@@ -144,31 +144,31 @@ test("lookalikes are not findings", () => {
     "sk_live_",
     `crt_pat_${"a".repeat(36)}`, // no valid checksum
   ];
-  assert.deepEqual(scanText(ctx, "notes.md", lookalikes.join("\n")), []);
+  assert.deepEqual(await scanText(ctx, "notes.md", lookalikes.join("\n")), []);
 });
 
-test("a line marked as an example is skipped", () => {
-  assert.deepEqual(scanText(ctx, "docs.md", `key = ${awsKey()}  # craton:allow-secret`), []);
-  assert.equal(scanText(ctx, "docs.md", `key = ${awsKey()}`).length, 1);
+test("a line marked as an example is skipped", async () => {
+  assert.deepEqual(await scanText(ctx, "docs.md", `key = ${awsKey()}  # craton:allow-secret`), []);
+  assert.equal((await scanText(ctx, "docs.md", `key = ${awsKey()}`)).length, 1);
 });
 
 test("a Craton token is a finding only while it works", async () => {
   const made = await call("POST", "/user/tokens", "alice", { note: "leaky", scopes: ["repo"] });
-  const live = scanText(ctx, "x.txt", `export CRATON_TOKEN=${made.json.token}`);
+  const live = await scanText(ctx, "x.txt", `export CRATON_TOKEN=${made.json.token}`);
   assert.equal(live.length, 1);
   assert.equal(live[0].live, true);
   assert.equal(live[0].preview, "crt_pat_…");
   await call("DELETE", `/user/tokens/${made.json.id}`, "alice");
-  assert.deepEqual(scanText(ctx, "x.txt", `export CRATON_TOKEN=${made.json.token}`), [], "a revoked token is harmless");
+  assert.deepEqual(await scanText(ctx, "x.txt", `export CRATON_TOKEN=${made.json.token}`), [], "a revoked token is harmless");
   const legacy = `bcn_pat_${crypto.randomBytes(24).toString("base64url")}`;
-  ctx.db.prepare("INSERT INTO tokens (user_id, token_hash, kind, note, scopes) VALUES (?, ?, 'pat', 'old', 'repo')").run(ids.alice, crypto.createHash("sha256").update(legacy).digest("hex"));
-  assert.equal(scanText(ctx, "x.txt", legacy).length, 1, "an older token that works is found too");
+  await ctx.db.run("INSERT INTO tokens (user_id, token_hash, kind, note, scopes) VALUES (?, ?, 'pat', 'old', 'repo')", ids.alice, crypto.createHash("sha256").update(legacy).digest("hex"));
+  assert.equal((await scanText(ctx, "x.txt", legacy)).length, 1, "an older token that works is found too");
 });
 
 // ── Upload ─────────────────────────────────────────────────────────────────
 
 test("an upload with a credential is refused before anything is stored", async () => {
-  const before = tipOf("basin");
+  const before = await tipOf("basin");
   const res = await upload("lab/basin", "alice", { "data/run.cfg": "ok\n", "deploy/aws.env": `AWS_ACCESS_KEY_ID=${awsKey()}\n` });
   assert.equal(res.status, 422);
   assert.equal(res.json.error.code, "secret_detected");
@@ -176,7 +176,7 @@ test("an upload with a credential is refused before anything is stored", async (
   assert.ok(!res.text.includes(awsKey()), "the key is not in the response");
   assert.deepEqual(res.json.error.details.findings.map((f: any) => [f.path, f.line, f.kind]), [["deploy/aws.env", 1, "AWS access key id"]]);
   assert.ok(!("tokenId" in res.json.error.details.findings[0]));
-  assert.equal(tipOf("basin"), before, "the branch did not move");
+  assert.equal(await tipOf("basin"), before, "the branch did not move");
 });
 
 test("a clean upload, a binary file and a file over 2 MB go through (they are not read)", async () => {
@@ -233,33 +233,33 @@ test("the server setting turns the scan off for everyone", async () => {
 // ── Push (the CLI's route) ─────────────────────────────────────────────────
 
 test("a push is read for credentials in every new commit, even one a later commit removed", async () => {
-  const repo = repoOf("basin");
-  const main = tipOf("basin");
+  const repo = await repoOf("basin");
+  const main = await tipOf("basin");
   await commitFiles(ctx, repo, { branch: "side", from: "main", changes: { "conf/keys.txt": Buffer.from(`token=${githubToken("push")}\n`) }, message: "Add keys", author: "alice", timestamp: new Date() });
   await commitFiles(ctx, repo, { branch: "side", changes: { "conf/keys.txt": null, "conf/ok.txt": Buffer.from("fine\n") }, message: "Remove keys", author: "alice", timestamp: new Date() });
-  const side = tipOf("basin", "side");
+  const side = await tipOf("basin", "side");
   const refused = await call("POST", "/repos/lab/basin/refs/heads/main", "alice", { commit: side, expected: main });
   assert.equal(refused.status, 422);
   assert.equal(refused.json.error.code, "secret_detected");
   assert.match(refused.json.error.message, /a GitHub token in conf\/keys\.txt line 1 \(commit [0-9a-f]{7}\)/);
   assert.ok(!refused.text.includes(githubToken("push")));
-  assert.equal(tipOf("basin"), main, "main did not move");
+  assert.equal(await tipOf("basin"), main, "main did not move");
 
   const writer = await call("POST", "/repos/lab/basin/refs/heads/main", "bob", { commit: side, expected: main, allowSecrets: "needed for the demo" });
   assert.equal(writer.status, 403);
   const allowed = await call("POST", "/repos/lab/basin/refs/heads/main", "alice", { commit: side, expected: main, allowSecrets: "rotated already, kept for the record" });
   assert.equal(allowed.status, 200, allowed.text);
-  assert.equal(tipOf("basin"), side);
+  assert.equal(await tipOf("basin"), side);
 });
 
 test("a push of clean commits, and a stale or unknown commit, behave as before", async () => {
-  const repo = repoOf("basin");
-  const main = tipOf("basin");
+  const repo = await repoOf("basin");
+  const main = await tipOf("basin");
   await commitFiles(ctx, repo, { branch: "clean", from: "main", changes: { "a.txt": Buffer.from("hello\n") }, message: "Clean", author: "alice", timestamp: new Date() });
-  const stale = await call("POST", "/repos/lab/basin/refs/heads/main", "alice", { commit: tipOf("basin", "clean"), expected: "0".repeat(64) });
+  const stale = await call("POST", "/repos/lab/basin/refs/heads/main", "alice", { commit: await tipOf("basin", "clean"), expected: "0".repeat(64) });
   assert.equal(stale.status, 409);
   const unknown = await call("POST", "/repos/lab/basin/refs/heads/main", "alice", { commit: "f".repeat(64), expected: main });
   assert.equal(unknown.status, 409);
-  const ok = await call("POST", "/repos/lab/basin/refs/heads/main", "alice", { commit: tipOf("basin", "clean"), expected: main });
+  const ok = await call("POST", "/repos/lab/basin/refs/heads/main", "alice", { commit: await tipOf("basin", "clean"), expected: main });
   assert.equal(ok.status, 200);
 });

@@ -35,13 +35,13 @@ async function upload(path: string, data: Buffer) {
 const R = "/repos/alice/model";
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol", "dave"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
   }
-  ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')").run(new Date().toISOString());
+  await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')", new Date().toISOString());
   assert.equal((await call("POST", "/repos", "alice", { name: "model", visibility: "private" })).status, 201);
   assert.equal((await call("PUT", `${R}/collaborators/bob`, "alice", { role: "Write" })).status, 201);
   assert.equal((await call("PUT", `${R}/collaborators/carol`, "alice", { role: "Read" })).status, 201);

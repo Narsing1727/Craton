@@ -56,10 +56,10 @@ export const resetTileStats = () => ((stats.rebuilt = 0), (stats.readAhead = 0))
 const lastAsked = new Map<string, number>();
 const READ_AHEAD = 3;
 const placeOf = new Map<string, { blob_id: string; image: number; idx: number } | null>();
-function readAhead(ctx: Ctx, key: string) {
+async function readAhead(ctx: Ctx, key: string) {
   let here = placeOf.get(key);
   if (here === undefined) {
-    here = (ctx.db.prepare("SELECT blob_id, image, idx FROM blob_tiles WHERE tile_key = ? AND image >= 0 LIMIT 1").get(key) as { blob_id: string; image: number; idx: number } | undefined) ?? null;
+    here = (await ctx.db.get("SELECT blob_id, image, idx FROM blob_tiles WHERE tile_key = ? AND image >= 0 LIMIT 1", key) as { blob_id: string; image: number; idx: number } | undefined) ?? null;
     placeOf.set(key, here);
     if (placeOf.size > 4096) placeOf.delete(placeOf.keys().next().value!);
   }
@@ -71,7 +71,7 @@ function readAhead(ctx: Ctx, key: string) {
   lastAsked.set(id, here.idx);
   if (lastAsked.size > 256) lastAsked.delete(lastAsked.keys().next().value!);
   if (!(previous === here.idx - 1 || (previous === undefined && here.idx === 0))) return;
-  const next = ctx.db.prepare("SELECT tile_key FROM blob_tiles WHERE blob_id = ? AND image = ? AND idx > ? ORDER BY idx LIMIT ?").all(here.blob_id, here.image, here.idx, READ_AHEAD) as { tile_key: string }[];
+  const next = await ctx.db.all("SELECT tile_key FROM blob_tiles WHERE blob_id = ? AND image = ? AND idx > ? ORDER BY idx LIMIT ?", here.blob_id, here.image, here.idx, READ_AHEAD) as { tile_key: string }[];
   for (const n of next) {
     if (cache.get(n.tile_key) || inFlight.has(n.tile_key)) continue;
     stats.readAhead++;
@@ -94,13 +94,13 @@ export async function tilePixels(ctx: Ctx, key: string): Promise<{ raw: Buffer; 
 }
 
 /** The original compressed stream of a tile, made again from its pixels and checked against its own name. */
-export function tileStream(ctx: Ctx, key: string, ahead = false): Promise<Buffer> {
-  if (!ahead) readAhead(ctx, key);
+export async function tileStream(ctx: Ctx, key: string, ahead = false): Promise<Buffer> {
+  if (!ahead) await readAhead(ctx, key);
   const hit = cache.get(key);
   if (hit) return Promise.resolve(hit);
   const running = inFlight.get(key);
   if (running) return running;
-  const job = (async () => {
+  const job: Promise<Buffer> = (async () => {
     stats.rebuilt++;
     const { raw, info } = await tilePixels(ctx, key);
     const stream = await deflateAsync(raw, info.params);
@@ -114,15 +114,15 @@ export function tileStream(ctx: Ctx, key: string, ahead = false): Promise<Buffer
 
 /** Keep a tile (idempotent: a tile already stored is left as it is). */
 export async function saveTile(ctx: Ctx, key: string, payload: Buffer, info: TileInfo) {
-  if (ctx.db.prepare("SELECT 1 FROM tiles WHERE key = ?").get(key)) return false;
+  if (await ctx.db.get("SELECT 1 FROM tiles WHERE key = ?", key)) return false;
   await ctx.store.put(key, payload);
-  ctx.db.prepare("INSERT OR IGNORE INTO tiles (key, stream_len, raw_len, stored_size, kind, base_key) VALUES (?, ?, ?, ?, ?, ?)").run(key, info.streamLength, info.rawLength, payload.length, info.kind, info.baseKey);
+  await ctx.db.run("INSERT INTO tiles (key, stream_len, raw_len, stored_size, kind, base_key) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", key, info.streamLength, info.rawLength, payload.length, info.kind, info.baseKey);
   return true;
 }
 
 /** Make every stored tile's stream again and check it (used by the operator command and tests). */
 export async function verifyTiles(ctx: Ctx): Promise<{ checked: number; bad: string[] }> {
-  const rows = ctx.db.prepare("SELECT key FROM tiles").all() as { key: string }[];
+  const rows = await ctx.db.all("SELECT key FROM tiles") as { key: string }[];
   const bad: string[] = [];
   for (const { key } of rows) {
     try {

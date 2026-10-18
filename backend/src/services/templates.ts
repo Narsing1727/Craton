@@ -36,22 +36,22 @@ export function parseTemplate(text: string): { meta: Record<string, string>; bod
 }
 
 async function read(ctx: Ctx, repo: RepoRow, blobId: string) {
-  const blob = getObject<BlobObject>(ctx, repo, blobId, "blob");
+  const blob = await getObject<BlobObject>(ctx, repo, blobId, "blob");
   return (await new BlobReader(ctx, blob).read(0, MAX_BYTES)).toString("utf8");
 }
 
-function defaultTree(ctx: Ctx, repo: RepoRow): TreeObject | null {
+async function defaultTree(ctx: Ctx, repo: RepoRow): Promise<TreeObject | null> {
   let id: string;
   try {
-    id = resolveRef(ctx, repo, repo.default_branch);
+    id = await resolveRef(ctx, repo, repo.default_branch);
   } catch {
     return null; // an empty repository has no branch yet
   }
-  return getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, id, "commit").tree, "tree");
+  return getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, id, "commit")).tree, "tree");
 }
 
 export async function issueTemplates(ctx: Ctx, repo: RepoRow): Promise<IssueTemplate[]> {
-  const tree = defaultTree(ctx, repo);
+  const tree = await defaultTree(ctx, repo);
   if (!tree) return [];
   const entries = tree.entries
     .filter((e) => e.path.startsWith(DIR) && /\.md$/i.test(e.path) && !e.path.slice(DIR.length).includes("/"))
@@ -68,7 +68,7 @@ export async function issueTemplates(ctx: Ctx, repo: RepoRow): Promise<IssueTemp
 }
 
 export async function pullTemplate(ctx: Ctx, repo: RepoRow): Promise<string | null> {
-  const tree = defaultTree(ctx, repo);
+  const tree = await defaultTree(ctx, repo);
   const entry = tree?.entries.find((e) => e.path === PULL);
   return entry ? parseTemplate(await read(ctx, repo, entry.blob)).body : null;
 }

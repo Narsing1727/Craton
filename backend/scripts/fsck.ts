@@ -9,7 +9,7 @@ import { fsck } from "../src/services/fsck.ts";
 
 const quick = process.argv.includes("--quick");
 const repair = process.argv.includes("--repair");
-const ctx = createContext();
+const ctx = await createContext();
 const started = Date.now();
 let last = 0;
 const report = await fsck(ctx, {

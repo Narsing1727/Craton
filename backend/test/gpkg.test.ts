@@ -94,7 +94,7 @@ async function put(repo: string, name: string, data: Buffer) {
 }
 
 before(async () => {
-  app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  app = createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "rhea", email: "rhea@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
   assert.equal((await call("POST", "/repos", { name: "vectors", visibility: "private" })).status, 201);

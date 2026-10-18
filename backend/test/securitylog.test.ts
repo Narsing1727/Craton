@@ -28,8 +28,8 @@ async function signup(handle: string) {
   return r.body.token as string;
 }
 
-before(() => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+before(async () => {
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
 });
 
@@ -67,10 +67,10 @@ test("one person's log is theirs alone, and it needs a signed-in session", async
   assert.equal((await call("GET", "/user/security-log")).status, 401);
 });
 
-test("only the most recent entries are kept per person", () => {
-  const id = (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'noor'").get() as { id: number }).id;
-  for (let i = 0; i < 230; i++) securitylog.record(ctx, id, "sign_in_failed", { detail: `attempt ${i}` });
-  const list = securitylog.list(ctx, id, 500);
+test("only the most recent entries are kept per person", async () => {
+  const id = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'noor'") as { id: number }).id;
+  for (let i = 0; i < 230; i++) await securitylog.record(ctx, id, "sign_in_failed", { detail: `attempt ${i}` });
+  const list = await securitylog.list(ctx, id, 500);
   assert.equal(list.length, 200);
   assert.equal(list[0].detail, "attempt 229", "newest first");
   assert.equal(list[199].detail, "attempt 30");
@@ -79,10 +79,10 @@ test("only the most recent entries are kept per person", () => {
 test("a reset request and a completed reset are logged against the account", async () => {
   await signup("zed");
   assert.equal((await call("POST", "/auth/forgot", undefined, { login: "zed" })).status, 202);
-  const id = (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'zed'").get() as { id: number }).id;
-  assert.deepEqual(securitylog.list(ctx, id).map((e) => e.type), ["password_reset_requested"]);
+  const id = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'zed'") as { id: number }).id;
+  assert.deepEqual((await securitylog.list(ctx, id)).map((e) => e.type), ["password_reset_requested"]);
   // An unknown account leaves no trace anywhere.
-  const before = (ctx.db.prepare("SELECT COUNT(*) AS n FROM security_events").get() as { n: number }).n;
+  const before = (await ctx.db.get("SELECT COUNT(*) AS n FROM security_events") as { n: number }).n;
   assert.equal((await call("POST", "/auth/forgot", undefined, { login: "nobody-here" })).status, 202);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM security_events").get() as { n: number }).n, before);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM security_events") as { n: number }).n, before);
 });

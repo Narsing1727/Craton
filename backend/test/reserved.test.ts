@@ -26,7 +26,7 @@ test("every top-level page of the web app is a reserved name", () => {
 });
 
 test("signup and organization creation refuse a reserved name, and ordinary names still work", async () => {
-  const app = createApp({ db: openDb(":memory:"), store: new MemoryStore() });
+  const app = await createApp({ db: await openDb(":memory:"), store: new MemoryStore() });
   const post = (p: string, body: unknown, token?: string) =>
     app.request(`/v1${p}`, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
   for (const name of ["ghost", "dashboard", "admin", "api"]) {

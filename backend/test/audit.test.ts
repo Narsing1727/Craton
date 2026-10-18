@@ -27,12 +27,12 @@ async function call(method: string, path: string, who: string | null, body?: unk
 }
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol", "dave"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
     tokens[u] = ((await res.json()) as { token: string }).token;
-    ctx.db.prepare("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)").run(new Date().toISOString(), u);
+    await ctx.db.run("UPDATE users SET email_verified_at = ? WHERE owner_id = (SELECT id FROM owners WHERE handle = ?)", new Date().toISOString(), u);
   }
   assert.equal((await call("POST", "/orgs", "alice", { handle: "lab", name: "Lab" })).status, 201);
   assert.equal((await call("POST", "/repos", "alice", { name: "basin", visibility: "private", owner: "lab" })).status, 201);
@@ -116,7 +116,7 @@ test("a spreadsheet cannot be made to run an actor's or action's text as a formu
 test("chunk uploads and secrets in a path are never written to the log", async () => {
   // Push chunks into a repository, then confirm nothing about /chunks is in the log.
   await call("POST", "/repos/lab/basin/chunks/missing", "bob", { hashes: ["0".repeat(64)] });
-  const rows = ctx.db.prepare("SELECT params, route FROM audit_events").all() as { params: string; route: string }[];
+  const rows = await ctx.db.all("SELECT params, route FROM audit_events") as { params: string; route: string }[];
   assert.ok(rows.every((r) => !/\/chunks/.test(r.route)));
   assert.ok(rows.every((r) => !/token|secret/i.test(r.params)));
 });
@@ -150,10 +150,10 @@ test("a request to a route that does not exist shows in the token's log (a typo 
   const made = await call("POST", "/user/tokens", "dave", { note: "script", scopes: ["repo"] });
   const pat = made.json.token as string;
   const id = (await call("GET", "/user/tokens", "dave")).json.find((t: any) => t.note === "script").id as number;
-  const before = (ctx.db.prepare("SELECT COUNT(*) AS n FROM audit_events").get() as { n: number }).n;
+  const before = (await ctx.db.get("SELECT COUNT(*) AS n FROM audit_events") as { n: number }).n;
   const res = await call("DELETE", "/repos/dave/mine/not-a-thing/at/all", null, undefined, pat);
   assert.equal(res.status, 404);
   const log = (await call("GET", `/user/tokens/${id}/requests`, "dave")).json;
   assert.deepEqual([log[0].method, log[0].route, log[0].status], ["DELETE", "/repos/dave/mine/not-a-thing/at/all", 404]);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM audit_events").get() as { n: number }).n, before);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM audit_events") as { n: number }).n, before);
 });

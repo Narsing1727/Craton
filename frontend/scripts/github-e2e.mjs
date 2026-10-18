@@ -2,18 +2,16 @@
 // at scripts/mock-google.mjs (:9099, its /gh paths). Start the API with a THROWAWAY data folder: this creates accounts.
 // See the header of mock-google.mjs for the environment variables, then:
 //
-//   CRATON_E2E_DB=<that folder>/craton.db npm run e2e:github
+//   CRATON_E2E_DATABASE_URL=<postgres address> npm run e2e:github
 //
 // Covers: the button appears only when configured; first sign-in -> username step -> account; returning sign-in;
 // an account with no verified email; cancelling at GitHub; connecting and disconnecting from Settings.
 import fs from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { openE2eDb } from "./e2e-db.mjs";
 import { chromium } from "playwright-core";
 
 const WEB = "http://localhost:3100", API = "http://localhost:4000/v1", MOCK = "http://localhost:9099";
 const SHOTS = process.env.CRATON_E2E_SHOTS ?? "e2e-shots";
-const DB = process.env.CRATON_E2E_DB;
-if (!DB) throw new Error("Set CRATON_E2E_DB to the craton.db of the throwaway API.");
 fs.mkdirSync(SHOTS, { recursive: true });
 const edge = [process.env.CRATON_BROWSER, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe"].find((p) => p && fs.existsSync(p));
 if (!edge) throw new Error("No Chrome or Edge found. Set CRATON_BROWSER.");
@@ -114,9 +112,9 @@ const btn = (page) => page.getByRole("link", { name: /^github$/i });
   const { ctx, page } = await fresh();
   const user = `pw${RUN}`;
   const signup = await fetch(`${API}/auth/signup`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: user, email: `${user}@example.org`, password: "a-very-long-password" }) }).then((r) => r.json());
-  const db = new DatabaseSync(DB);
-  db.prepare("UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z', onboarded_at = '2026-01-01T00:00:00.000Z' WHERE email = ?").run(`${user}@example.org`);
-  db.close();
+  const db = await openE2eDb();
+  await db.prepare("UPDATE users SET email_verified_at = '2026-01-01T00:00:00.000Z', onboarded_at = '2026-01-01T00:00:00.000Z' WHERE email = ?").run(`${user}@example.org`);
+  await db.close();
   await ctx.addCookies([{ name: "craton_session", value: signup.token, url: WEB }]);
   await who({ id: String(9000 + (parseInt(RUN, 36) % 1000)), login: `linked-${RUN}`, name: "Linked", email: `linked${RUN}@example.org` });
   await page.goto(`${WEB}/settings/security`, { waitUntil: "networkidle" });

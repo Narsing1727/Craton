@@ -34,11 +34,11 @@ async function call(method: string, path: string, who: string | null, body?: unk
 /** What a person with only the link does: no Authorization header at all. */
 const anon = (path: string) => app.request(`/v1${path}`);
 
-const repoOf = (owner = "rhea", name = "basin") => getRepoFor(ctx, owner, name, (ctx.db.prepare("SELECT id FROM owners WHERE handle = ?").get(owner) as { id: number }).id);
+const repoOf = async (owner = "rhea", name = "basin") => getRepoFor(ctx, owner, name, (await ctx.db.get("SELECT id FROM owners WHERE handle = ?", owner) as { id: number }).id);
 let link: { id: number; token: string; path: string; url: string; commit: string; expiresAt: string };
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["rhea", "sol", "ines"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
@@ -46,12 +46,12 @@ before(async () => {
   }
   assert.equal((await call("POST", "/repos", "rhea", { name: "basin", visibility: "private", description: "Chalakudy model" })).status, 201);
   assert.equal((await call("POST", "/repos", "ines", { name: "other", visibility: "private" })).status, 201);
-  ctx.db.prepare("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, (SELECT id FROM owners WHERE handle = 'sol'), 'Write')").run(repoOf().id);
+  await ctx.db.run("INSERT INTO collaborators (repo_id, user_id, role) VALUES (?, (SELECT id FROM owners WHERE handle = 'sol'), 'Write')", (await repoOf()).id);
   files["terrain/dem.tif"] = geotiff({ width: 128, height: 128, epsg: 32643, nodata: -9999, seed: 3 });
   files["model/plan.p01"] = Buffer.from("Plan Title=Calibration\n".repeat(50));
   files["notes/readme.txt"] = crypto.randomBytes(900_000); // several chunks
-  await commitFiles(ctx, repoOf(), { branch: "main", author: "rhea", message: "Calibrated model", timestamp: new Date("2026-09-01T10:00:00Z"), changes: files });
-  await commitFiles(ctx, repoOf("ines", "other"), { branch: "main", author: "ines", message: "Secret", timestamp: new Date(), changes: { "secret.txt": Buffer.from("not yours") } });
+  await commitFiles(ctx, await repoOf(), { branch: "main", author: "rhea", message: "Calibrated model", timestamp: new Date("2026-09-01T10:00:00Z"), changes: files });
+  await commitFiles(ctx, await repoOf("ines", "other"), { branch: "main", author: "ines", message: "Secret", timestamp: new Date(), changes: { "secret.txt": Buffer.from("not yours") } });
 });
 
 test("an admin makes a link that expires; the address is shown once and only its hash is stored", async () => {
@@ -64,7 +64,7 @@ test("an admin makes a link that expires; the address is shown once and only its
   assert.ok(Math.abs(new Date(link.expiresAt).getTime() - (Date.now() + 7 * 86_400_000)) < 60_000);
   assert.match(link.commit, /^[0-9a-f]{64}$/);
 
-  const dump = JSON.stringify(ctx.db.prepare("SELECT * FROM share_links").all());
+  const dump = JSON.stringify(await ctx.db.all("SELECT * FROM share_links"));
   assert.ok(!dump.includes(link.token), "the token itself is not in the database");
   const list = await call("GET", "/repos/rhea/basin/share-links", "rhea");
   assert.ok(!list.text.includes(link.token), "and not in the listing");
@@ -100,7 +100,7 @@ test("anyone with the link sees the repository's files, with no sign-in and noth
 });
 
 test("it is a snapshot: later pushes do not show up, and files added later are not reachable", async () => {
-  await commitFiles(ctx, repoOf(), { branch: "main", author: "rhea", message: "Later work", timestamp: new Date(), changes: { "later.txt": Buffer.from("added after sharing"), "model/plan.p01": Buffer.from("changed") } });
+  await commitFiles(ctx, await repoOf(), { branch: "main", author: "rhea", message: "Later work", timestamp: new Date(), changes: { "later.txt": Buffer.from("added after sharing"), "model/plan.p01": Buffer.from("changed") } });
   const view = (await (await anon(`/shared/${link.token}`)).json()) as any;
   assert.ok(!view.files.some((f: any) => f.path === "later.txt"));
   assert.equal(view.files.find((f: any) => f.path === "model/plan.p01").size, files["model/plan.p01"].length, "the shared version of a changed file is the old one");
@@ -154,7 +154,7 @@ test("the link opens only its own repository: it can't be used to read another's
 test("expired, revoked, invented and malformed tokens all answer the same way", async () => {
   limits.clear("share-miss:local");
   const second = (await call("POST", "/repos/rhea/basin/share-links", "rhea", { expiresInDays: 1 })).json;
-  ctx.db.prepare("UPDATE share_links SET expires_at = ? WHERE id = ?").run(new Date(Date.now() - 1000).toISOString(), second.id);
+  await ctx.db.run("UPDATE share_links SET expires_at = ? WHERE id = ?", new Date(Date.now() - 1000).toISOString(), second.id);
   const third = (await call("POST", "/repos/rhea/basin/share-links", "rhea", { expiresInDays: 30 })).json;
   assert.equal((await call("DELETE", `/repos/rhea/basin/share-links/${third.id}`, "rhea")).status, 204);
 
@@ -187,6 +187,6 @@ test("a repository can have twenty active links, and deleting the repository rem
   for (let i = before; i < 20; i++) assert.equal((await call("POST", "/repos/rhea/basin/share-links", "rhea", { expiresInDays: 1 })).status, 201);
   assert.match((await call("POST", "/repos/rhea/basin/share-links", "rhea", { expiresInDays: 1 })).json.error.message, /up to 20 active/);
   assert.equal((await call("DELETE", "/repos/rhea/basin", "rhea")).status, 204);
-  assert.equal((ctx.db.prepare("SELECT COUNT(*) AS n FROM share_links").get() as { n: number }).n, 0);
+  assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM share_links") as { n: number }).n, 0);
   assert.equal((await anon(`/shared/${link.token}`)).status, 404, "the link dies with the repository");
 });

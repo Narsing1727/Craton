@@ -8,8 +8,8 @@ import { startRetryLoop } from "./services/webhooks.ts";
 import { startDigestLoop } from "./services/digest.ts";
 import { backfillFootprints } from "./services/extent.ts";
 
-const ctx = createContext();
-const app = createApp(ctx);
+const ctx = await createContext();
+const app = await createApp(ctx);
 
 const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`Craton API on http://localhost:${info.port}/v1  (data: ${config.dataDir}, chunks: ${ctx.store.kind})`);

@@ -10,8 +10,8 @@ export type Milestone = { id: number; title: string; description: string; due: s
 
 type Row = { id: number; title: string; description: string; due: string | null; state: "open" | "closed"; created_at: string };
 
-const toMilestone = (ctx: Ctx, repo: RepoRow, r: Row): Milestone => {
-  const counts = ctx.db.prepare("SELECT state, COUNT(*) AS n FROM issues WHERE repo_id = ? AND milestone = ? GROUP BY state").all(repo.id, r.title) as { state: string; n: number }[];
+const toMilestone = async (ctx: Ctx, repo: RepoRow, r: Row): Promise<Milestone> => {
+  const counts = await ctx.db.all("SELECT state, COUNT(*) AS n FROM issues WHERE repo_id = ? AND milestone = ? GROUP BY state", repo.id, r.title) as { state: string; n: number }[];
   const n = (s: string) => counts.find((c) => c.state === s)?.n ?? 0;
   return { id: r.id, title: r.title, description: r.description, due: r.due, state: r.state, open: n("open"), closed: n("closed"), createdAt: r.created_at };
 };
@@ -32,53 +32,51 @@ function cleanDue(input: unknown): string | null {
   return s;
 }
 
-const find = (ctx: Ctx, repo: RepoRow, id: number) => {
-  const row = ctx.db.prepare("SELECT * FROM milestones WHERE repo_id = ? AND id = ?").get(repo.id, id) as Row | undefined;
+const find = async (ctx: Ctx, repo: RepoRow, id: number) => {
+  const row = await ctx.db.get("SELECT * FROM milestones WHERE repo_id = ? AND id = ?", repo.id, id) as Row | undefined;
   if (!row) throw notFound("Milestone");
   return row;
 };
 
 /** Open ones first (soonest due date first, undated last), then closed. */
-export function listMilestones(ctx: Ctx, repo: RepoRow): Milestone[] {
-  const rows = ctx.db
-    .prepare("SELECT * FROM milestones WHERE repo_id = ? ORDER BY state = 'closed', due IS NULL, due, title")
-    .all(repo.id) as Row[];
-  return rows.map((r) => toMilestone(ctx, repo, r));
+export async function listMilestones(ctx: Ctx, repo: RepoRow): Promise<Milestone[]> {
+  const rows = await ctx.db.all("SELECT * FROM milestones WHERE repo_id = ? ORDER BY state = 'closed', due IS NULL, due, title", repo.id) as Row[];
+  return Promise.all(rows.map((r) => toMilestone(ctx, repo, r)));
 }
 
-export function createMilestone(ctx: Ctx, repo: RepoRow, input: { title: string; description?: string; due?: string | null }): Milestone {
+export async function createMilestone(ctx: Ctx, repo: RepoRow, input: { title: string; description?: string; due?: string | null }): Promise<Milestone> {
   const title = cleanTitle(input.title);
   const due = cleanDue(input.due);
-  if (ctx.db.prepare("SELECT 1 FROM milestones WHERE repo_id = ? AND title = ?").get(repo.id, title)) throw conflict("exists", `There is already a milestone called “${title}”.`);
-  const info = ctx.db.prepare("INSERT INTO milestones (repo_id, title, description, due) VALUES (?, ?, ?, ?)").run(repo.id, title, String(input.description ?? "").slice(0, 500), due);
-  return toMilestone(ctx, repo, find(ctx, repo, Number(info.lastInsertRowid)));
+  if (await ctx.db.get("SELECT 1 FROM milestones WHERE repo_id = ? AND title = ?", repo.id, title)) throw conflict("exists", `There is already a milestone called “${title}”.`);
+  const info = await ctx.db.insert("INSERT INTO milestones (repo_id, title, description, due) VALUES (?, ?, ?, ?)", repo.id, title, String(input.description ?? "").slice(0, 500), due);
+  return toMilestone(ctx, repo, await find(ctx, repo, info));
 }
 
-export function updateMilestone(ctx: Ctx, repo: RepoRow, id: number, patch: { title?: string; description?: string; due?: string | null; state?: string }): Milestone {
-  const row = find(ctx, repo, id);
+export async function updateMilestone(ctx: Ctx, repo: RepoRow, id: number, patch: { title?: string; description?: string; due?: string | null; state?: string }): Promise<Milestone> {
+  const row = await find(ctx, repo, id);
   const title = patch.title !== undefined ? cleanTitle(patch.title) : row.title;
   if (patch.state !== undefined && patch.state !== "open" && patch.state !== "closed") throw badRequest("State must be open or closed.");
   const due = patch.due !== undefined ? cleanDue(patch.due) : row.due;
-  if (title !== row.title && title.toLowerCase() !== row.title.toLowerCase() && ctx.db.prepare("SELECT 1 FROM milestones WHERE repo_id = ? AND title = ?").get(repo.id, title)) {
+  if (title !== row.title && title.toLowerCase() !== row.title.toLowerCase() && await ctx.db.get("SELECT 1 FROM milestones WHERE repo_id = ? AND title = ?", repo.id, title)) {
     throw conflict("exists", `There is already a milestone called “${title}”.`);
   }
-  ctx.db.prepare("UPDATE milestones SET title = ?, description = ?, due = ?, state = ? WHERE id = ?").run(title, patch.description !== undefined ? String(patch.description).slice(0, 500) : row.description, due, patch.state ?? row.state, id);
-  if (title !== row.title) ctx.db.prepare("UPDATE issues SET milestone = ? WHERE repo_id = ? AND milestone = ?").run(title, repo.id, row.title);
-  return toMilestone(ctx, repo, find(ctx, repo, id));
+  await ctx.db.run("UPDATE milestones SET title = ?, description = ?, due = ?, state = ? WHERE id = ?", title, patch.description !== undefined ? String(patch.description).slice(0, 500) : row.description, due, patch.state ?? row.state, id);
+  if (title !== row.title) await ctx.db.run("UPDATE issues SET milestone = ? WHERE repo_id = ? AND milestone = ?", title, repo.id, row.title);
+  return toMilestone(ctx, repo, await find(ctx, repo, id));
 }
 
 /** Issues keep existing; they just lose the milestone. Returns how many. */
-export function deleteMilestone(ctx: Ctx, repo: RepoRow, id: number): number {
-  const row = find(ctx, repo, id);
-  const info = ctx.db.prepare("UPDATE issues SET milestone = NULL WHERE repo_id = ? AND milestone = ?").run(repo.id, row.title);
-  ctx.db.prepare("DELETE FROM milestones WHERE id = ?").run(id);
+export async function deleteMilestone(ctx: Ctx, repo: RepoRow, id: number): Promise<number> {
+  const row = await find(ctx, repo, id);
+  const info = await ctx.db.run("UPDATE issues SET milestone = NULL WHERE repo_id = ? AND milestone = ?", repo.id, row.title);
+  await ctx.db.run("DELETE FROM milestones WHERE id = ?", id);
   return Number(info.changes);
 }
 
 /** The title to store on an issue: the milestone must exist in this repository and be open. */
-export function resolveForIssue(ctx: Ctx, repo: RepoRow, input: unknown): string | null {
+export async function resolveForIssue(ctx: Ctx, repo: RepoRow, input: unknown): Promise<string | null> {
   if (input === null || input === undefined || input === "") return null;
-  const row = ctx.db.prepare("SELECT title, state FROM milestones WHERE repo_id = ? AND title = ?").get(repo.id, String(input).trim()) as { title: string; state: string } | undefined;
+  const row = await ctx.db.get("SELECT title, state FROM milestones WHERE repo_id = ? AND title = ?", repo.id, String(input).trim()) as { title: string; state: string } | undefined;
   if (!row) throw badRequest(`This repository has no milestone called “${String(input).slice(0, 60)}”. Create it first.`);
   if (row.state === "closed") throw badRequest(`The milestone “${row.title}” is closed.`);
   return row.title;

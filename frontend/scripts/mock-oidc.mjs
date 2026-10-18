@@ -4,7 +4,7 @@
 //
 //   node scripts/mock-oidc.mjs                      (port 9101; issuer http://localhost:9101)
 //   then start the API with CRATON_WEBHOOKS_ALLOW_PRIVATE=1 (a development machine may reach a provider on localhost over http)
-//   and run: CRATON_E2E_DB=<throwaway>/craton.db npm run e2e:sso
+//   and run: CRATON_E2E_DATABASE_URL=<postgres address> npm run e2e:sso
 import http from "node:http";
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 

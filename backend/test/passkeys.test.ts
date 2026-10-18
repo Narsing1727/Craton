@@ -38,7 +38,7 @@ const signIn = async (auth: SoftAuthenticator, tweak: Parameters<SoftAuthenticat
 const code = (r: { json: any }) => r.json?.error?.code;
 
 before(async () => {
-  ctx = { db: openDb(":memory:"), store: new MemoryStore() };
+  ctx = { db: await openDb(":memory:"), store: new MemoryStore() };
   app = createApp(ctx);
   for (const u of ["alice", "bob", "carol"]) {
     const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: u, email: `${u}@example.org`, password: "a-very-long-password" }) });
@@ -214,7 +214,7 @@ test("synced passkeys keep a counter of zero and are not mistaken for copies", a
 test("two-step verification still applies unless the device verified the person", async () => {
   const touch = new SoftAuthenticator("ES256", "http://localhost:3100", "localhost", false);
   assert.equal((await register("bob", touch)).status, 201);
-  ctx.db.prepare("UPDATE users SET totp_secret = 'x', totp_enabled_at = '2026-01-01T00:00:00.000Z' WHERE owner_id = (SELECT id FROM owners WHERE handle = 'bob')").run();
+  await ctx.db.run("UPDATE users SET totp_secret = 'x', totp_enabled_at = '2026-01-01T00:00:00.000Z' WHERE owner_id = (SELECT id FROM owners WHERE handle = 'bob')");
   const asked = await signIn(touch);
   assert.equal(asked.status, 200);
   assert.equal(asked.json.mfaRequired, true, "a key that was only touched is one factor");
@@ -233,7 +233,7 @@ test("renaming and removing are the owner's, and the last way into an account ca
   assert.equal(renamed.json.find((p: any) => p.id === list[0].id).name, "Work laptop");
 
   // An account with no password and no Google can lose passkeys only down to one.
-  ctx.db.prepare("UPDATE users SET password_hash = 'oauth$' WHERE owner_id = (SELECT id FROM owners WHERE handle = 'carol')").run();
+  await ctx.db.run("UPDATE users SET password_hash = 'oauth$' WHERE owner_id = (SELECT id FROM owners WHERE handle = 'carol')");
   const mine = (await call("GET", "/user/passkeys", "carol")).json as { id: string }[];
   assert.equal(mine.length, 1);
   const refused = await call("DELETE", `/user/passkeys/${mine[0].id}`, "carol");
@@ -256,21 +256,21 @@ test("a removed passkey stops working", async () => {
 });
 
 test("an account is limited to twenty passkeys, and the options request is rate limited per account", async () => {
-  const uid = (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'alice'").get() as { id: number }).id;
-  const insert = (n: number) => ctx.db.prepare("INSERT INTO passkeys (id, user_id, name, public_key, alg) VALUES (?, ?, 'filler', x'00', -7)").run(`filler-${n}-${Math.random()}`, uid);
+  const uid = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'alice'") as { id: number }).id;
+  const insert = async (n: number) => await ctx.db.run("INSERT INTO passkeys (id, user_id, name, public_key, alg) VALUES (?, ?, 'filler', decode('00', 'hex'), -7)", `filler-${n}-${Math.random()}`, uid);
   const have = (await call("GET", "/user/passkeys", "alice")).json.length as number;
-  for (let n = have; n < 19; n++) insert(n);
+  for (let n = have; n < 19; n++) await insert(n);
   // The hourly limit on asking to add one may already be spent by this file's earlier registrations; clear it to test the cap.
   clear(`passkey-add:${uid}`);
   assert.equal((await call("POST", "/user/passkeys/options", "alice")).status, 200, "nineteen: one more is allowed");
-  insert(99);
+  await insert(99);
   const over = await call("POST", "/user/passkeys/options", "alice");
   assert.equal(over.status, 409);
   assert.equal(code(over), "too_many");
 });
 
 test("asking to add passkeys is rate limited per account", async () => {
-  const uid = (ctx.db.prepare("SELECT id FROM owners WHERE handle = 'carol'").get() as { id: number }).id;
+  const uid = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'carol'") as { id: number }).id;
   clear(`passkey-add:${uid}`);
   let last = 0;
   for (let i = 0; i < 25 && last !== 429; i++) last = (await call("POST", "/user/passkeys/options", "carol")).status;

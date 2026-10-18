@@ -5,7 +5,7 @@ synced like git, with content-defined chunking, Merkle-root verification, visual
 
 | Part | Folder | What it is |
 | --- | --- | --- |
-| API and CLI | `backend/` | Hono + `node:sqlite` server (port 4000), the `craton` command line, MCP server |
+| API and CLI | `backend/` | Hono + PostgreSQL server (port 4000), the `craton` command line, MCP server |
 | Web app | `frontend/` | Next.js app (port 3100) |
 | Python client | `sdk/python/` | Small client for the HTTP API |
 | Checks | `scripts/verify.mjs` | Runs the tests, typechecks, route sweeps, keyboard walk and contrast scan |

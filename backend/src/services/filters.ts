@@ -15,12 +15,12 @@ function kindOf(input: unknown): FilterKind {
   return input as FilterKind;
 }
 
-export function listFilters(ctx: Ctx, userId: number, kind: unknown): SavedFilter[] {
-  return ctx.db.prepare("SELECT id, kind, name, state, label, q FROM saved_filters WHERE user_id = ? AND kind = ? ORDER BY name COLLATE NOCASE").all(userId, kindOf(kind)) as SavedFilter[];
+export async function listFilters(ctx: Ctx, userId: number, kind: unknown): Promise<SavedFilter[]> {
+  return await ctx.db.all("SELECT id, kind, name, state, label, q FROM saved_filters WHERE user_id = ? AND kind = ? ORDER BY name", userId, kindOf(kind)) as SavedFilter[];
 }
 
 /** Save (or replace, when the name already exists) a filter. */
-export function saveFilter(ctx: Ctx, userId: number, input: { kind?: unknown; name?: unknown; state?: unknown; label?: unknown; q?: unknown }): SavedFilter {
+export async function saveFilter(ctx: Ctx, userId: number, input: { kind?: unknown; name?: unknown; state?: unknown; label?: unknown; q?: unknown }): Promise<SavedFilter> {
   const kind = kindOf(input.kind);
   const name = String(input.name ?? "").trim();
   if (!name || name.length > 60) throw badRequest("Give the filter a name of up to 60 characters.");
@@ -28,18 +28,18 @@ export function saveFilter(ctx: Ctx, userId: number, input: { kind?: unknown; na
   const label = String(input.label ?? "").trim().slice(0, 60);
   const q = String(input.q ?? "").trim().slice(0, 300);
   if (!state && !label && !q) throw badRequest("There is nothing to save: choose a state, a label or type a search first.");
-  const exists = ctx.db.prepare("SELECT id FROM saved_filters WHERE user_id = ? AND kind = ? AND name = ? COLLATE NOCASE").get(userId, kind, name) as { id: number } | undefined;
+  const exists = await ctx.db.get("SELECT id FROM saved_filters WHERE user_id = ? AND kind = ? AND name = ?", userId, kind, name) as { id: number } | undefined;
   if (!exists) {
-    const n = (ctx.db.prepare("SELECT COUNT(*) AS n FROM saved_filters WHERE user_id = ? AND kind = ?").get(userId, kind) as { n: number }).n;
+    const n = (await ctx.db.get("SELECT COUNT(*) AS n FROM saved_filters WHERE user_id = ? AND kind = ?", userId, kind) as { n: number }).n;
     if (n >= MAX_PER_KIND) throw badRequest(`You can keep ${MAX_PER_KIND} saved filters per list. Delete one first.`);
-    const { lastInsertRowid } = ctx.db.prepare("INSERT INTO saved_filters (user_id, kind, name, state, label, q) VALUES (?, ?, ?, ?, ?, ?)").run(userId, kind, name, state, label, q);
+    const lastInsertRowid = await ctx.db.insert("INSERT INTO saved_filters (user_id, kind, name, state, label, q) VALUES (?, ?, ?, ?, ?, ?)", userId, kind, name, state, label, q);
     return { id: Number(lastInsertRowid), kind, name, state, label, q };
   }
-  ctx.db.prepare("UPDATE saved_filters SET state = ?, label = ?, q = ? WHERE id = ?").run(state, label, q, exists.id);
+  await ctx.db.run("UPDATE saved_filters SET state = ?, label = ?, q = ? WHERE id = ?", state, label, q, exists.id);
   return { id: exists.id, kind, name, state, label, q };
 }
 
-export function deleteFilter(ctx: Ctx, userId: number, id: number) {
-  const r = ctx.db.prepare("DELETE FROM saved_filters WHERE id = ? AND user_id = ?").run(id, userId);
+export async function deleteFilter(ctx: Ctx, userId: number, id: number) {
+  const r = await ctx.db.run("DELETE FROM saved_filters WHERE id = ? AND user_id = ?", id, userId);
   if (r.changes === 0) throw notFound("Saved filter");
 }

@@ -19,11 +19,11 @@ export async function commitFiles(
 ) {
   let parent: string | null = null;
   try {
-    parent = resolveRef(ctx, repo, opts.branch);
+    parent = await resolveRef(ctx, repo, opts.branch);
   } catch {
-    if (opts.from) parent = resolveRef(ctx, repo, opts.from);
+    if (opts.from) parent = await resolveRef(ctx, repo, opts.from);
   }
-  const base = parent ? getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, parent, "commit").tree, "tree") : null;
+  const base = parent ? await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, parent, "commit")).tree, "tree") : null;
   const entries = new Map<string, TreeEntry>((base?.entries ?? []).map((e) => [e.path, e]));
   const objects: (BlobObject | TreeObject | CommitObject)[] = [];
 
@@ -47,16 +47,15 @@ export async function commitFiles(
   const tree = makeTree([...entries.values()]);
   const commit = makeCommit({ tree: objectId(tree), parents: parent ? [parent] : [], author: opts.author, message: opts.message, timestamp: opts.timestamp.toISOString() }, tree);
   objects.push(tree, commit);
-  registerObjects(ctx, repo, objects);
+  await registerObjects(ctx, repo, objects);
   const id = objectId(commit);
-  const current = (() => {
-    try {
-      return resolveRef(ctx, repo, opts.branch);
-    } catch {
-      return null;
-    }
-  })();
-  updateBranch(ctx, repo, opts.branch, id, current, opts.author, opts.via ?? "push");
+  let current: string | null;
+  try {
+    current = await resolveRef(ctx, repo, opts.branch);
+  } catch {
+    current = null;
+  }
+  await updateBranch(ctx, repo, opts.branch, id, current, opts.author, opts.via ?? "push");
   const checks = await runChecks(ctx, repo, id, opts.branch);
   return { id, checks };
 }

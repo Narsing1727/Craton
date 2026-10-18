@@ -27,18 +27,12 @@ export type SecurityEventType = (typeof SECURITY_EVENT_TYPES)[number];
 /** Most entries kept per person; older ones are dropped as new ones arrive. */
 const KEEP = 200;
 
-export function record(ctx: Ctx, userId: number, type: SecurityEventType, opts: { detail?: string; ip?: string | null; userAgent?: string | null } = {}) {
-  ctx.db
-    .prepare("INSERT INTO security_events (user_id, type, detail, ip, user_agent) VALUES (?, ?, ?, ?, ?)")
-    .run(userId, type, (opts.detail ?? "").slice(0, 200), opts.ip?.slice(0, 64) ?? null, opts.userAgent?.slice(0, 300) ?? null);
-  ctx.db
-    .prepare("DELETE FROM security_events WHERE user_id = ? AND id NOT IN (SELECT id FROM security_events WHERE user_id = ? ORDER BY id DESC LIMIT ?)")
-    .run(userId, userId, KEEP);
+export async function record(ctx: Ctx, userId: number, type: SecurityEventType, opts: { detail?: string; ip?: string | null; userAgent?: string | null } = {}) {
+  await ctx.db.run("INSERT INTO security_events (user_id, type, detail, ip, user_agent) VALUES (?, ?, ?, ?, ?)", userId, type, (opts.detail ?? "").slice(0, 200), opts.ip?.slice(0, 64) ?? null, opts.userAgent?.slice(0, 300) ?? null);
+  await ctx.db.run("DELETE FROM security_events WHERE user_id = ? AND id NOT IN (SELECT id FROM security_events WHERE user_id = ? ORDER BY id DESC LIMIT ?)", userId, userId, KEEP);
 }
 
-export function list(ctx: Ctx, userId: number, limit = 50) {
-  const rows = ctx.db
-    .prepare("SELECT id, type, detail, ip, user_agent, created_at FROM security_events WHERE user_id = ? ORDER BY id DESC LIMIT ?")
-    .all(userId, Math.min(KEEP, Math.max(1, limit))) as { id: number; type: string; detail: string; ip: string | null; user_agent: string | null; created_at: string }[];
+export async function list(ctx: Ctx, userId: number, limit = 50) {
+  const rows = await ctx.db.all("SELECT id, type, detail, ip, user_agent, created_at FROM security_events WHERE user_id = ? ORDER BY id DESC LIMIT ?", userId, Math.min(KEEP, Math.max(1, limit))) as { id: number; type: string; detail: string; ip: string | null; user_agent: string | null; created_at: string }[];
   return rows.map((r) => ({ id: r.id, type: r.type, detail: r.detail, ip: r.ip, userAgent: r.user_agent, at: r.created_at }));
 }

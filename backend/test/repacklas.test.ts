@@ -1,6 +1,8 @@
 // A point cloud re-saved after reclassifying some points, or shifted vertically, or with a longer header, is stored as its difference
 // from the earlier version, record by record, and every way of reading it still gives exactly what was uploaded.
 
+import { sumAsync } from "../src/core/async.ts";
+import { filterAsync } from "../src/core/async.ts";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -25,7 +27,7 @@ let ctx: Ctx;
 let app: ReturnType<typeof createApp>;
 let token = "";
 let dir = "";
-let repo: ReturnType<typeof findRepo>;
+let repo: Awaited<ReturnType<typeof findRepo>>;
 const N = 60_000; // 2 MB: about fifteen chunks
 
 async function upload(name: string, data: Buffer, message: string) {
@@ -38,22 +40,22 @@ async function upload(name: string, data: Buffer, message: string) {
   return ((await res.json()) as { commit: string }).commit;
 }
 const raw = async (ref: string, name: string) => Buffer.from(await (await app.request(`/v1/repos/alice/clouds/raw/${ref}/${name}`, { headers: { authorization: `Bearer ${token}` } })).arrayBuffer());
-const blobOf = (commit: string, name: string) => {
-  const tree = getObject<TreeObject>(ctx, repo, getObject<CommitObject>(ctx, repo, commit, "commit").tree, "tree");
+const blobOf = async (commit: string, name: string) => {
+  const tree = await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, commit, "commit")).tree, "tree");
   return getObject<BlobObject>(ctx, repo, tree.entries.find((e) => e.path === name)!.blob, "blob");
 };
-const storedSize = (commit: string, name: string) => blobOf(commit, name).chunks.reduce((n, c) => n + (ctx.db.prepare("SELECT stored_size FROM chunks WHERE hash = ?").get(c.hash) as { stored_size: number }).stored_size, 0);
-const codecOf = (hash: string) => (ctx.db.prepare("SELECT codec FROM chunks WHERE hash = ?").get(hash) as { codec: string }).codec;
+const storedSize = async (commit: string, name: string) => await sumAsync((await blobOf(commit, name)).chunks, async (c) => (await ctx.db.get("SELECT stored_size FROM chunks WHERE hash = ?", c.hash) as { stored_size: number }).stored_size);
+const codecOf = async (hash: string) => (await ctx.db.get("SELECT codec FROM chunks WHERE hash = ?", hash) as { codec: string }).codec;
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "craton-las-"));
-  ctx = { db: openDb(":memory:"), store: new FsStore(dir) };
+  ctx = { db: await openDb(":memory:"), store: new FsStore(dir) };
   app = createApp(ctx);
   const res = await app.request("/v1/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "alice", email: "alice@example.org", password: "a-very-long-password" }) });
   token = ((await res.json()) as { token: string }).token;
-  ctx.db.prepare("UPDATE users SET plan = 'team', email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')").run();
+  await ctx.db.run("UPDATE users SET plan = 'team', email_verified_at = now_iso() WHERE owner_id = (SELECT id FROM owners WHERE handle = 'alice')");
   assert.equal((await app.request("/v1/repos", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "clouds", visibility: "private" }) })).status, 201);
-  repo = findRepo(ctx, "alice", "clouds");
+  repo = await findRepo(ctx, "alice", "clouds");
 });
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -79,10 +81,10 @@ test("a reclassified cloud costs a small share of a new copy", async (t) => {
   const v2 = las(N, { reclassify: 20 });
   const c1 = await upload("cloud.las", v1, "first");
   const c2 = await upload("cloud.las", v2, "reclassified");
-  const before = storedSize(c2, "cloud.las");
+  const before = await storedSize(c2, "cloud.las");
   const done = await repackCommit(ctx, repo, c2);
   assert.ok(done.chunks >= 8, JSON.stringify(done));
-  const after = storedSize(c2, "cloud.las");
+  const after = await storedSize(c2, "cloud.las");
   assert.ok(after < before * 0.08, `${before} -> ${after}`);
   t.diagnostic(`reclassified every 20th point: ${before} -> ${after} bytes stored (${(before / after).toFixed(0)}x less)`);
   assert.ok((await raw(c1, "cloud.las")).equals(v1));
@@ -95,10 +97,10 @@ test("a vertical shift, and a longer header, are handled record by record", asyn
   const shifted = las(N, { seed: 5, shiftZ: 120, vlr: 300 });
   await upload("shift.las", v1, "one");
   const c2 = await upload("shift.las", shifted, "shifted by 1.2 m and with a longer header");
-  const before = storedSize(c2, "shift.las");
+  const before = await storedSize(c2, "shift.las");
   const done = await repackCommit(ctx, repo, c2);
   assert.ok(done.chunks >= 8, JSON.stringify(done));
-  const after = storedSize(c2, "shift.las");
+  const after = await storedSize(c2, "shift.las");
   assert.ok(after < before * 0.15, `${before} -> ${after}`);
   t.diagnostic(`shifted 1.2 m with a longer header: ${before} -> ${after} bytes stored (${(before / after).toFixed(0)}x less)`);
   assert.ok((await raw(c2, "shift.las")).equals(shifted));
@@ -109,7 +111,7 @@ test("a client is sent a chunk that decodes on its own", async () => {
   const c2 = await upload("client.las", las(N, { seed: 9, reclassify: 7 }), "b");
   await repackCommit(ctx, repo, c2);
   assert.ok(c);
-  const diffs = blobOf(c2, "client.las").chunks.filter((x) => codecOf(x.hash) === "ref-delta");
+  const diffs = (await filterAsync((await blobOf(c2, "client.las")).chunks, async (x) => await codecOf(x.hash) === "ref-delta"));
   assert.ok(diffs.length >= 8);
   for (const d of diffs.slice(0, 5)) assert.equal(sha256Hex(decompressChunk(await getStoredChunk(ctx, repo, d.hash))), d.hash);
 });
