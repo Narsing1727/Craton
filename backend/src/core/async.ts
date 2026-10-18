@@ -24,3 +24,14 @@ export async function sumAsync<T>(items: readonly T[], value: (item: T, index: n
   for (let i = 0; i < items.length; i++) total += await value(items[i], i);
   return total;
 }
+
+/** `items.map(fn)` with at most `limit` calls running at once, results in order (a list of thousands must not open thousands of queries together). */
+export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i], i);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}

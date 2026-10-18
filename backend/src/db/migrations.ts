@@ -53,4 +53,21 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX rate_hits_key ON rate_hits (key, hit_at);
   `,
+  // 5: indexes for the lists and feeds of a large installation (found with a generated database of 20,000 repositories).
+  `
+  CREATE INDEX repos_updated ON repos (updated_at DESC, id DESC);
+  CREATE INDEX repos_stars ON repos (stars DESC, id) WHERE visibility = 'public';
+  CREATE INDEX stars_repo ON stars (repo_id);
+  CREATE INDEX stars_created ON stars (created_at);
+  CREATE INDEX issues_updated ON issues (updated_at DESC, id DESC);
+  CREATE INDEX issues_created ON issues (created_at DESC);
+  CREATE INDEX pulls_updated ON pulls (updated_at DESC, id DESC);
+  CREATE INDEX comments_created ON comments (created_at DESC);
+  CREATE INDEX comments_thread ON comments (repo_id, target, number);
+  CREATE INDEX commits_author ON commits (author, repo_id);
+  CREATE INDEX reviews_created ON reviews (created_at DESC);
+  CREATE INDEX releases_created ON releases (created_at DESC);
+  CREATE INDEX collaborators_user ON collaborators (user_id);
+  CREATE INDEX memberships_user ON memberships (user_id);
+  `,
 ];

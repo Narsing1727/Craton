@@ -80,9 +80,10 @@ const SCOPES = { repo: "Read and write repositories", "read:repo": "Read reposit
 const MAX_RANGE_BYTES = 64 * 1024 * 1024;
 
 /** How many commits a person authored in the given repositories. */
-async function commitsBy(ctx: Ctx, handle: string, repoIds: number[]): Promise<number> {
-  if (!repoIds.length) return 0;
-  return (await ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM commits WHERE author = ? AND repo_id IN (${repoIds.map(() => "?").join(",")})`, handle, ...repoIds))!.n;
+/** Commits by `handle` in the repositories `viewerId` can read, counted by the database. */
+async function commitsBy(ctx: Ctx, handle: string, viewerId: number | null): Promise<number> {
+  const access = repos.readableBy(viewerId);
+  return (await ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM commits c JOIN repos r ON r.id = c.repo_id WHERE c.author = ? AND ${access.sql}`, handle, ...access.params))!.n;
 }
 
 export function createApp(ctx: Ctx) {
@@ -255,6 +256,11 @@ export function createApp(ctx: Ctx) {
       throw new ApiError(429, "rate_limited", message);
     }
   }
+  /** ?limit and ?offset of a list, kept within bounds. */
+  const pageOf = (c: Context<Env>, dflt: number, max: number) => ({
+    limit: Math.min(max, Math.max(1, Math.floor(Number(c.req.query("limit") ?? dflt)) || dflt)),
+    offset: Math.max(0, Math.floor(Number(c.req.query("offset") ?? 0)) || 0),
+  });
   /** A token without the scope for this call is treated as if it weren't there. */
   const hasScope = (u: accounts.AuthedUser, ...any: string[]) => u.tokenKind === "session" || any.some((s) => u.scopes.includes(s));
   function requireScope(c: Context<Env>, ...any: string[]) {
@@ -1118,7 +1124,7 @@ export function createApp(ctx: Ctx) {
       orgs: o.kind === "user" ? (await ctx.db.all("SELECT g.handle FROM memberships m JOIN owners g ON g.id = m.org_id WHERE m.user_id = ? ORDER BY g.handle", o.id) as { handle: string }[]).map((r) => r.handle) : undefined,
       commitCount:
         o.kind === "user"
-          ? await commitsBy(ctx, o.handle, (await repos.listRepos(ctx, userId(c))).map((r) => r.id))
+          ? await commitsBy(ctx, o.handle, userId(c))
           : undefined,
       repositories: (await repos.listRepos(ctx, userId(c), { owner: o.handle })).map(repos.repoJson),
     });
@@ -1144,7 +1150,13 @@ export function createApp(ctx: Ctx) {
   }
   // README starters for the kinds of data people keep here (used by the new-repository form).
   v1.get("/readme-templates", (c) => c.json(cards.listCards()));
-  v1.get("/repos", async (c) => c.json((await repos.listRepos(ctx, userId(c), { owner: c.req.query("owner"), q: c.req.query("q"), topic: c.req.query("topic"), ...spatialFilters(c) })).map(repos.repoJson)));
+  // A page at a time: ?limit (default 500, at most 1000) and ?offset; X-Total-Count says how many there are in all.
+  v1.get("/repos", async (c) => {
+    const { limit, offset } = pageOf(c, 500, 1000);
+    const { rows, total } = await repos.repoPage(ctx, userId(c), { owner: c.req.query("owner"), q: c.req.query("q"), topic: c.req.query("topic"), ...spatialFilters(c) }, { limit, offset });
+    c.header("X-Total-Count", String(total));
+    return c.json(rows.map(repos.repoJson));
+  });
   v1.post("/repos", async (c) => {
     const u = requireUser(c);
     requireScope(c, "repo");
@@ -1182,7 +1194,7 @@ export function createApp(ctx: Ctx) {
       head = history.commitJson(log[0]);
       readme = await files.readmeAt(ctx, repo, tip);
     }
-    return c.json({ ...repos.repoJson(repo), access: await accounts.repoAccess(ctx, repo, c.get("user")?.id ?? null), starred: await social.hasStarred(ctx, repo, c.get("user")?.id ?? null), branchCount: branches.length, commitCount, head, readme, openIssues: (await collab.listIssues(ctx, repo, { state: "open" })).length, openPulls: (await collab.listPulls(ctx, repo, { state: "open" })).length });
+    return c.json({ ...repos.repoJson(repo), access: await accounts.repoAccess(ctx, repo, c.get("user")?.id ?? null), starred: await social.hasStarred(ctx, repo, c.get("user")?.id ?? null), branchCount: branches.length, commitCount, head, readme, ...(await collab.openCounts(ctx, repo)) });
   });
   v1.patch("/repos/:owner/:repo", async (c) => {
     const repo = await repoFor(c, "admin");
@@ -1808,7 +1820,13 @@ export function createApp(ctx: Ctx) {
   v1.get("/repos/:owner/:repo/audit", async (c) => c.json(await stats.auditPackage(ctx, await repoFor(c))));
 
   // ── Issues and pull requests ─────────────────────────────────────────────
-  v1.get("/repos/:owner/:repo/issues", async (c) => c.json(await collab.listIssues(ctx, await repoFor(c), { state: c.req.query("state"), label: c.req.query("label") })));
+  // ?limit (default and most 500) and ?offset; X-Total-Count says how many match.
+  v1.get("/repos/:owner/:repo/issues", async (c) => {
+    const { limit, offset } = pageOf(c, 500, 500);
+    const out = await collab.listIssuesPage(ctx, await repoFor(c), { state: c.req.query("state"), label: c.req.query("label") }, { limit, offset });
+    c.header("X-Total-Count", String(out.total));
+    return c.json(out.rows);
+  });
   v1.post("/repos/:owner/:repo/issues", async (c) => {
     const user = requireUser(c);
     const input = await body<Parameters<typeof collab.createIssue>[3]>(c);
@@ -2002,7 +2020,12 @@ export function createApp(ctx: Ctx) {
   v1.put("/repos/:owner/:repo/comments/:id/reactions/:emoji", async (c) => c.json(await collab.setReaction(ctx, await repoFor(c), Number(c.req.param("id")), requireUser(c).id, c.req.param("emoji")!, true)));
   v1.delete("/repos/:owner/:repo/comments/:id/reactions/:emoji", async (c) => c.json(await collab.setReaction(ctx, await repoFor(c), Number(c.req.param("id")), requireUser(c).id, c.req.param("emoji")!, false)));
 
-  v1.get("/repos/:owner/:repo/pulls", async (c) => c.json(await collab.listPulls(ctx, await repoFor(c), { state: c.req.query("state") })));
+  v1.get("/repos/:owner/:repo/pulls", async (c) => {
+    const { limit, offset } = pageOf(c, 200, 500);
+    const out = await collab.listPullsPage(ctx, await repoFor(c), { state: c.req.query("state") }, { limit, offset });
+    c.header("X-Total-Count", String(out.total));
+    return c.json(out.rows);
+  });
   v1.post("/repos/:owner/:repo/pulls", async (c) => {
     const repo = await repoFor(c, "write");
     const me = requireUser(c);
@@ -2080,12 +2103,9 @@ export function createApp(ctx: Ctx) {
   // Everything below only covers repositories the caller can read.
   v1.get("/activity", async (c) => c.json(await listActivity(ctx, userId(c), { actor: c.req.query("actor"), limit: Number(c.req.query("limit") ?? 30) })));
   v1.get("/repos/:owner/:repo/activity", async (c) => c.json(await listActivity(ctx, userId(c), { repo: await repoFor(c), limit: Number(c.req.query("limit") ?? 30) })));
-  v1.get("/issues", async (c) =>
-    c.json((await Promise.all((await repos.listRepos(ctx, userId(c))).map(async (r) => (await collab.listIssues(ctx, r, { state: c.req.query("state") })).map((i) => ({ ...i, repo: `${r.owner}/${r.name}` }))))).flat()),
-  );
-  v1.get("/pulls", async (c) =>
-    c.json((await Promise.all((await repos.listRepos(ctx, userId(c))).map(async (r) => (await collab.listPulls(ctx, r, { state: c.req.query("state") })).map((p) => ({ ...p, repo: `${r.owner}/${r.name}` }))))).flat()),
-  );
+  // The most recently active across every repository the caller can read (?limit, default 200, at most 500).
+  v1.get("/issues", async (c) => c.json(await collab.listIssuesAcross(ctx, userId(c), { state: c.req.query("state"), limit: pageOf(c, 200, 500).limit })));
+  v1.get("/pulls", async (c) => c.json(await collab.listPullsAcross(ctx, userId(c), { state: c.req.query("state"), limit: pageOf(c, 200, 500).limit })));
 
   // The API described by its own route table, so the document can't drift from the code.
   v1.get("/openapi.json", (c) => c.json(buildOpenApi(v1.routes.map((r) => ({ method: r.method, path: r.path })), { version: "1", server: new URL(c.req.url).origin })));

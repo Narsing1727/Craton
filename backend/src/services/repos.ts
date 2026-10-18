@@ -73,16 +73,63 @@ export async function createRepo(
   return findRepo(ctx, owner.handle, name);
 }
 
-export async function listRepos(ctx: Ctx, userId: number | null, filter: { owner?: string; q?: string; topic?: string; covers?: { lat: number; lon: number }; bbox?: BBox } = {}) {
-  const rows = await ctx.db.all(`${SELECT} ORDER BY r.updated_at DESC`) as RepoRow[];
+/**
+ * The repositories `userId` may read, as SQL: a public one, one the person owns, one owned by an organization they belong to, or one
+ * they were added to. (The same rule repoAccess applies to one repository, written so the database can apply it to all of them.)
+ */
+export function readableBy(userId: number | null, alias = "r"): { sql: string; params: number[] } {
+  if (userId === null) return { sql: `${alias}.visibility = 'public'`, params: [] };
+  return {
+    sql: `(${alias}.visibility = 'public' OR ${alias}.owner_id = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = ${alias}.owner_id AND m.user_id = ?)
+      OR EXISTS (SELECT 1 FROM collaborators cb WHERE cb.repo_id = ${alias}.id AND cb.user_id = ?))`,
+    params: [userId, userId, userId],
+  };
+}
+
+type RepoFilter = { owner?: string; owners?: string[]; q?: string; topic?: string; covers?: { lat: number; lon: number }; bbox?: BBox };
+
+/** Everything that can be decided in SQL, so a big installation does not load every repository to show a few. */
+function repoWhere(userId: number | null, filter: RepoFilter) {
+  const access = readableBy(userId);
+  const where = [access.sql];
+  const params: (string | number)[] = [...access.params];
+  if (filter.owner) {
+    where.push("o.handle = ?");
+    params.push(filter.owner);
+  }
+  if (filter.owners) {
+    if (!filter.owners.length) where.push("1 = 0");
+    else (where.push(`o.handle IN (${filter.owners.map(() => "?").join(",")})`), params.push(...filter.owners));
+  }
   const q = filter.q?.toLowerCase();
-  return (await filterAsync(rows, async (r) =>
-      await repoAccess(ctx, r, userId) !== "none" &&
-      (!filter.owner || r.owner === filter.owner) &&
-      (!filter.covers || (r.footprint !== null && bboxContains(JSON.parse(r.footprint) as BBox, filter.covers.lon, filter.covers.lat))) &&
-      (!filter.bbox || (r.footprint !== null && bboxIntersects(JSON.parse(r.footprint) as BBox, filter.bbox))) &&
-      (!filter.topic || (JSON.parse(r.topics) as string[]).includes(filter.topic.toLowerCase())) &&
-      (!q || `${r.owner}/${r.name} ${r.description} ${r.region} ${r.tags} ${r.topics}`.toLowerCase().includes(q))));
+  if (q) {
+    where.push(`lower(o.handle || '/' || r.name || ' ' || r.description || ' ' || r.region || ' ' || r.tags || ' ' || r.topics) LIKE ? ESCAPE '\\'`);
+    params.push(`%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+  }
+  return { where: where.join(" AND "), params };
+}
+
+/** What only the application can judge: topics, and where the data is on the map. */
+const needsRows = (filter: RepoFilter) => Boolean(filter.topic || filter.covers || filter.bbox);
+const passes = (r: RepoRow, filter: RepoFilter) =>
+  (!filter.covers || (r.footprint !== null && bboxContains(JSON.parse(r.footprint) as BBox, filter.covers.lon, filter.covers.lat))) &&
+  (!filter.bbox || (r.footprint !== null && bboxIntersects(JSON.parse(r.footprint) as BBox, filter.bbox))) &&
+  (!filter.topic || (JSON.parse(r.topics) as string[]).includes(filter.topic.toLowerCase()));
+
+/** The repositories `userId` can read, newest activity first. With `page`, only that slice (and how many there are in all). */
+export async function repoPage(ctx: Ctx, userId: number | null, filter: RepoFilter = {}, page?: { limit: number; offset: number }): Promise<{ rows: RepoRow[]; total: number }> {
+  const { where, params } = repoWhere(userId, filter);
+  if (needsRows(filter)) {
+    const all = (await ctx.db.all(`${SELECT} WHERE ${where} ORDER BY r.updated_at DESC`, ...params) as RepoRow[]).filter((r) => passes(r, filter));
+    return { rows: page ? all.slice(page.offset, page.offset + page.limit) : all, total: all.length };
+  }
+  const rows = await ctx.db.all(`${SELECT} WHERE ${where} ORDER BY r.updated_at DESC, r.id DESC${page ? " LIMIT ? OFFSET ?" : ""}`, ...params, ...(page ? [page.limit, page.offset] : [])) as RepoRow[];
+  const total = page ? (await ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM repos r JOIN owners o ON o.id = r.owner_id WHERE ${where}`, ...params))!.n : rows.length;
+  return { rows, total };
+}
+
+export async function listRepos(ctx: Ctx, userId: number | null, filter: RepoFilter = {}) {
+  return (await repoPage(ctx, userId, filter)).rows;
 }
 
 export async function updateRepo(

@@ -2,8 +2,11 @@
 
 import type { Ctx } from "./context.ts";
 import { repoAccess } from "./accounts.ts";
+import { inGroups } from "../db/db.ts";
+import { mapLimit } from "../core/async.ts";
 import { badRequest, conflict, forbidden, inTransaction, lockNumbering, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
+import { readableBy } from "./repos.ts";
 import * as milestones from "./milestones.ts";
 import type { CommitObject, TreeObject } from "../core/objects.ts";
 import { makeCommit, objectId } from "../core/objects.ts";
@@ -31,22 +34,50 @@ const userIdOf = async (ctx: Ctx, handle: string) => {
 
 type IssueRow = { number: number; title: string; body: string; author_id: number; state: "open" | "closed"; label: Label; assignee_id: number | null; milestone: string | null; file_ref: string | null; created_at: string; updated_at: string };
 
-async function issueJson(ctx: Ctx, repo: RepoRow, r: IssueRow) {
-  const comments = (await ctx.db.get("SELECT COUNT(*) AS n FROM comments WHERE repo_id = ? AND target = 'issue' AND number = ?", repo.id, r.number) as { n: number }).n;
-  return {
+/** Handles for a set of owner ids, in one query. */
+async function handlesOf(ctx: Ctx, ids: (number | null)[]) {
+  const wanted = [...new Set(ids.filter((i): i is number => i !== null))];
+  const rows = await inGroups(wanted, 500, (g) => ctx.db.all<{ id: number; handle: string }>(`SELECT id, handle FROM owners WHERE id IN (${g.map(() => "?").join(",")})`, ...g));
+  return new Map(rows.map((r) => [r.id, r.handle]));
+}
+
+/** How many comments each issue or pull request has (keyed "repoId:number"), in one query however many repositories they are in. */
+async function commentCounts(ctx: Ctx, target: "issue" | "pull", rows: { repo_id: number; number: number }[]) {
+  const repoIds = [...new Set(rows.map((r) => r.repo_id))];
+  const numbers = [...new Set(rows.map((r) => r.number))];
+  const counts = new Map<string, number>();
+  if (!rows.length) return counts;
+  // The repositories and numbers asked for form a grid that is a superset of the pairs; the pairs not asked for are simply not looked up.
+  const wanted = new Set(rows.map((r) => `${r.repo_id}:${r.number}`));
+  const found = await ctx.db.all<{ repo_id: number; number: number; n: number }>(
+    `SELECT repo_id, number, COUNT(*) AS n FROM comments WHERE target = ? AND repo_id IN (${repoIds.map(() => "?").join(",")}) AND number IN (${numbers.map(() => "?").join(",")}) GROUP BY repo_id, number`,
+    target, ...repoIds, ...numbers,
+  );
+  for (const f of found) if (wanted.has(`${f.repo_id}:${f.number}`)) counts.set(`${f.repo_id}:${f.number}`, f.n);
+  return counts;
+}
+
+/** The JSON of many issues, from any repositories: a few queries for all of them, not a few for each. */
+async function issuesJson(ctx: Ctx, rows: (IssueRow & { repo_id: number })[]) {
+  const [handles, counts] = await Promise.all([handlesOf(ctx, rows.flatMap((r) => [r.author_id, r.assignee_id])), commentCounts(ctx, "issue", rows)]);
+  return rows.map((r) => ({
     number: r.number,
     title: r.title,
     body: r.body,
-    author: await handleOf(ctx, r.author_id),
+    author: handles.get(r.author_id) ?? null,
     state: r.state,
     label: r.label,
-    assignee: await handleOf(ctx, r.assignee_id),
+    assignee: r.assignee_id === null ? null : (handles.get(r.assignee_id) ?? null),
     milestone: r.milestone,
     file: r.file_ref,
-    comments,
+    comments: counts.get(`${r.repo_id}:${r.number}`) ?? 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
-  };
+  }));
+}
+
+async function issueJson(ctx: Ctx, repo: RepoRow, r: IssueRow) {
+  return (await issuesJson(ctx, [{ ...r, repo_id: repo.id }]))[0];
 }
 
 export async function createIssue(ctx: Ctx, repo: RepoRow, authorId: number, input: { title: string; body?: string; label?: string; assignee?: string | null; milestone?: string | null; file?: string | null }) {
@@ -65,9 +96,49 @@ export async function createIssue(ctx: Ctx, repo: RepoRow, authorId: number, inp
   return getIssue(ctx, repo, number);
 }
 
+/** A page of a repository's issues, newest first, and how many match in all. */
+export async function listIssuesPage(ctx: Ctx, repo: RepoRow, filter: { state?: string; label?: string } = {}, page?: { limit: number; offset: number }) {
+  const where = ["repo_id = ?"];
+  const params: (string | number)[] = [repo.id];
+  if (filter.state) (where.push("state = ?"), params.push(filter.state));
+  if (filter.label) (where.push("label = ?"), params.push(filter.label));
+  const rows = await ctx.db.all(`SELECT * FROM issues WHERE ${where.join(" AND ")} ORDER BY number DESC${page ? " LIMIT ? OFFSET ?" : ""}`, ...params, ...(page ? [page.limit, page.offset] : [])) as IssueRow[];
+  const total = page ? (await ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM issues WHERE ${where.join(" AND ")}`, ...params))!.n : rows.length;
+  return { rows: await issuesJson(ctx, rows.map((r) => ({ ...r, repo_id: repo.id }))), total };
+}
+
+/** How many issues and pull requests are open, without reading any of them. */
+export async function openCounts(ctx: Ctx, repo: RepoRow) {
+  const [issues, pulls] = await Promise.all([
+    ctx.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM issues WHERE repo_id = ? AND state = 'open'", repo.id),
+    ctx.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM pulls WHERE repo_id = ? AND state = 'open'", repo.id),
+  ]);
+  return { openIssues: issues!.n, openPulls: pulls!.n };
+}
+
 export async function listIssues(ctx: Ctx, repo: RepoRow, filter: { state?: string; label?: string } = {}) {
-  const rows = await ctx.db.all("SELECT * FROM issues WHERE repo_id = ? ORDER BY number DESC", repo.id) as IssueRow[];
-  return (await Promise.all(rows.filter((r) => (!filter.state || r.state === filter.state) && (!filter.label || r.label === filter.label)).map((r) => issueJson(ctx, repo, r))));
+  return (await listIssuesPage(ctx, repo, filter)).rows;
+}
+
+/** The most recently updated issues across every repository `userId` can read. */
+export async function listIssuesAcross(ctx: Ctx, userId: number | null, filter: { state?: string; limit: number }) {
+  const access = readableBy(userId);
+  const rows = await ctx.db.all<IssueRow & { repo_id: number }>(
+    `SELECT i.* FROM issues i JOIN repos r ON r.id = i.repo_id WHERE ${access.sql}${filter.state ? " AND i.state = ?" : ""} ORDER BY i.updated_at DESC, i.id DESC LIMIT ?`,
+    ...access.params, ...(filter.state ? [filter.state] : []), filter.limit,
+  );
+  const [repoRows, json] = await Promise.all([repoRowsById(ctx, rows.map((r) => r.repo_id)), issuesJson(ctx, rows)]);
+  // `json` is in the order of `rows`, which the query already sorted.
+  return json.map((i, k) => {
+    const repo = repoRows.get(rows[k].repo_id)!;
+    return { ...i, repo: `${repo.owner}/${repo.name}` };
+  });
+}
+
+async function repoRowsById(ctx: Ctx, ids: number[]) {
+  const wanted = [...new Set(ids)];
+  const rows = await inGroups(wanted, 500, (g) => ctx.db.all<RepoRow>(`SELECT r.*, o.handle AS owner FROM repos r JOIN owners o ON o.id = r.owner_id WHERE r.id IN (${g.map(() => "?").join(",")})`, ...g));
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
 export async function getIssue(ctx: Ctx, repo: RepoRow, number: number) {
@@ -233,9 +304,32 @@ export async function createPull(ctx: Ctx, repo: RepoRow, authorId: number, inpu
   return getPull(ctx, repo, number);
 }
 
+/** A page of a repository's pull requests, newest first, and how many match in all. */
+export async function listPullsPage(ctx: Ctx, repo: RepoRow, filter: { state?: string } = {}, page?: { limit: number; offset: number }) {
+  const where = ["repo_id = ?"];
+  const params: (string | number)[] = [repo.id];
+  if (filter.state) (where.push("state = ?"), params.push(filter.state));
+  const rows = await ctx.db.all(`SELECT * FROM pulls WHERE ${where.join(" AND ")} ORDER BY number DESC${page ? " LIMIT ? OFFSET ?" : ""}`, ...params, ...(page ? [page.limit, page.offset] : [])) as PullRow[];
+  const total = page ? (await ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM pulls WHERE ${where.join(" AND ")}`, ...params))!.n : rows.length;
+  return { rows: await mapLimit(rows, 8, (r) => pullJson(ctx, repo, r)), total };
+}
+
 export async function listPulls(ctx: Ctx, repo: RepoRow, filter: { state?: string } = {}) {
-  const rows = await ctx.db.all("SELECT * FROM pulls WHERE repo_id = ? ORDER BY number DESC", repo.id) as PullRow[];
-  return (await Promise.all(rows.filter((r) => !filter.state || r.state === filter.state).map((r) => pullJson(ctx, repo, r))));
+  return (await listPullsPage(ctx, repo, filter)).rows;
+}
+
+/** The most recently updated pull requests across every repository `userId` can read. */
+export async function listPullsAcross(ctx: Ctx, userId: number | null, filter: { state?: string; limit: number }) {
+  const access = readableBy(userId);
+  const rows = await ctx.db.all<PullRow & { repo_id: number }>(
+    `SELECT p.* FROM pulls p JOIN repos r ON r.id = p.repo_id WHERE ${access.sql}${filter.state ? " AND p.state = ?" : ""} ORDER BY p.updated_at DESC, p.id DESC LIMIT ?`,
+    ...access.params, ...(filter.state ? [filter.state] : []), filter.limit,
+  );
+  const repoRows = await repoRowsById(ctx, rows.map((r) => r.repo_id));
+  return mapLimit(rows, 8, async (r) => {
+    const repo = repoRows.get(r.repo_id)!;
+    return { ...(await pullJson(ctx, repo, r)), repo: `${repo.owner}/${repo.name}` };
+  });
 }
 
 export async function getPull(ctx: Ctx, repo: RepoRow, number: number) {

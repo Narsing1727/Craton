@@ -9,12 +9,11 @@
 //   - replies on an issue or pull request that you opened, even in a repository you only read.
 // What you did yourself never appears.
 
-import { statement } from "../db/db.ts";
+import { inGroups, statement } from "../db/db.ts";
 import { createHash } from "node:crypto";
 import type { Ctx } from "./context.ts";
 import { badRequest } from "./context.ts";
 import { listActivity, type ActivityEvent } from "./activity.ts";
-import { repoAccess } from "./accounts.ts";
 import { config } from "../config.ts";
 
 export type InboxItem = Omit<ActivityEvent, "type"> & {
@@ -53,38 +52,54 @@ async function baseline(ctx: Ctx, userId: number): Promise<string> {
 export async function listInbox(ctx: Ctx, user: { id: number; handle: string }, opts: { view?: "inbox" | "done" | "all"; limit?: number } = {}) {
   const view = opts.view ?? "inbox";
   const before = await baseline(ctx, user.id);
-  // Write access is per repository: an owner's or organization's, or a collaborator invited with Write.
-  const writeCache = new Map<string, boolean>();
-  const canWrite = async (repo: string) => {
-    if (!writeCache.has(repo)) {
-      const [owner, name] = repo.split("/");
-      const row = await ctx.db.get("SELECT r.id, r.owner_id, r.visibility FROM repos r JOIN owners o ON o.id = r.owner_id WHERE o.handle = ? AND r.name = ?", owner, name) as { id: number; owner_id: number; visibility: string } | undefined;
-      const access = row ? await repoAccess(ctx, row, user.id) : "none";
-      writeCache.set(repo, access === "write" || access === "admin");
-    }
-    return writeCache.get(repo)!;
-  };
+  const events = (await listActivity(ctx, user.id, { limit: WINDOW })).filter((e) => e.actor !== user.handle);
+  // Write access is per repository: an owner's or organization's, or a collaborator invited with Write. One query for all of them.
+  const repoNames = [...new Set(events.map((e) => e.repo))];
+  const writable = new Set(
+    (await inGroups(repoNames, 400, (g) =>
+      ctx.db.all<{ repo: string }>(
+        `SELECT o.handle || '/' || r.name AS repo FROM repos r JOIN owners o ON o.id = r.owner_id
+          WHERE o.handle || '/' || r.name IN (${g.map(() => "?").join(",")})
+            AND (r.owner_id = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = r.owner_id AND m.user_id = ?)
+                 OR EXISTS (SELECT 1 FROM collaborators cb WHERE cb.repo_id = r.id AND cb.user_id = ? AND cb.role IN ('Write', 'Admin')))`,
+        ...g, user.id, user.id, user.id,
+      ),
+    )).map((r) => r.repo),
+  );
+  const canWrite = async (repo: string) => writable.has(repo);
   const states = new Map((await ctx.db.all("SELECT key, state FROM inbox_state WHERE user_id = ?", user.id) as { key: string; state: string }[]).map((r) => [r.key, r.state]));
   const mention = new RegExp(`(^|[^\\w-])@${user.handle.replace(/[-]/g, "\\-")}(?![\\w-])`, "i");
 
-  // Who opened a given issue or pull request, looked up once each.
+  // Who opened each issue or pull request that was talked about, in two queries.
   const authors = new Map<string, number | null>();
+  const threads = (table: "issues" | "pulls", kind: string) => {
+    const m = new Map<string, Set<number>>();
+    for (const e of events) {
+      if (e.type !== "comment" && e.type !== "review") continue;
+      const found = e.href.match(/\/(issues|pull)\/(\d+)$/);
+      if (!found || found[1] !== kind) continue;
+      (m.get(e.repo) ?? m.set(e.repo, new Set()).get(e.repo)!).add(Number(found[2]));
+    }
+    return { table, kind, m };
+  };
+  for (const { table, kind, m } of [threads("issues", "issues"), threads("pulls", "pull")]) {
+    const repoList = [...m.keys()];
+    const numbers = [...new Set([...m.values()].flatMap((s) => [...s]))];
+    if (!repoList.length) continue;
+    const rows = await ctx.db.all<{ repo: string; number: number; a: number }>(
+      `SELECT o.handle || '/' || r.name AS repo, t.number, t.author_id AS a FROM ${table} t JOIN repos r ON r.id = t.repo_id JOIN owners o ON o.id = r.owner_id
+        WHERE o.handle || '/' || r.name IN (${repoList.map(() => "?").join(",")}) AND t.number IN (${numbers.map(() => "?").join(",")})`,
+      ...repoList, ...numbers,
+    );
+    for (const r of rows) authors.set(`${r.repo}${kind}${r.number}`, r.a);
+  }
   const authorOf = async (repo: string, href: string) => {
     const m = href.match(/\/(issues|pull)\/(\d+)$/);
-    if (!m) return null;
-    const cacheKey = `${repo}${m[1]}${m[2]}`;
-    if (!authors.has(cacheKey)) {
-      const [owner, name] = repo.split("/");
-      const table = m[1] === "issues" ? "issues" : "pulls";
-      const row = await ctx.db.get(`SELECT t.author_id AS a FROM ${table} t JOIN repos r ON r.id = t.repo_id JOIN owners o ON o.id = r.owner_id WHERE o.handle = ? AND r.name = ? AND t.number = ?`, owner, name, Number(m[2])) as { a: number } | undefined;
-      authors.set(cacheKey, row?.a ?? null);
-    }
-    return authors.get(cacheKey) ?? null;
+    return m ? (authors.get(`${repo}${m[1]}${m[2]}`) ?? null) : null;
   };
 
   const items: InboxItem[] = [];
-  for (const e of await listActivity(ctx, user.id, { limit: WINDOW })) {
-    if (e.actor === user.handle) continue;
+  for (const e of events) {
     const talks = e.type === "comment" || e.type === "review";
     const reason: InboxItem["reason"] | null = talks && mention.test(e.detail) ? "mention" : talks && await authorOf(e.repo, e.href) === user.id ? "reply" : await canWrite(e.repo) ? "activity" : null;
     if (!reason) continue;

@@ -150,7 +150,8 @@ export async function authenticate(ctx: Ctx, token: string | undefined | null): 
     | undefined;
   if (!row) return null;
   if (row.expires_at && row.expires_at < new Date().toISOString()) return null;
-  await ctx.db.run("UPDATE tokens SET last_used_at = now_iso() WHERE id = ?", row.id);
+  // The "last used" stamp is for people to read, so a minute's accuracy is plenty; writing it on every request is a write per request.
+  await ctx.db.run("UPDATE tokens SET last_used_at = now_iso() WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)", row.id, new Date(Date.now() - 60_000).toISOString());
   return { ...await getUserById(ctx, row.user_id), scopes: row.scopes.split(","), tokenKind: row.kind, tokenId: row.id, repos: row.repos ? (JSON.parse(row.repos) as string[]) : null };
 }
 

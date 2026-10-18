@@ -91,10 +91,16 @@ export function numbered(sql: string): string {
   return out;
 }
 
+const SLOW_MS = Number(process.env.CRATON_DB_SLOW_MS ?? 0) || 0;
+
 /** A database error that says which statement it came from (the driver's message alone rarely does). */
 async function run<T>(sql: string, go: () => Promise<T>): Promise<T> {
+  const started = performance.now();
   try {
-    return await go();
+    const out = await go();
+    // CRATON_DB_SLOW_MS=200 writes every statement slower than that to the log, with its text, to find what a large database dislikes.
+    if (SLOW_MS > 0 && performance.now() - started >= SLOW_MS) console.warn(`slow query (${Math.round(performance.now() - started)} ms): ${sql.replace(/\s+/g, " ").slice(0, 400)}`);
+    return out;
   } catch (err) {
     if (err instanceof Error && !err.message.includes("\n  in: ")) err.message += `\n  in: ${sql.replace(/\s+/g, " ").slice(0, 300)}`;
     throw err;

@@ -23,6 +23,7 @@ Both are plain Node processes. The database is PostgreSQL. Unless R2 is configur
 | `CRATON_DB_POOL_MAX` | `10` | Most connections the API holds open to the database (1 to 200). Keep it below the server's `max_connections` divided by the number of API processes. |
 | `CRATON_PUBLIC_API_URL` | `http://localhost:<PORT>` | The address identity providers reach the API at; it is the start of the SCIM base URL shown in organization settings (`<this>/v1/scim/v2/<org>`). |
 | `CRATON_DB_STATEMENT_TIMEOUT_MS` | `120000` | A database statement that runs longer than this is cancelled by the server (0 turns it off). |
+| `CRATON_DB_SLOW_MS` | `0` (off) | Log every database statement that takes at least this many milliseconds, with its text. Turn it on (for example `200`) to see what a large installation is slow at. |
 | `CRATON_TEST_PG` | none | For `npm test` in `backend` only: a Postgres address (for example the container from `docker compose up -d db`). Every test database then gets its own schema on that server, dropped when it closes, so the suite runs against the real driver and server instead of the in-process database. |
 | `CRATON_WEB_URL` | `http://localhost:3100` | Where the web app lives, for links the API writes into emails. |
 | `CRATON_CORS_ORIGINS` | `http://localhost:3100` | Comma-separated origins allowed to call the API from a browser. |

@@ -19,7 +19,7 @@ export type ChecklistItem = { id: string; done: boolean };
  */
 export async function checklist(ctx: Ctx, user: User): Promise<ChecklistItem[]> {
   const owners = await writableOwners(ctx, user.id);
-  const repos = (await listRepos(ctx, user.id)).filter((r) => owners.includes(r.owner));
+  const repos = await listRepos(ctx, user.id, { owners });
   const ids = repos.map((r) => r.id);
   const inRepos = async (sql: string, ...args: (string | number)[]) =>
     ids.length ? Boolean(await ctx.db.get(sql.replace("{ids}", ids.join(",")), ...args)) : false;

@@ -2,7 +2,7 @@
 
 import type { Ctx } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
-import { listRepos, repoJson } from "./repos.ts";
+import { readableBy, repoJson } from "./repos.ts";
 
 async function recount(ctx: Ctx, repoId: number) {
   await ctx.db.run("UPDATE repos SET stars = (SELECT COUNT(*) FROM stars WHERE repo_id = ?) WHERE id = ?", repoId, repoId);
@@ -24,9 +24,13 @@ export async function hasStarred(ctx: Ctx, repo: RepoRow, userId: number | null)
 
 /** Repositories a person starred that the viewer can see, newest star first. */
 export async function starredBy(ctx: Ctx, ownerId: number, viewerId: number | null) {
-  const visible = new Map((await listRepos(ctx, viewerId)).map((r) => [r.id, r]));
-  const rows = await ctx.db.all("SELECT repo_id, created_at FROM stars WHERE user_id = ? ORDER BY created_at DESC", ownerId) as { repo_id: number; created_at: string }[];
-  return rows.filter((r) => visible.has(r.repo_id)).map((r) => ({ ...repoJson(visible.get(r.repo_id)!), starredAt: r.created_at }));
+  const access = readableBy(viewerId);
+  const rows = await ctx.db.all<RepoRow & { starred_at: string }>(
+    `SELECT r.*, o.handle AS owner, s.created_at AS starred_at FROM stars s JOIN repos r ON r.id = s.repo_id JOIN owners o ON o.id = r.owner_id
+      WHERE s.user_id = ? AND ${access.sql} ORDER BY s.created_at DESC`,
+    ownerId, ...access.params,
+  );
+  return rows.map((r) => ({ ...repoJson(r), starredAt: r.starred_at }));
 }
 
 const PERIOD_DAYS = { day: 1, week: 7, month: 30 } as const;
@@ -38,12 +42,14 @@ export type TrendingPeriod = keyof typeof PERIOD_DAYS;
  */
 export async function trending(ctx: Ctx, period: TrendingPeriod, viewerId: number | null, limit = 50) {
   const since = new Date(Date.now() - PERIOD_DAYS[period] * 86_400_000).toISOString();
-  const gains = new Map(
-    (await ctx.db.all("SELECT repo_id, COUNT(*) AS n FROM stars WHERE created_at >= ? GROUP BY repo_id", since) as { repo_id: number; n: number }[]).map((r) => [r.repo_id, r.n]),
+  // Public only, whoever is asking; ranked and cut to the limit by the database.
+  const rows = await ctx.db.all<RepoRow & { gained: number }>(
+    `SELECT r.*, o.handle AS owner, COALESCE(g.n, 0) AS gained
+       FROM repos r JOIN owners o ON o.id = r.owner_id
+       LEFT JOIN (SELECT repo_id, COUNT(*) AS n FROM stars WHERE created_at >= ? GROUP BY repo_id) g ON g.repo_id = r.id
+      WHERE r.visibility = 'public' ORDER BY COALESCE(g.n, 0) DESC, r.stars DESC, r.id LIMIT ?`,
+    since, limit,
   );
-  const mine = new Set(viewerId === null ? [] : (await ctx.db.all("SELECT repo_id FROM stars WHERE user_id = ?", viewerId) as { repo_id: number }[]).map((r) => r.repo_id));
-  return (await listRepos(ctx, null)) // public only, whoever is asking
-    .map((r) => ({ ...repoJson(r), gained: gains.get(r.id) ?? 0, starred: mine.has(r.id) }))
-    .sort((a, b) => b.gained - a.gained || b.stars - a.stars)
-    .slice(0, limit);
+  const mine = new Set(viewerId === null || !rows.length ? [] : (await ctx.db.all<{ repo_id: number }>(`SELECT repo_id FROM stars WHERE user_id = ? AND repo_id IN (${rows.map(() => "?").join(",")})`, viewerId, ...rows.map((r) => r.id))).map((r) => r.repo_id));
+  return rows.map((r) => ({ ...repoJson(r), gained: r.gained, starred: mine.has(r.id) }));
 }
