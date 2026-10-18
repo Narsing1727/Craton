@@ -26,7 +26,7 @@ Both are plain Node processes. The database is PostgreSQL. Unless R2 is configur
 | `CRATON_TEST_PG` | none | For `npm test` in `backend` only: a Postgres address (for example the container from `docker compose up -d db`). Every test database then gets its own schema on that server, dropped when it closes, so the suite runs against the real driver and server instead of the in-process database. |
 | `CRATON_WEB_URL` | `http://localhost:3100` | Where the web app lives, for links the API writes into emails. |
 | `CRATON_CORS_ORIGINS` | `http://localhost:3100` | Comma-separated origins allowed to call the API from a browser. |
-| `CRATON_TRUSTED_PROXIES` | loopback addresses | Addresses allowed to pass on a visitor's real address (`x-craton-client-ip`): the web app. Anything else cannot pick its own address for rate limits. |
+| `CRATON_TRUSTED_PROXIES` | loopback addresses | Addresses allowed to pass on a visitor's real address (`x-craton-client-ip`): the web app. Single addresses or IPv4 ranges (`10.0.0.0/8,172.16.0.0/12`), which is what containers need since their addresses are not fixed. Anything else cannot pick its own address for rate limits. |
 | `CRATON_RATE_LIMITS` | on | `off` disables rate limiting (tests only). |
 | `CRATON_API_RATE` | `1200` | API requests per minute per token, or per address when not signed in. Sign-in, sign-up and reset have their own, fixed limits. |
 | `CRATON_UPLOAD_MAX_MB` | `100` | Largest total size of one upload from the browser; bigger goes through the CLI. |

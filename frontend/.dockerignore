@@ -1,0 +1,12 @@
+node_modules
+.next
+.next-*
+.git
+*.log
+.env*
+Dockerfile
+.dockerignore
+scripts
+test
+_parked
+tsconfig.tsbuildinfo

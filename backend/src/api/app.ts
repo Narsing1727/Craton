@@ -16,6 +16,7 @@ import * as accounts from "../services/accounts.ts";
 import * as scim from "../services/scim.ts";
 import * as saml from "../services/saml.ts";
 import * as guards from "./guards.ts";
+import { addressInList } from "./ip.ts";
 import * as repos from "../services/repos.ts";
 import { datasetJsonLd } from "../services/dataset.ts";
 import * as chunks from "../services/chunks.ts";
@@ -209,7 +210,7 @@ export function createApp(ctx: Ctx) {
   const socketOf = (c: Context<Env>) => (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress;
   const viaTrustedProxy = (c: Context<Env>) => {
     const socket = socketOf(c);
-    return socket === undefined || config.trustedProxies.includes(socket); // undefined: in-process (tests)
+    return socket === undefined || addressInList(socket, config.trustedProxies); // undefined: in-process (tests)
   };
   function clientIp(c: Context<Env>) {
     const forwarded = viaTrustedProxy(c) ? (c.req.header("x-craton-client-ip") ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim()) : undefined;

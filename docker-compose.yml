@@ -5,6 +5,7 @@
 #   cd backend && npm start
 #
 # Without CRATON_DATABASE_URL the backend runs Postgres inside its own process (PGlite) and needs none of this.
+# The `stack` profile below also runs the API and the web app in containers (ports: CRATON_API_PORT, CRATON_WEB_PORT).
 services:
   db:
     image: postgres:16-alpine
@@ -22,5 +23,36 @@ services:
       timeout: 3s
       retries: 10
 
+  # The whole stack in containers (`docker compose --profile stack up --build`): the same images you would run on AWS.
+  api:
+    profiles: ["stack"]
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CRATON_DATABASE_URL: postgres://craton:craton@db:5432/craton
+      CRATON_WEB_URL: http://localhost:${CRATON_WEB_PORT:-3100}
+      CRATON_PUBLIC_API_URL: http://localhost:${CRATON_API_PORT:-4000}
+      CRATON_CORS_ORIGINS: http://localhost:${CRATON_WEB_PORT:-3100}
+      # The web app's address changes with every start: trust the container network (see OPERATING.md).
+      CRATON_TRUSTED_PROXIES: 127.0.0.1,::1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+    ports:
+      - "127.0.0.1:${CRATON_API_PORT:-4000}:4000"
+    volumes:
+      - craton-data:/data
+
+  web:
+    profiles: ["stack"]
+    build: ./frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      CRATON_API_URL: http://api:4000
+    ports:
+      - "127.0.0.1:${CRATON_WEB_PORT:-3100}:3100"
+
 volumes:
   craton-pgdata:
+  craton-data:

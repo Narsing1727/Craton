@@ -17,7 +17,7 @@ cd backend  && npm install && npm start      # API on http://localhost:4000
 cd frontend && npm install && npm run dev    # web app on http://localhost:3100
 ```
 
-Set `CRATON_API_URL` for the web app if the API is elsewhere. Settings, backup and restore are in `OPERATING.md`;
+Set `CRATON_API_URL` for the web app if the API is elsewhere. Settings, backup and restore are in `OPERATING.md`; running it on AWS (containers, RDS, S3) is in `DEPLOY.md`;
 signed webhook deliveries and receiver examples are in `WEBHOOKS.md`.
 
 ## Check it
