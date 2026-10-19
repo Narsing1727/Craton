@@ -1,5 +1,7 @@
 # Craton
 
+[![CI](https://github.com/Narsing1727/Craton/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Narsing1727/Craton/actions/workflows/ci.yml)
+
 Version control for hydro and GIS data: DEMs, shapefiles, LiDAR, NetCDF and HEC-RAS/SWMM projects, versioned and
 synced like git, with content-defined chunking, Merkle-root verification, visual diffs and checks on every push.
 
