@@ -122,3 +122,35 @@ test("/metrics: absent until a token is set, then for that token only, in Promet
     metrics.token = "";
   }
 });
+
+test("past its maximum of simultaneous requests a server turns new ones away at once, and never health or metrics", async () => {
+  // A database that takes its time, so requests pile up.
+  const real = await openDb(":memory:");
+  const slow = new Proxy(real, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function") return value;
+      if (["get", "all", "run", "insert", "exec", "tx"].includes(String(prop))) return async (...args: unknown[]) => (await sleep(300), (value as (...a: unknown[]) => unknown).apply(target, args));
+      return value.bind(target);
+    },
+  }) as typeof real;
+  const limited = createApp({ db: slow, store: new MemoryStore() });
+  const was = config.maxInFlight;
+  (config as { maxInFlight: number }).maxInFlight = 3;
+  try {
+    const answers = await Promise.all(Array.from({ length: 8 }, () => limited.request("/v1/owners/nobody")));
+    const statuses = answers.map((r) => r.status);
+    assert.equal(statuses.filter((s) => s === 503).length, 5, `3 allowed, 5 turned away: ${statuses}`);
+    const shed = answers.find((r) => r.status === 503)!;
+    assert.equal(shed.headers.get("retry-after"), "2");
+    assert.equal(((await shed.json()) as { error: { code: string } }).error.code, "overloaded");
+    // While it is full, the checks a load balancer makes still get through.
+    const busy = Array.from({ length: 3 }, () => limited.request("/v1/owners/nobody"));
+    assert.equal((await limited.request("/v1/health")).status, 200);
+    await Promise.all(busy);
+    // And when the work is done there is room again.
+    assert.equal((await limited.request("/v1/owners/nobody")).status, 404);
+  } finally {
+    (config as { maxInFlight: number }).maxInFlight = was;
+  }
+});

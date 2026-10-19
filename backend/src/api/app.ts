@@ -93,6 +93,21 @@ async function commitsBy(ctx: Ctx, handle: string, viewerId: number | null): Pro
 export function createApp(ctx: Ctx) {
   const app = new Hono<Env>();
 
+  // Load shedding: past `maxInFlight` requests at once, new ones are turned away at once instead of queueing behind the rest.
+  app.use("*", async (c, next) => {
+    const path = c.req.path;
+    if (config.maxInFlight > 0 && metrics.counters.inFlight >= config.maxInFlight && path !== "/v1/health" && path !== "/v1/ready" && path !== "/metrics") {
+      metrics.counters.shed++;
+      c.header("Retry-After", "2");
+      return c.json({ error: { code: "overloaded", message: "Craton is busy right now. Try again in a couple of seconds." } }, 503);
+    }
+    metrics.counters.inFlight++;
+    try {
+      await next();
+    } finally {
+      metrics.counters.inFlight--;
+    }
+  });
   app.use("*", cors({ origin: [...config.corsOrigins], allowHeaders: ["Authorization", "Content-Type", "Idempotency-Key"], allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], exposeHeaders: ["RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "Retry-After", "X-Request-Id", "X-Craton-Render", "Idempotency-Replayed"] }));
   // An API never renders pages: no framing, no sniffing, no referrer leaks.
   app.use("*", secureHeaders({ xFrameOptions: "DENY", contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] }, referrerPolicy: "no-referrer" }));

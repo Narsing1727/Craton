@@ -60,6 +60,12 @@ export const config = {
   },
   /** The address identity providers reach this API at (for the SCIM base URL shown in settings). */
   publicApiUrl: (env.CRATON_PUBLIC_API_URL ?? `http://localhost:${Number(env.PORT ?? 4000)}`).replace(/\/+$/, ""),
+  /**
+   * Requests this server works on at once before it turns new ones away with 503 and Retry-After (0 turns it off). A server that takes on
+   * more than it can finish gets slower for everyone and then falls over; refusing early keeps the ones it has moving and lets a load
+   * balancer or a client's retry find a server with room. Health, readiness and metrics are never refused.
+   */
+  maxInFlight: Math.max(0, Math.floor(Number(env.CRATON_MAX_IN_FLIGHT ?? 400)) || 0),
   /** Serving /metrics (Prometheus text format) needs this token as a Bearer token; empty leaves the endpoint off. */
   metrics: { token: env.CRATON_METRICS_TOKEN ?? "" },
   /** How many seconds an anonymous visitor's copy of the explore list and trending may be reused (0 turns it off). */

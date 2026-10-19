@@ -9,6 +9,8 @@ export const counters = {
   rateLimited: 0,
   pageCache: { hit: 0, miss: 0 },
   databaseUnavailable: 0,
+  shed: 0,
+  inFlight: 0,
 };
 
 const BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
@@ -63,6 +65,12 @@ export function render(extra: Extra): string {
   line("# HELP craton_database_unavailable_total Requests answered 503 because the database could not be reached.");
   line("# TYPE craton_database_unavailable_total counter");
   line(`craton_database_unavailable_total ${counters.databaseUnavailable}`);
+  line("# HELP craton_http_in_flight Requests being worked on right now.");
+  line("# TYPE craton_http_in_flight gauge");
+  line(`craton_http_in_flight ${counters.inFlight}`);
+  line("# HELP craton_load_shed_total Requests turned away with 503 because this server was already working on its maximum.");
+  line("# TYPE craton_load_shed_total counter");
+  line(`craton_load_shed_total ${counters.shed}`);
   line("# HELP craton_page_cache_total Public pages served from the short-lived copy (hit) or read from the database (miss).");
   line("# TYPE craton_page_cache_total counter");
   line(`craton_page_cache_total{result="hit"} ${counters.pageCache.hit}`);

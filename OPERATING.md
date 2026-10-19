@@ -27,6 +27,7 @@ Both are plain Node processes. The database is PostgreSQL. Unless R2 is configur
 | `CRATON_REDIS_URL` | none | A Redis (or Valkey, or AWS ElastiCache) address such as `redis://host:6379`, or `rediss://` with TLS. Shared by all servers for rate limits, rendered tiles and previews, idempotency keys and the short-lived copy of public pages. Optional: without it each server keeps these in its own memory. See "The shared cache" below. |
 | `CRATON_REDIS_PREFIX` | `craton:` | Put in front of every key, so several installations can share one Redis. |
 | `CRATON_PAGE_CACHE_SECONDS` | `10` | How long the explore list and trending, for a visitor who is not signed in, may be answered from a copy (0 turns it off). |
+| `CRATON_MAX_IN_FLIGHT` | `400` | Requests one server works on at once. Past it, new requests get 503 with `Retry-After: 2` and the code `overloaded` straight away, instead of queueing behind the rest and slowing everyone; health, readiness and metrics are never refused (0 turns it off). |
 | `CRATON_METRICS_TOKEN` | none | Turns on `GET /metrics` (Prometheus text format) for a caller that sends this token as a Bearer token; without it the endpoint does not exist. |
 | `CRATON_TEST_REDIS` | none | For `npm test` in `backend` only: a Redis address (for example the one from `docker compose up -d redis`, `redis://localhost:6380`). Each test process then uses its own key prefix. |
 | `CRATON_TEST_PG` | none | For `npm test` in `backend` only: a Postgres address (for example the container from `docker compose up -d db`). Every test database then gets its own schema on that server, dropped when it closes, so the suite runs against the real driver and server instead of the in-process database. |
@@ -142,7 +143,7 @@ On AWS use ElastiCache (Redis OSS or Valkey), in the same VPC, a single node or 
 
 ## Watching a server
 
-Set `CRATON_METRICS_TOKEN` and scrape `/metrics` (at the root of the API address, not under `/v1`) with `Authorization: Bearer <token>`: request counts by route and status, request latency histograms by route, requests refused for rate, requests answered 503 for a missing database, public page copies served, the database connection pool (total, idle, waiting), whether the shared cache is answering, memory. Alert on: `craton_database_unavailable_total` rising, `craton_db_pool_connections{state="waiting"}` above zero for minutes, `craton_cache_up` at 0, and the 5xx share of `craton_http_requests_total`. `CRATON_DB_SLOW_MS` logs slow statements.
+Set `CRATON_METRICS_TOKEN` and scrape `/metrics` (at the root of the API address, not under `/v1`) with `Authorization: Bearer <token>`: request counts by route and status, request latency histograms by route, requests refused for rate, requests answered 503 for a missing database, public page copies served, the database connection pool (total, idle, waiting), whether the shared cache is answering, memory. Alert on: `craton_database_unavailable_total` rising, `craton_db_pool_connections{state="waiting"}` above zero for minutes, `craton_cache_up` at 0, `craton_load_shed_total` rising (the servers are full: add tasks), and the 5xx share of `craton_http_requests_total`. `CRATON_DB_SLOW_MS` logs slow statements.
 
 ## When the database is away
 
