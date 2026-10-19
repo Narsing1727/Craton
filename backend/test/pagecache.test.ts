@@ -110,7 +110,7 @@ test("/metrics: absent until a token is set, then for that token only, in Promet
     assert.match(ok.text, /craton_http_request_duration_seconds_count\{route="\/repos"\} \d+/);
     assert.match(ok.text, /craton_page_cache_total\{result="hit"\} [1-9]/);
     assert.match(ok.text, /^craton_cache_up 1$/m);
-    assert.match(ok.text, /craton_info\{version="[^"]+",database="pglite",cache="(memory|redis)"\} 1/);
+    assert.match(ok.text, /craton_info\{version="[^"]+",database="(pglite|postgres)",cache="(memory|redis)"\} 1/);
     assert.ok(!ok.text.includes("scrape-secret-123") && !ok.text.includes("ann@example.org"), "no secrets or personal data");
     // Routes are patterns, so the number of series does not grow with the number of repositories.
     await get("/v1/repos/ann/open-one");
