@@ -10,6 +10,7 @@ import { Maximize2, Minus, Plus, ScanSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ApiPixel, ApiTileInfo } from "@/lib/api";
 import { formatLength, type UnitSystem } from "@/lib/units";
+import { terrainGradient } from "@/lib/ramps";
 
 type Props = {
   owner: string;
@@ -28,9 +29,6 @@ type Props = {
 
 const MAX_SCALE = 8; // screen pixels per image pixel at most
 const THUMB_SIDE = 1024; // the longest side of the drawn preview, in pixels
-// The colour ramp the API paints with (the Craton blue), for the legend.
-const LOW = "rgb(22 34 58)";
-const HIGH = "rgb(196 212 236)";
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const tileUrl = (owner: string, repo: string, ref: string, path: string, z: number, x: number, y: number) => `/${owner}/${repo}/tile/${z}/${x}/${y}?${new URLSearchParams({ ref, path })}`;
 
@@ -359,7 +357,7 @@ export function RasterViewer({ owner, repo, reference, path, base, alt, aspect, 
                     <span className="h-full flex-1" />
                   )}
                 </div>
-                <div className="h-2.5 border border-border" style={{ background: `linear-gradient(to right, ${LOW}, ${HIGH})` }} aria-hidden />
+                <div className="h-2.5 border border-border" style={{ background: terrainGradient }} aria-hidden />
                 {markAt !== null && <span aria-hidden className="pointer-events-none absolute -top-0.5 bottom-0 w-px bg-foreground" style={{ left: `${markAt}%` }} />}
               </div>
               <div className="flex justify-between tabular-nums text-muted-foreground">

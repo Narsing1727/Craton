@@ -22,6 +22,7 @@ import { OPEN_GO_TO_FILE } from "@/lib/shortcuts";
 import { describeBBox, osmLink } from "@/lib/geo";
 import type { Branch, Repo } from "@/lib/data";
 import FileTree, { type FileTreeItem } from "@/components/file-tree";
+import { Markdown } from "@/components/markdown";
 
 /** `src` is the rendered preview; null in demo mode, where a schematic stands in. */
 export type CodeViewPreview = { path: string; caption: string; src: string | null; error: string | null; /** Width over height of the picture, so its frame has no empty bands. */ aspect?: number };
@@ -147,11 +148,7 @@ export function CodeView({ owner, repo, data, branches, currentRef, head, items,
                 <CardTitle className="text-base">README.md</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="prose-sm max-w-none">
-                  {readme.trim().split(/\n\s*\n/).map((block, i) => (
-                    <ReadmeBlock key={i} block={block} />
-                  ))}
-                </div>
+                <Markdown text={readme} />
               </CardContent>
             </Card>
           )}
@@ -252,40 +249,3 @@ function Detail({ label, value, mono }: { label: string; value: string; mono?: b
 }
 
 /** Inline `code` spans inside README text. */
-function Inline({ text }: { text: string }) {
-  const parts = text.split(/(`[^`]+`)/g);
-  return (
-    <>
-      {parts.map((p, i) =>
-        p.startsWith("`") && p.endsWith("`") ? (
-          <code key={i} className="bg-muted px-1 py-0.5 font-mono text-[0.8em] text-foreground">
-            {p.slice(1, -1)}
-          </code>
-        ) : (
-          p
-        ),
-      )}
-    </>
-  );
-}
-
-function ReadmeBlock({ block }: { block: string }) {
-  if (block.startsWith("# ")) return <h2 className="mb-2 font-serif text-2xl font-semibold">{block.slice(2)}</h2>;
-  if (block.startsWith("## ")) return <h3 className="mb-2 mt-4 text-lg font-semibold">{block.slice(3)}</h3>;
-  if (block.startsWith("- ")) {
-    return (
-      <ul className="my-2 flex list-disc flex-col gap-1 pl-5 text-sm text-muted-foreground">
-        {block.split("\n").map((line, i) => (
-          <li key={i}>
-            <Inline text={line.replace(/^- /, "")} />
-          </li>
-        ))}
-      </ul>
-    );
-  }
-  return (
-    <p className="my-2 text-sm text-muted-foreground">
-      <Inline text={block} />
-    </p>
-  );
-}

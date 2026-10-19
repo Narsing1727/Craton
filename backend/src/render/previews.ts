@@ -13,16 +13,20 @@ import { encodePng } from "./png.ts";
 import { getCache } from "../cache/cache.ts";
 import { readDbfFields, type DbfField } from "../services/files.ts";
 import { epsgFromWkt } from "../checks/vector.ts";
+import { lit, ramp } from "./ramps.ts";
 import { projector } from "./geo.ts";
 import { describeTiff, openTiff, readGrid, readPixel, readWindow, UnsupportedTiffError, type Grid, type OpenTiff } from "./tiff.ts";
 
 const cache = new Map<string, { at: number; value: unknown }>();
+/** How many pictures and numbers were actually drawn (not served from the cache): what a test of the warm-up looks at. */
+export const drawn = { count: 0 };
 function cached<T>(key: string, make: () => Promise<T>): Promise<T> {
   const hit = cache.get(key);
   if (hit) {
     hit.at = Date.now();
     return Promise.resolve(hit.value as T);
   }
+  drawn.count++;
   return make().then((value) => {
     cache.set(key, { at: Date.now(), value });
     if (cache.size > 200) {
@@ -50,7 +54,7 @@ function unpackImage<M>(bytes: Buffer): { meta: M; png: Buffer } {
 }
 
 /** Bump when a preview's pixels or SVG would change for the same bytes, so cached copies are replaced. */
-export const RENDER_VERSION = 4;
+export const RENDER_VERSION = 5;
 
 /**
  * What a preview is made of, without drawing it: the blobs involved plus the size. Previews are a
@@ -124,8 +128,6 @@ async function gridOf(ctx: Ctx, blob: BlobObject, id: string, maxSide: number) {
 }
 
 // Colours from the Craton theme (blue hue ~255 in OKLCH), pre-converted to sRGB.
-const LOW: [number, number, number] = [22, 34, 58];
-const HIGH: [number, number, number] = [196, 212, 236];
 const GAIN: [number, number, number] = [95, 136, 207]; // chart-2: ground got higher
 const LOSS: [number, number, number] = [224, 131, 125]; // destructive: ground got lower
 
@@ -175,17 +177,19 @@ const RANGE_SIDE = 1024;
 
 const mix = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
 
-/** Elevation tint under hillshade, RGBA; nodata is transparent. `min` and `max` set the colour ramp. */
+/** Elevation tint under hillshade, RGBA; nodata is transparent. `min` and `max` set the colour ramp: the terrain map, as on the map viewer. */
 function colorize(g: Grid, shade: Float32Array, min: number, max: number) {
+  const colours = ramp("terrain");
   const rgba = new Uint8Array(g.width * g.height * 4);
   for (let i = 0; i < g.values.length; i++) {
     const v = g.values[i];
     if (Number.isNaN(v)) continue; // transparent nodata
     const t = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0.5;
-    const s = 0.35 + 0.65 * (Number.isNaN(shade[i]) ? 0.5 : shade[i]);
-    rgba[i * 4] = Math.min(255, mix(LOW[0], HIGH[0], t) * s);
-    rgba[i * 4 + 1] = Math.min(255, mix(LOW[1], HIGH[1], t) * s);
-    rgba[i * 4 + 2] = Math.min(255, mix(LOW[2], HIGH[2], t) * s);
+    const c = colours[Math.round(t * 255)];
+    const s = lit(shade[i]);
+    rgba[i * 4] = Math.min(255, Math.round(c[0] * s));
+    rgba[i * 4 + 1] = Math.min(255, Math.round(c[1] * s));
+    rgba[i * 4 + 2] = Math.min(255, Math.round(c[2] * s));
     rgba[i * 4 + 3] = 255;
   }
   return rgba;
@@ -797,14 +801,16 @@ export async function pointCloudPng(ctx: Ctx, repo: RepoRow, ref: string, path: 
       spread(forward, width); // from the cell above
       spread(reverse, -width); // from the cell below
     }
+    const terrainColours = ramp("terrain");
     const rgba = new Uint8Array(width * height * 4);
     for (let i = 0; i < count.length; i++) {
       if (away[i] === 255) continue;
       const t = hi > lo ? Math.min(1, Math.max(0, (level[i] - lo) / (hi - lo))) : 0.5;
       const alpha = away[i] > 0 ? 0.28 : 0.3 + 0.7 * (Math.log1p(count[i]) / Math.log1p(densest));
-      rgba[i * 4] = Math.round(LOW[0] + (HIGH[0] - LOW[0]) * t);
-      rgba[i * 4 + 1] = Math.round(LOW[1] + (HIGH[1] - LOW[1]) * t);
-      rgba[i * 4 + 2] = Math.round(LOW[2] + (HIGH[2] - LOW[2]) * t);
+      const c = terrainColours[Math.round(t * 255)];
+      rgba[i * 4] = c[0];
+      rgba[i * 4 + 1] = c[1];
+      rgba[i * 4 + 2] = c[2];
       rgba[i * 4 + 3] = Math.round(alpha * 255);
     }
     return { png: encodePng(width, height, rgba), width, height, points, sampledShare: Math.round(share * 1000) / 1000, min: zLow, max: zHigh };

@@ -94,7 +94,15 @@ export function RasterMap({ owner, repo, reference, path, units, base, span, alt
       map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
       map.addControl(new ml.FullscreenControl(), "top-right");
       map.addControl(new ml.ScaleControl({ unit: units === "imperial" ? "imperial" : "metric" }), "bottom-left");
+      // The box can reach its final size after the map is made (a phone, a late scrollbar): keep the map sized to it, and fit the data once loaded.
+      const ro = new ResizeObserver(() => map.resize());
+      ro.observe(box.current);
+      map.once("remove", () => ro.disconnect());
       map.on("load", () => {
+        map.resize();
+        // The credits start folded behind their (i) button, so on a phone they do not cover the map; one tap opens them.
+        box.current?.querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show");
+        map.fitBounds(info.map!.bounds, { padding: 24, animate: false });
         map.addSource("data", { type: "raster", tiles: [tileUrl(ramp)], tileSize: 256, bounds: info.map!.bounds, maxzoom: info.map!.maxZoom, attribution: "Data: this repository" });
         map.addLayer({ id: "data", type: "raster", source: "data", paint: { "raster-opacity": opacity, "raster-fade-duration": 0 } });
       });
@@ -177,7 +185,7 @@ export function RasterMap({ owner, repo, reference, path, units, base, span, alt
         </label>
       </div>
 
-      <div ref={box} role="region" aria-label={alt} className="h-[min(70vh,620px)] w-full border border-border bg-muted/30" />
+      <div ref={box} role="region" aria-label={alt} className="aspect-4/3 w-full border border-border bg-muted/30 sm:aspect-auto sm:h-[min(70vh,620px)]" />
 
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-muted-foreground tabular-nums">
         {info && gradient ? (

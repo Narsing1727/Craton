@@ -13,7 +13,7 @@ import { commitFiles } from "../src/dev/push.ts";
 import { catchments, levees, shapefile } from "../src/dev/fixtures.ts";
 import { openTiff, readGrid, readPixel, readWindow, TooManyBlocksError } from "../src/render/tiff.ts";
 import { encodePng } from "../src/render/png.ts";
-import { warmCommit } from "../src/render/previews.ts";
+import { drawn, warmCommit } from "../src/render/previews.ts";
 
 // ── A small TIFF writer, so the decoder is tested against encodings the fixtures don't produce ──
 
@@ -401,10 +401,15 @@ test("warming a pushed commit draws its previews ahead of the first viewer", asy
     await res.arrayBuffer();
     return performance.now() - t;
   };
-  const cold = await timed(320); // a size the warm-up doesn't cover
+  // A size the warm-up doesn't cover is drawn when it is asked for.
+  let before = drawn.count;
+  await timed(320);
+  assert.ok(drawn.count > before, "drawn on demand");
+  // After the warm-up, the sizes it covers are already drawn: asking for one draws nothing.
   await warmCommit(ctx, repo, tip);
-  const warmed = await timed(384);
-  assert.ok(warmed < cold / 2, `warmed ${warmed.toFixed(0)}ms should be well under cold ${cold.toFixed(0)}ms`);
+  before = drawn.count;
+  await timed(384);
+  assert.equal(drawn.count, before, "served from what the warm-up drew");
 });
 
 test("raster statistics describe both versions and the re-survey change exactly", async () => {
@@ -621,4 +626,12 @@ test("a shapefile's features can come in longitude and latitude, for a web map",
   const own = JSON.parse((await get("/repos/rhea/basin/features/main/vectors/catchment.shp", "rhea")).body.toString()) as { epsg: number; bbox: number[] };
   assert.equal(own.epsg, 32643);
   assert.ok(own.bbox[0] > 100_000, "the file's own metres when not asked");
+});
+
+test("the web app's terrain legend shows exactly the colours the server draws with", async () => {
+  const { rampStops } = await import("../src/render/ramps.ts");
+  const fs = await import("node:fs");
+  const text = fs.readFileSync(new URL("../../frontend/lib/ramps.ts", import.meta.url), "utf8");
+  const listed = JSON.parse(/TERRAIN_STOPS = (\[[^\]]*\])/.exec(text)![1]) as string[];
+  assert.deepEqual(listed, rampStops("terrain"));
 });

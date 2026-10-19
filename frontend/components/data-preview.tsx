@@ -10,6 +10,7 @@ import { RasterStats } from "@/components/raster-stats";
 import { Length, PreviewCaption } from "@/components/units";
 import { TextDiffView } from "@/components/text-diff";
 import { formatLength, type UnitSystem } from "@/lib/units";
+import { terrainGradient } from "@/lib/ramps";
 
 export function previewSrc(owner: string, repo: string, ref: string, path: string, opts: { base?: string; size?: number } = {}) {
   const q = new URLSearchParams({ ref });
@@ -17,7 +18,7 @@ export function previewSrc(owner: string, repo: string, ref: string, path: strin
   // Drawn at the same sharp size everywhere unless a page asks otherwise, so a file looks the same wherever it is opened.
   q.set("size", String(opts.size ?? 1024));
   // A picture for a pinned version is kept by the browser for a year; this number changes when the way pictures are drawn does.
-  q.set("v", "3");
+  q.set("v", "5");
   return `/${owner}/${repo}/render/${path.split("/").map(encodeURIComponent).join("/")}?${q}`;
 }
 
@@ -58,7 +59,7 @@ export function ElevationLegend({ min, max, units }: { min: number; max: number;
   return (
     <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
       <span>{formatLength(min, units, { digits: 1 })}</span>
-      <span className="h-2.5 w-40 border border-border" style={{ background: "linear-gradient(to right, rgb(22 34 58), rgb(196 212 236))" }} aria-hidden />
+      <span className="h-2.5 w-40 border border-border" style={{ background: terrainGradient }} aria-hidden />
       <span>{formatLength(max, units, { digits: 1 })}</span>
     </div>
   );

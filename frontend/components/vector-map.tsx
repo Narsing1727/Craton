@@ -120,7 +120,14 @@ export function VectorMap({ alt, owner, repo, reference, path, source }: Props) 
       map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
       map.addControl(new ml.FullscreenControl(), "top-right");
       map.addControl(new ml.ScaleControl(), "bottom-left");
+      const ro = new ResizeObserver(() => map.resize());
+      ro.observe(box.current);
+      map.once("remove", () => ro.disconnect());
       map.on("load", () => {
+        map.resize();
+        // The credits start folded behind their (i) button, so on a phone they do not cover the map; one tap opens them.
+        box.current?.querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show");
+        map.fitBounds(w === e && s === n ? [w - 0.01, s - 0.01, e + 0.01, n + 0.01] : [w, s, e, n], { padding: 32, animate: false });
         map.addSource("features", { type: "geojson", data: geojson, promoteId: "__i" });
         const on = (state: string): ExpressionSpecification => ["boolean", ["feature-state", state], false];
         map.addLayer({ id: "fill", type: "fill", source: "features", filter: ["==", ["get", "__kind"], "polygon"], paint: { "fill-color": "#5f88cf", "fill-opacity": ["case", on("picked"), 0.55, on("hover"), 0.4, 0.22] } });
@@ -199,7 +206,7 @@ export function VectorMap({ alt, owner, repo, reference, path, source }: Props) 
         <span className="text-muted-foreground tabular-nums">{data ? `${data.count.toLocaleString("en-US")} features${data.shown < data.count ? `, the first ${data.shown.toLocaleString("en-US")} shown` : ""}` : "Loading the features…"}</span>
       </div>
 
-      <div ref={box} role="region" aria-label={alt} className="h-[min(65vh,560px)] w-full border border-border bg-muted/30" />
+      <div ref={box} role="region" aria-label={alt} className="aspect-4/3 w-full border border-border bg-muted/30 sm:aspect-auto sm:h-[min(65vh,560px)]" />
 
       <div className="text-xs" aria-live="polite">
         {selected ? (
