@@ -9,6 +9,8 @@
 services:
   db:
     image: postgres:16-alpine
+    # A hard stop leaves Postgres replaying its log for minutes at the next start; give it time to shut down cleanly.
+    stop_grace_period: 60s
     environment:
       POSTGRES_USER: craton
       POSTGRES_PASSWORD: craton
