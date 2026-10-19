@@ -19,7 +19,7 @@ const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
  */
 export const RESERVED_HANDLES = new Set([
   // pages and routes of the web app
-  "about", "api", "api-reference", "auth", "changelog", "cli", "contact", "dashboard", "dev", "digest", "avatar", "docs", "explore", "forgot-password", "help", "invite",
+  "about", "api", "api-reference", "auth", "changelog", "cli", "compare", "contact", "dashboard", "dev", "digest", "avatar", "docs", "explore", "features", "forgot-password", "formats", "glossary", "guides", "help", "invite",
   "issues", "login", "new", "onboarding", "orgs", "pricing", "privacy", "pulls", "reset-password", "s", "search", "security", "settings", "shared",
   "signup", "stars", "support", "terms", "trending", "verify-email",
   // files and framework paths
