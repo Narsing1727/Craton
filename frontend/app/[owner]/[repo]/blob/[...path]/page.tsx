@@ -107,6 +107,19 @@ function metadataFor(f: ApiFile) {
     if (h.properties.length > 8) rows.push({ label: "More attributes", value: `${h.properties.length - 8}+ in the file; see the line diff for all` });
     if (h.problems.length) rows.push({ label: "Structure", value: h.problems.join("; ") });
     if (h.notes.length) rows.push({ label: "Not read", value: h.notes.join("; ") });
+  } else if (f.geodata) {
+    if (f.geodata.kind === "geopackage") {
+      rows.push({ label: "Format", value: "GeoPackage" });
+      rows.push({ label: "Layers", value: n(f.geodata.layers.length) });
+      const epsgs = [...new Set(f.geodata.layers.map((l) => l.epsg).filter((e): e is number => e !== null))];
+      rows.push({ label: "CRS", value: epsgs.length ? epsgs.map((e) => `EPSG:${e}`).join(", ") : "Not declared" });
+    } else {
+      const g = f.geodata;
+      rows.push({ label: "Format", value: `GeoParquet ${g.version}` });
+      rows.push({ label: "Geometry columns", value: n(g.columns.length) });
+      const main = g.columns.find((c) => c.name === g.primary) ?? g.columns[0];
+      rows.push({ label: "CRS", value: main?.epsg ? `EPSG:${main.epsg}` : "Not declared" });
+    }
   } else if (f.pointCloud) {
     const p = f.pointCloud;
     rows.push({ label: "Format", value: `${p.compressed ? "LAZ" : "LAS"} ${p.version}, point format ${p.pointFormat}` });
@@ -181,7 +194,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   const downloadable = file ? file.size <= RAW_LIMIT : false;
   const rawHref = `${base}/raw/${path.map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
 
-  const kind = file?.raster ? "raster" : file?.vector ? "vector" : file?.table ? "table" : file?.pointCloud && !file.pointCloud.compressed ? "pointcloud" : file && (file.netcdf || file.hdf5) ? "structure" : file && file.preview === null && /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(filePath) && file.size <= RAW_LIMIT ? "image" : file?.preview !== null && file ? "text" : file ? "binary" : "raster";
+  const kind = file?.raster ? "raster" : file?.vector ? "vector" : file?.table ? "table" : file?.pointCloud && !file.pointCloud.compressed ? "pointcloud" : file && (file.netcdf || file.hdf5 || file.geodata) ? "structure" : file && file.preview === null && /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(filePath) && file.size <= RAW_LIMIT ? "image" : file?.preview !== null && file ? "text" : file ? "binary" : "raster";
 
   // The map preview, drawn from this version's bytes; "change" compares it with the version
   // before the last commit that touched the file.
@@ -362,7 +375,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                 <span className="font-mono">{filename}</span>
                 {dataType && <DataTypeBadge type={dataType} />}
                 <Badge variant="outline" className="ml-auto">
-                  {kind === "raster" ? "Raster" : kind === "vector" ? "Vector" : kind === "pointcloud" ? "Point cloud" : kind === "table" ? "Table" : kind === "structure" ? (file?.netcdf ? "NetCDF" : "HDF5") : kind === "image" ? "Image" : kind === "text" ? "Text" : "Binary"}
+                  {kind === "raster" ? "Raster" : kind === "vector" ? "Vector" : kind === "pointcloud" ? "Point cloud" : kind === "table" ? "Table" : kind === "structure" ? (file?.netcdf ? "NetCDF" : file?.geodata ? (file.geodata.kind === "geopackage" ? "GeoPackage" : "GeoParquet") : "HDF5") : kind === "image" ? "Image" : kind === "text" ? "Text" : "Binary"}
                 </Badge>
               </div>
               {kind === "pointcloud" && file ? (

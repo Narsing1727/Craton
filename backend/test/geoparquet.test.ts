@@ -72,3 +72,17 @@ test("a GeoParquet column in another CRS fails the coordinate system step; a pla
   assert.equal(crs.status, "failed");
   assert.deepEqual(crs.files, ["data/wells.parquet, column geometry (EPSG:4269)"]);
 });
+
+test("the file's own page lists a GeoParquet's geometry columns, and a plain table has none", async () => {
+  const form = new FormData();
+  form.append("file", new File([new Uint8Array(parquet({ version: "1.1.0", primary_column: "geom", columns: { geom: { encoding: "WKB", geometry_types: ["Polygon"], crs: utm, bbox: [75, 10, 76, 11] } } }))], "areas.parquet"));
+  form.append("paths", JSON.stringify(["data/areas.parquet"]));
+  form.append("branch", "main");
+  assert.equal((await app.request("/v1/repos/rhea/tables/upload", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form })).status, 201);
+  const info = (await (await call("GET", "/repos/rhea/tables/file/main/data/areas.parquet")).json()) as { geodata: { kind: string; primary: string; columns: { name: string; geometryTypes: string[]; epsg: number | null }[] } | null };
+  assert.equal(info.geodata?.kind, "geoparquet");
+  assert.equal(info.geodata?.primary, "geom");
+  assert.deepEqual(info.geodata?.columns.map((c) => [c.name, c.geometryTypes, c.epsg]), [["geom", ["Polygon"], 32643]]);
+  const plain = (await (await call("GET", "/repos/rhea/tables/file/main/data/plain.parquet")).json()) as { geodata: unknown };
+  assert.equal(plain.geodata, null);
+});

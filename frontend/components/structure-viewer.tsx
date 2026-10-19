@@ -149,5 +149,46 @@ export function StructureViewer({ file }: { file: ApiFile }) {
       </div>
     );
   }
+  if (file.geodata?.kind === "geopackage") {
+    const layers = file.geodata.layers;
+    return (
+      <div className="flex flex-col gap-6 p-4">
+        <Section title="Layers" hint={`GeoPackage · ${n(layers.length)}`}>
+          <Table label="GeoPackage layers" head={[{ text: "Table" }, { text: "Kind" }, { text: "Rows", right: true }, { text: "CRS" }, { text: "Extent" }]}>
+            {layers.map((l) => (
+              <tr key={l.table}>
+                <th scope="row" className="px-3 py-1.5 text-left font-medium">{l.table}</th>
+                <td className="px-3 py-1.5 text-muted-foreground">{l.type}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{l.features === null ? "—" : n(l.features)}</td>
+                <td className="px-3 py-1.5">{l.epsg ? `EPSG:${l.epsg}` : <span className="text-muted-foreground">{l.srsId === null ? "none" : `srs ${l.srsId}`}</span>}</td>
+                <td className="px-3 py-1.5 tabular-nums text-muted-foreground">{l.extent ? l.extent.map((v) => Number(v.toFixed(l.epsg && l.epsg < 5000 ? 5 : 1)).toLocaleString("en-US")).join(", ") : "—"}</td>
+              </tr>
+            ))}
+          </Table>
+        </Section>
+      </div>
+    );
+  }
+
+  if (file.geodata?.kind === "geoparquet") {
+    const g = file.geodata;
+    return (
+      <div className="flex flex-col gap-6 p-4">
+        <Section title="Geometry columns" hint={`GeoParquet ${g.version} · main column ${g.primary}`}>
+          <Table label="GeoParquet geometry columns" head={[{ text: "Column" }, { text: "Encoding" }, { text: "Geometry" }, { text: "CRS" }, { text: "Bounds" }]}>
+            {g.columns.map((c) => (
+              <tr key={c.name}>
+                <th scope="row" className="px-3 py-1.5 text-left font-medium">{c.name}{c.name === g.primary && <span className="ml-1.5 font-normal text-muted-foreground">main</span>}</th>
+                <td className="px-3 py-1.5 text-muted-foreground">{c.encoding}</td>
+                <td className="px-3 py-1.5">{c.geometryTypes.length ? c.geometryTypes.join(", ") : <span className="text-muted-foreground">any</span>}</td>
+                <td className="px-3 py-1.5">{c.epsg ? `EPSG:${c.epsg}` : <span className="text-muted-foreground">{c.crsState === "default" ? "default (OGC:CRS84)" : "not declared"}</span>}</td>
+                <td className="px-3 py-1.5 tabular-nums text-muted-foreground">{c.bbox ? c.bbox.map((v) => Number(v.toFixed(5)).toLocaleString("en-US")).join(", ") : "—"}</td>
+              </tr>
+            ))}
+          </Table>
+        </Section>
+      </div>
+    );
+  }
   return null;
 }
