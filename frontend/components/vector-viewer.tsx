@@ -11,12 +11,14 @@ import type { ApiVectorFeatures } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type Props = {
-  owner: string;
-  repo: string;
-  reference: string;
-  path: string;
+  /** Where the features come from: the API (owner, repo, reference and path), or already in hand (`source`). */
+  owner?: string;
+  repo?: string;
+  reference?: string;
+  path?: string;
+  source?: ApiVectorFeatures;
   /** The drawn SVG, shown until the features are loaded. */
-  base: string;
+  base?: string;
   alt: string;
   geometry: string;
   epsg: number | null;
@@ -27,9 +29,9 @@ type View = { scale: number; cx: number; cy: number }; // screen px per data uni
 
 const shown = (v: unknown) => (v === null || v === undefined ? "" : typeof v === "number" ? v.toLocaleString("en-US", { maximumFractionDigits: 6 }) : String(v));
 
-export function VectorViewer({ owner, repo, reference, path, base, alt, geometry, epsg }: Props) {
+export function VectorViewer({ owner, repo, reference, path, source, base, alt, geometry, epsg }: Props) {
   const box = useRef<HTMLDivElement>(null);
-  const [data, setData] = useState<ApiVectorFeatures | null>(null);
+  const [data, setData] = useState<ApiVectorFeatures | null>(source ?? null);
   const [problem, setProblem] = useState<string | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [view, setView] = useState<View | null>(null);
@@ -43,6 +45,7 @@ export function VectorViewer({ owner, repo, reference, path, base, alt, geometry
   const pinch = useRef<{ view: View; dist: number } | null>(null);
 
   useEffect(() => {
+    if (source || owner === undefined || repo === undefined || reference === undefined || path === undefined) return;
     let live = true;
     fetch(`/${owner}/${repo}/features?${new URLSearchParams({ ref: reference, path })}`)
       .then(async (r) => {
@@ -55,7 +58,7 @@ export function VectorViewer({ owner, repo, reference, path, base, alt, geometry
     return () => {
       live = false;
     };
-  }, [owner, repo, reference, path]);
+  }, [owner, repo, reference, path, source]);
 
   useEffect(() => {
     const el = box.current;
@@ -239,6 +242,7 @@ export function VectorViewer({ owner, repo, reference, path, base, alt, geometry
                         vectorEffect="non-scaling-stroke"
                         strokeLinejoin="round"
                         strokeLinecap="round"
+                        fillRule="evenodd"
                         fill={f.kind === "polygon" ? (on ? "color-mix(in oklab, var(--chart-2) 45%, transparent)" : lit ? "color-mix(in oklab, var(--chart-2) 32%, transparent)" : "color-mix(in oklab, var(--chart-2) 18%, transparent)") : "none"}
                         stroke={on ? "var(--foreground)" : isPoint ? "var(--chart-2)" : lit ? "var(--foreground)" : "var(--chart-2)"}
                         strokeWidth={isPoint ? (on || lit ? 11 : 8) : on ? stroke + 1.4 : lit ? stroke + 0.8 : stroke}
@@ -251,8 +255,10 @@ export function VectorViewer({ owner, repo, reference, path, base, alt, geometry
                 </g>
               </svg>
             ) : (
-              // eslint-disable-next-line @next/next/no-img-element -- drawn by the API
-              <img src={base} alt={alt} draggable={false} className="size-full object-contain" />
+              base ? (
+                // eslint-disable-next-line @next/next/no-img-element -- drawn by the API
+                <img src={base} alt={alt} draggable={false} className="size-full object-contain" />
+              ) : null
             )}
             {data && (
               <div className="absolute right-2 top-2 flex flex-col gap-1">

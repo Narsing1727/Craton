@@ -20,6 +20,7 @@ import { parseCsv, sniffDelimiter } from "@/lib/csv";
 import { describeBBox, isBBox, osmLink } from "@/lib/geo";
 import { DataPreview, ElevationLegend, PreviewDiffLegend, frameStyle, previewCaption, previewSrc } from "@/components/data-preview";
 import { FileText } from "@/components/file-text";
+import { ImageViewer } from "@/components/image-viewer";
 import { StructureViewer } from "@/components/structure-viewer";
 import { TableViewer } from "@/components/table-viewer";
 import { RasterViewer } from "@/components/raster-viewer";
@@ -180,7 +181,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   const downloadable = file ? file.size <= RAW_LIMIT : false;
   const rawHref = `${base}/raw/${path.map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
 
-  const kind = file?.raster ? "raster" : file?.vector ? "vector" : file?.table ? "table" : file?.pointCloud && !file.pointCloud.compressed ? "pointcloud" : file && (file.netcdf || file.hdf5) ? "structure" : file?.preview !== null && file ? "text" : file ? "binary" : "raster";
+  const kind = file?.raster ? "raster" : file?.vector ? "vector" : file?.table ? "table" : file?.pointCloud && !file.pointCloud.compressed ? "pointcloud" : file && (file.netcdf || file.hdf5) ? "structure" : file && file.preview === null && /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(filePath) && file.size <= RAW_LIMIT ? "image" : file?.preview !== null && file ? "text" : file ? "binary" : "raster";
 
   // The map preview, drawn from this version's bytes; "change" compares it with the version
   // before the last commit that touched the file.
@@ -251,7 +252,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
     }
   }
   // A raster is drawn at up to 1024 pixels on its long side: its own detail for most files, rather than a small picture stretched to fit.
-  const drawSize = kind === "raster" ? 1024 : undefined;
+  const drawSize = kind === "raster" || kind === "pointcloud" ? 1024 : undefined;
   const rendered = file && (kind === "raster" || kind === "vector" || kind === "pointcloud") ? await renderMeta(owner, repo, ref, filePath, { base: previewBase, size: drawSize }) : null;
   // The picture's own shape, so its frame has no empty bands beside it.
   const aspect = rendered?.meta?.sourceWidth && rendered.meta.sourceHeight ? rendered.meta.sourceWidth / rendered.meta.sourceHeight : rendered?.meta?.width && rendered.meta.height ? rendered.meta.width / rendered.meta.height : 16 / 10;
@@ -361,12 +362,12 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                 <span className="font-mono">{filename}</span>
                 {dataType && <DataTypeBadge type={dataType} />}
                 <Badge variant="outline" className="ml-auto">
-                  {kind === "raster" ? "Raster" : kind === "vector" ? "Vector" : kind === "pointcloud" ? "Point cloud" : kind === "table" ? "Table" : kind === "structure" ? (file?.netcdf ? "NetCDF" : "HDF5") : kind === "text" ? "Text" : "Binary"}
+                  {kind === "raster" ? "Raster" : kind === "vector" ? "Vector" : kind === "pointcloud" ? "Point cloud" : kind === "table" ? "Table" : kind === "structure" ? (file?.netcdf ? "NetCDF" : "HDF5") : kind === "image" ? "Image" : kind === "text" ? "Text" : "Binary"}
                 </Badge>
               </div>
               {kind === "pointcloud" && file ? (
                 <CardContent className="p-4">
-                  <DataPreview src={previewSrc(owner, repo, ref, filePath)} alt={`${filename} seen from above, coloured by elevation`} error={rendered?.error ?? null} aspect={rendered?.meta?.width && rendered.meta.height ? clamp(rendered.meta.width / rendered.meta.height, 0.4, 2.5) : 16 / 10} className={rendered?.error ? "aspect-16/10" : undefined} />
+                  <DataPreview src={previewSrc(owner, repo, ref, filePath, { size: drawSize })} alt={`${filename} seen from above, coloured by elevation`} error={rendered?.error ?? null} aspect={rendered?.meta?.width && rendered.meta.height ? clamp(rendered.meta.width / rendered.meta.height, 0.4, 2.5) : 16 / 10} className={rendered?.error ? "aspect-16/10" : undefined} />
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-muted-foreground">
                     <span className="flex items-center gap-1.5">
                       <Ruler className="size-3.5" aria-hidden />
@@ -516,6 +517,8 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                     <FileText name={filename} text={wholeText ?? file.preview} note={wholeText === null && file.truncated ? `Showing the first 8 KB of ${sizeLabel}. Download the file for the rest.` : null} />
                   )}
                 </>
+              ) : kind === "image" ? (
+                <ImageViewer src={`${base}/image/${path.map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`} alt={filename} />
               ) : kind === "structure" && file ? (
                 <StructureViewer file={file} />
               ) : (

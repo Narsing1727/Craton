@@ -48,7 +48,7 @@ function unpackImage<M>(bytes: Buffer): { meta: M; png: Buffer } {
 }
 
 /** Bump when a preview's pixels or SVG would change for the same bytes, so cached copies are replaced. */
-const RENDER_VERSION = 2;
+const RENDER_VERSION = 3;
 
 /**
  * What a preview is made of, without drawing it: the blobs involved plus the size. Previews are a
@@ -706,8 +706,11 @@ export async function pointCloudPng(ctx: Ctx, repo: RepoRow, ref: string, path: 
     const spanX = info.max[0] - minX || 1;
     const spanY = info.max[1] - minY || 1;
     const longest = Math.max(spanX, spanY);
-    const width = Math.max(2, Math.round((spanX / longest) * size));
-    const height = Math.max(2, Math.round((spanY / longest) * size));
+    // About one point to a cell at the least: a cloud of tens of thousands drawn at 1,024 pixels would be isolated dots, so it is drawn coarser.
+    const shortest = Math.max(1e-9, Math.min(spanX, spanY));
+    const side = Math.max(128, Math.min(size, Math.ceil(Math.sqrt(points * (longest / shortest)))));
+    const width = Math.max(2, Math.round((spanX / longest) * side));
+    const height = Math.max(2, Math.round((spanY / longest) * side));
     const count = new Float32Array(width * height);
     const sumZ = new Float64Array(width * height);
     let seen = 0;
