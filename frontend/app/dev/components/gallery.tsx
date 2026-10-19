@@ -13,7 +13,6 @@ import { Meter, MeterIndicator, MeterLabel, MeterTrack, MeterValue } from "@/com
 import { Status, StatusIndicator, StatusLabel } from "@/components/kibo-ui/status";
 import { Pill } from "@/components/kibo-ui/pill";
 // Dice UI
-import { CompareSlider, CompareSliderAfter, CompareSliderBefore, CompareSliderHandle } from "@/components/ui/compare-slider";
 import { Stat, StatDescription, StatLabel, StatValue } from "@/components/ui/stat";
 // ReUI
 import { IconTile } from "@/components/reui/icon-tile";
@@ -33,7 +32,6 @@ import BreakpointIndicator from "@/components/smoothui/breakpoint-indicator";
 import { LabeledProgressIndicator } from "@/components/watermelon/labeled-progress-indicator";
 // Motion Primitives
 import { TextShimmer } from "@/components/ui/text-shimmer";
-import { ImageComparison, ImageComparisonImage, ImageComparisonSlider } from "@/components/ui/image-comparison";
 
 const R = "/hydrolab/chalakudy-basin/render/terrain/basin_dem.tif";
 const BEFORE = `${R}?ref=main&size=384`;
@@ -61,28 +59,6 @@ export function Gallery() {
           <p className="mt-1 text-sm text-muted-foreground">Dev only. One component from each vendored library, rendered on Craton’s theme.</p>
         </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <Cell lib="Dice UI" name="Compare slider · DEM before/after">
-            <CompareSlider defaultValue={50} className="aspect-video w-full overflow-hidden border border-border">
-              <CompareSliderBefore>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={BEFORE} alt="DEM on main" className="size-full object-cover" />
-              </CompareSliderBefore>
-              <CompareSliderAfter>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={CHANGE} alt="Elevation change on develop" className="size-full object-cover" />
-              </CompareSliderAfter>
-              <CompareSliderHandle />
-            </CompareSlider>
-          </Cell>
-
-          <Cell lib="Motion Primitives" name="Image comparison · hover to swipe">
-            <ImageComparison className="aspect-video w-full border border-border" enableHover>
-              <ImageComparisonImage src={BEFORE} alt="Hillshade" position="left" />
-              <ImageComparisonImage src={CHANGE} alt="Elevation change" position="right" />
-              <ImageComparisonSlider className="w-0.5 bg-foreground/60" />
-            </ImageComparison>
-          </Cell>
-
           <Cell lib="Magic UI" name="Terminal · CLI walkthrough">
             <Terminal className="max-w-full">
               <TypingAnimation>&gt; craton push</TypingAnimation>

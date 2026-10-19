@@ -17,7 +17,7 @@ export const FORMATS: FormatRow[] = [
     extensions: ".tif .tiff",
     viewer: "A hillshaded map that zooms to single pixels, an elevation legend over the file's histogram, the value and map position under the cursor, a scale bar",
     checks: "Coordinate system, vertical datum, nodata, whether it is laid out as a Cloud Optimized GeoTIFF",
-    compare: "An elevation-change map, cell statistics (area raised and lowered, volume), a swipe between versions",
+    compare: "An elevation-change heat map against the last commit, with cell statistics (area raised and lowered, volume)",
   },
   {
     name: "Shapefile",

@@ -6,7 +6,8 @@ import { fetchPixel } from "@/lib/api";
 export async function GET(request: Request, { params }: { params: Promise<{ owner: string; repo: string }> }) {
   const { owner, repo } = await params;
   const q = new URL(request.url).searchParams;
-  const upstream = await fetchPixel(owner, repo, q.get("ref") ?? "main", q.get("path") ?? "", q.get("column") ?? "", q.get("row") ?? "");
+  const at = q.has("lon") || q.has("lat") ? { lon: q.get("lon") ?? "", lat: q.get("lat") ?? "" } : { column: q.get("column") ?? "", row: q.get("row") ?? "" };
+  const upstream = await fetchPixel(owner, repo, q.get("ref") ?? "main", q.get("path") ?? "", at);
   if (!upstream) return new Response("The Craton API isn't running.", { status: 503 });
   return new Response(await upstream.text(), { status: upstream.status, headers: { "content-type": "application/json", "cache-control": "private, max-age=300" } });
 }

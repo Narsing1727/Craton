@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/copy-maplibre.mjs",
     "dev": "next dev -p 3100 -H 0.0.0.0",
+    "prebuild": "node scripts/copy-maplibre.mjs",
     "build": "next build",
     "start": "next start -p 3100 -H 0.0.0.0",
     "lint": "next lint",
@@ -52,6 +54,7 @@
     "input-otp": "^1.5.0",
     "jotai": "^3.0.1",
     "lucide-react": "^1.16.0",
+    "maplibre-gl": "6.12.0",
     "motion": "^13.4.4",
     "next": "16.3.3",
     "next-themes": "^0.4.6",

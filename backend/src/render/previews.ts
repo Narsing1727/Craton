@@ -12,6 +12,8 @@ import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { encodePng } from "./png.ts";
 import { getCache } from "../cache/cache.ts";
 import { readDbfFields, type DbfField } from "../services/files.ts";
+import { epsgFromWkt } from "../checks/vector.ts";
+import { projector } from "./geo.ts";
 import { describeTiff, openTiff, readGrid, readPixel, readWindow, UnsupportedTiffError, type Grid, type OpenTiff } from "./tiff.ts";
 
 const cache = new Map<string, { at: number; value: unknown }>();
@@ -48,7 +50,7 @@ function unpackImage<M>(bytes: Buffer): { meta: M; png: Buffer } {
 }
 
 /** Bump when a preview's pixels or SVG would change for the same bytes, so cached copies are replaced. */
-const RENDER_VERSION = 3;
+export const RENDER_VERSION = 4;
 
 /**
  * What a preview is made of, without drawing it: the blobs involved plus the size. Previews are a
@@ -106,7 +108,7 @@ export async function warmCommit(ctx: Ctx, repo: RepoRow, commitId: string) {
   }
 }
 
-async function blobAt(ctx: Ctx, repo: RepoRow, ref: string, path: string) {
+export async function blobAt(ctx: Ctx, repo: RepoRow, ref: string, path: string) {
   const commit = await getObject<CommitObject>(ctx, repo, await resolveRef(ctx, repo, ref), "commit");
   const tree = await getObject<TreeObject>(ctx, repo, commit.tree, "tree");
   const entry = tree.entries.find((e) => e.path === path);
@@ -140,7 +142,7 @@ function range(v: Float32Array) {
  * Hillshade (azimuth 315°, altitude 45°) on the grid, 0..1, from Horn's slope and aspect (the 3 × 3 weighted neighbourhood GDAL and ArcGIS use), which
  * ignores single-pixel noise that a two-neighbour difference turns into speckle.
  */
-function hillshade(g: Grid) {
+export function hillshade(g: Grid) {
   const { width: w, height: h, values: z } = g;
   // Degrees to metres (approximate) so geographic DEMs shade like projected ones.
   const cx = g.geographic ? g.cellSize[0] * 111_320 : g.cellSize[0];
@@ -224,7 +226,7 @@ export const TILE_SIZE = 256;
 const tileCache = new Map<string, { at: number; png: Buffer }>();
 const openCache = new Map<string, Promise<OpenTiff>>();
 
-async function openedTiff(ctx: Ctx, blob: BlobObject, id: string) {
+export async function openedTiff(ctx: Ctx, blob: BlobObject, id: string) {
   let open = openCache.get(id);
   if (!open) {
     open = openTiff(((reader) => (o: number, l: number) => reader.read(o, l))(new BlobReader(ctx, blob)), blob.size);
@@ -592,7 +594,7 @@ export async function vectorSvg(ctx: Ctx, repo: RepoRow, ref: string, path: stri
 // ── Vector features for the interactive viewer ─────────────────────────────────────────────────────────────────────────────────────
 
 export type VectorFeature = { i: number; kind: "point" | "line" | "polygon"; /** Each part's coordinates flattened: x0, y0, x1, y1, … */ parts: number[][]; props: Record<string, string | number | boolean | null> };
-export type VectorFeatures = { bbox: [number, number, number, number]; fields: DbfField[]; count: number; shown: number; thinned: boolean; features: VectorFeature[] };
+export type VectorFeatures = { bbox: [number, number, number, number]; fields: DbfField[]; count: number; shown: number; thinned: boolean; features: VectorFeature[]; /** The coordinate system the coordinates are in: the file's own, or 4326 when asked for longitude and latitude. */ epsg: number | null };
 
 const FEATURE_LIMIT = 5000;
 const POINT_BUDGET = 150_000;
@@ -614,10 +616,37 @@ function dbfValue(raw: Buffer, type: string): string | number | boolean | null {
  * A shapefile as data a viewer can draw and tabulate: every feature's geometry (coordinates rounded to what its extent can show, and thinned
  * when a file has more than the viewer can draw) with its attribute row from the .dbf beside it. At most 5,000 features are sent; `count` is how many there are.
  */
-export async function vectorFeatures(ctx: Ctx, repo: RepoRow, ref: string, path: string): Promise<VectorFeatures> {
+export async function vectorFeatures(ctx: Ctx, repo: RepoRow, ref: string, path: string, opts: { lonlat?: boolean } = {}): Promise<VectorFeatures> {
   const head = await blobAt(ctx, repo, ref, path);
   if (!head) throw notFound(`File ${path}`);
   const dbf = await blobAt(ctx, repo, ref, path.replace(/\.shp$/i, ".dbf"));
+  const prj = await blobAt(ctx, repo, ref, path.replace(/\.shp$/i, ".prj"));
+  const own = prj ? epsgFromWkt((await new BlobReader(ctx, prj.blob).readAll()).toString("utf8")) : null;
+  if (!opts.lonlat) return ownFeatures(ctx, head, dbf, own);
+  // Longitude and latitude, for a web map: every coordinate through proj4 from the .prj's system (already degrees: kept as they are).
+  return cached(`features-lonlat:${head.id}:${dbf?.id ?? ""}:${own ?? ""}`, async () => {
+    const proj = own === 4326 ? null : projector(own);
+    if (own !== 4326 && !proj) throw new UnsupportedTiffError("This shapefile's coordinate system can't be placed on a map (no .prj, or one the EPSG registry does not know).");
+    const base = await ownFeatures(ctx, head, dbf, own);
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    const features = base.features.map((f) => ({
+      ...f,
+      parts: f.parts.map((part) => {
+        const out: number[] = [];
+        for (let k = 0; k + 1 < part.length; k += 2) {
+          const [lon, lat] = proj ? proj.toLonLat(part[k], part[k + 1]) : [part[k], part[k + 1]];
+          const rl = Math.round(lon * 1e7) / 1e7, rt = Math.round(lat * 1e7) / 1e7;
+          out.push(rl, rt);
+          w = Math.min(w, rl), e = Math.max(e, rl), s = Math.min(s, rt), n = Math.max(n, rt);
+        }
+        return out;
+      }),
+    }));
+    return { ...base, features, bbox: [w, s, e, n] as [number, number, number, number], epsg: 4326 };
+  });
+}
+
+function ownFeatures(ctx: Ctx, head: NonNullable<Awaited<ReturnType<typeof blobAt>>>, dbf: Awaited<ReturnType<typeof blobAt>>, own: number | null): Promise<VectorFeatures> {
   return cached(`features:${head.id}:${dbf?.id ?? ""}`, async () => {
     const shp = parseShp(await new BlobReader(ctx, head.blob).readAll());
     const dbfBuf = dbf ? await new BlobReader(ctx, dbf.blob).readAll() : null;
@@ -652,7 +681,7 @@ export async function vectorFeatures(ctx: Ctx, repo: RepoRow, ref: string, path:
       }
       return { i, kind: shape.kind, parts, props };
     });
-    return { bbox: shp.bbox, fields, count: shp.shapes.filter((s) => s.shape).length, shown: features.length, thinned: stride > 1, features };
+    return { bbox: shp.bbox, fields, count: shp.shapes.filter((s) => s.shape).length, shown: features.length, thinned: stride > 1, features, epsg: own };
   });
 }
 

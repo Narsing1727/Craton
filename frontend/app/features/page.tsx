@@ -39,7 +39,7 @@ const groups = [
   {
     title: "Review change you can see",
     points: [
-      "Pull requests show an elevation-change map, cell statistics and a swipe between versions, not a byte diff.",
+      "Pull requests show an elevation-change map and cell statistics, not a byte diff.",
       "Code owners, required approvals and a model review pinned to one commit.",
       "Locks for files that cannot be merged: an editor holds the lock, everyone else gets a read-only copy.",
     ],

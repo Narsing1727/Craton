@@ -6,7 +6,7 @@ import { fetchFeatures } from "@/lib/api";
 export async function GET(request: Request, { params }: { params: Promise<{ owner: string; repo: string }> }) {
   const { owner, repo } = await params;
   const q = new URL(request.url).searchParams;
-  const upstream = await fetchFeatures(owner, repo, q.get("ref") ?? "main", q.get("path") ?? "", request.headers.get("if-none-match") ?? undefined);
+  const upstream = await fetchFeatures(owner, repo, q.get("ref") ?? "main", q.get("path") ?? "", request.headers.get("if-none-match") ?? undefined, q.get("lonlat") === "1");
   if (!upstream) return new Response("The Craton API isn't running.", { status: 503 });
   const headers: Record<string, string> = { "cache-control": upstream.headers.get("cache-control") ?? "private, max-age=60" };
   const etag = upstream.headers.get("etag");

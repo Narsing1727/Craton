@@ -29,7 +29,7 @@ const guides: { id: string; title: string; lead: string; steps: Step[] }[] = [
     steps: [
       { text: "Work on a branch, so main is untouched.", command: "craton branch resurvey\ncraton switch resurvey" },
       { text: "Replace the file with the new survey, then record and push it.", command: "craton add terrain/basin_dem.tif\ncraton commit -m \"Re-survey rows 600 to 640\"\ncraton push" },
-      { text: "On the website, open a pull request from the branch. The file's page offers Change since, a map of where the ground rose and fell with the area and volume, and Swipe to compare." },
+      { text: "On the website, open a pull request from the branch. The file's page offers Change since: a map of where the ground rose and fell since the last commit, with the area and volume." },
       { text: "Reviewers comment, approve and merge. If it was wrong, revert it: that is a new commit, and the history stays whole.", command: "craton revert 3f9c2a1" },
     ],
   },

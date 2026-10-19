@@ -6,7 +6,7 @@
 import { cache } from "react";
 import { isBBox } from "@/lib/geo";
 import { notFound } from "next/navigation";
-import { api, type ApiActivity, type ApiBranch, type ApiChange, type ApiCommit, type ApiIssue, type ApiPull, type ApiRelease, type ApiRepo, type ApiTreeEntry } from "@/lib/api";
+import { api, fetchFileInfo, type ApiFile, type ApiActivity, type ApiBranch, type ApiChange, type ApiCommit, type ApiIssue, type ApiPull, type ApiRelease, type ApiRepo, type ApiTreeEntry } from "@/lib/api";
 import * as demo from "@/lib/data";
 import type { Activity, Branch, Commit, DataType, FileNode, Issue, PullRequest, Release, Repo } from "@/lib/data";
 import { formatBytes, formatDate, timeAgo } from "@/lib/format";
@@ -359,6 +359,17 @@ export const loadCompare = cache(async (owner: string, name: string, base: strin
 export const loadChecks = cache(async (owner: string, name: string) => api.checks(owner, name));
 export const loadStorage = cache(async (owner: string, name: string) => api.storage(owner, name));
 export const loadFile = cache(async (owner: string, name: string, ref: string, path: string) => api.file(owner, name, ref, path));
+
+/**
+ * A file for its own page: null only when the server says there is no such file. A server that is busy or unreachable is an error, so the page
+ * says "didn't load, try again" instead of claiming the file does not exist.
+ */
+export const loadFileStrict = cache(async (owner: string, name: string, ref: string, path: string): Promise<ApiFile | null> => {
+  const res = await fetchFileInfo(owner, name, ref, path);
+  if (res?.status === 404) return null;
+  if (!res || !res.ok) throw new ApiUnavailableError();
+  return (await res.json()) as ApiFile;
+});
 
 export const loadIssues = cache(async (owner: string, name: string) => {
   const live = await api.issues(owner, name);

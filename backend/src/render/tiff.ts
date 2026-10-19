@@ -226,23 +226,39 @@ function assertReadable(ifd: Ifd) {
   if (!ifd.littleEndian && ifd.bits > 8) throw new UnsupportedTiffError("Big-endian TIFFs aren't supported for previews yet");
 }
 
+/**
+ * Decoded strips and tiles, kept per image while it is open, so the next window or map tile over the same part of a file does not decompress it
+ * again. Bounded by count per image; the oldest go first. A block being decoded is shared, never decoded twice at once.
+ */
+const decodedBlocks = new WeakMap<Ifd, { done: Map<number, Buffer>; pending: Map<number, Promise<Buffer>> }>();
+const BLOCKS_PER_IMAGE = 256;
+
 /** First-band values of one image, a pixel at a time, decoding each strip or tile once. A pixel whose block is already decoded comes back as a number, not a promise. */
 function sampler(ifd: Ifd, read: Read) {
   const get = sampleReader(ifd);
   const bps = ifd.bits / 8;
   const spp = ifd.planar === 1 ? ifd.samples : 1;
-  const cache = new Map<number, Buffer>();
-  const block = async (index: number, w: number, rows: number) => {
-    let b = cache.get(index);
-    if (!b) {
-      const raw = await read(ifd.offsets[index], ifd.counts[index] ?? 0);
-      b = Buffer.from(decompress(ifd, raw));
-      const need = w * rows * spp * bps;
-      if (b.length < need) b = Buffer.concat([b, Buffer.alloc(need - b.length)]);
-      unpredict(ifd, b, w, rows);
-      cache.set(index, b);
+  let store = decodedBlocks.get(ifd);
+  if (!store) decodedBlocks.set(ifd, (store = { done: new Map(), pending: new Map() }));
+  const { done: cache, pending } = store;
+  const block = (index: number, w: number, rows: number): Promise<Buffer> => {
+    const ready = cache.get(index);
+    if (ready) return Promise.resolve(ready);
+    let p = pending.get(index);
+    if (!p) {
+      p = (async () => {
+        const raw = await read(ifd.offsets[index], ifd.counts[index] ?? 0);
+        let b = Buffer.from(decompress(ifd, raw));
+        const need = w * rows * spp * bps;
+        if (b.length < need) b = Buffer.concat([b, Buffer.alloc(need - b.length)]);
+        unpredict(ifd, b, w, rows);
+        cache.set(index, b);
+        if (cache.size > BLOCKS_PER_IMAGE) cache.delete(cache.keys().next().value!);
+        return b;
+      })().finally(() => pending.delete(index));
+      pending.set(index, p);
     }
-    return b;
+    return p;
   };
   const finish = (v: number) => (ifd.nodata !== null && v === ifd.nodata ? NaN : Number.isFinite(v) ? v : NaN);
   return (x: number, y: number): number | Promise<number> => {
@@ -271,9 +287,10 @@ function sampler(ifd: Ifd, read: Read) {
  * however far a file is shrunk). Nodata counts as missing; a rectangle that is mostly missing is missing. Where the rectangle is no bigger than
  * a pixel this is just the pixel under its centre, so zooming in shows the file's own values and nothing invented.
  */
-async function meanOver(at: ReturnType<typeof sampler>, x0: number, y0: number, x1: number, y1: number, width: number, height: number): Promise<number> {
+function meanOver(at: ReturnType<typeof sampler>, x0: number, y0: number, x1: number, y1: number, width: number, height: number): number | Promise<number> {
   const nx = Math.min(3, Math.max(1, Math.round(x1 - x0))), ny = Math.min(3, Math.max(1, Math.round(y1 - y0)));
   let sum = 0, n = 0;
+  const waits: Promise<number>[] = [];
   for (let j = 0; j < ny; j++) {
     const y = Math.floor(y0 + ((j + 0.5) * (y1 - y0)) / ny);
     if (y < 0 || y >= height) continue;
@@ -281,12 +298,20 @@ async function meanOver(at: ReturnType<typeof sampler>, x0: number, y0: number, 
       const x = Math.floor(x0 + ((i + 0.5) * (x1 - x0)) / nx);
       if (x < 0 || x >= width) continue;
       const p = at(x, y);
-      const v = typeof p === "number" ? p : await p;
-      if (!Number.isNaN(v)) (sum += v), n++;
+      if (typeof p !== "number") waits.push(p);
+      else if (!Number.isNaN(p)) (sum += p), n++;
     }
   }
-  return n * 2 >= nx * ny && n > 0 ? sum / n : NaN;
+  // Every sample was already decoded: answered at once, with no promise to wait on (this is almost every pixel).
+  if (!waits.length) return n * 2 >= nx * ny && n > 0 ? sum / n : NaN;
+  return Promise.all(waits).then((vs) => {
+    for (const v of vs) if (!Number.isNaN(v)) (sum += v), n++;
+    return n * 2 >= nx * ny && n > 0 ? sum / n : NaN;
+  });
 }
+
+/** Lets other requests run between rows of a long read: the work in between is synchronous. */
+const breathe = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
  * First band of the image as a grid of at most `maxSide` pixels on the long side (nodata → NaN).
@@ -304,8 +329,10 @@ export async function readGrid(read: Read, size: number, maxSide = 512): Promise
   const values = new Float32Array(outW * outH).fill(NaN);
   const at = sampler(ifd, read);
   for (let oy = 0; oy < outH; oy++) {
+    if (oy % 64 === 63) await breathe();
     for (let ox = 0; ox < outW; ox++) {
-      values[oy * outW + ox] = await meanOver(at, ox / scale, oy / scale, (ox + 1) / scale, (oy + 1) / scale, ifd.width, ifd.height);
+      const v = meanOver(at, ox / scale, oy / scale, (ox + 1) / scale, (oy + 1) / scale, ifd.width, ifd.height);
+      values[oy * outW + ox] = typeof v === "number" ? v : await v;
     }
   }
   const px = ifd.pixelScale ?? [1, 1];
@@ -355,13 +382,15 @@ export async function readWindow(open: OpenTiff, win: { x: number; y: number; w:
   const at = sampler(ifd, open.read);
   const values = new Float32Array(outW * outH).fill(NaN);
   for (let oy = 0; oy < outH; oy++) {
+    if (oy % 64 === 63) await breathe();
     const fy = win.y + ((oy + 0.5) * win.h) / outH;
     if (fy < 0 || fy >= full.height) continue;
     const top = (win.y + (oy * win.h) / outH) * sy, bottom = (win.y + ((oy + 1) * win.h) / outH) * sy;
     for (let ox = 0; ox < outW; ox++) {
       const fx = win.x + ((ox + 0.5) * win.w) / outW;
       if (fx < 0 || fx >= full.width) continue;
-      values[oy * outW + ox] = await meanOver(at, (win.x + (ox * win.w) / outW) * sx, top, (win.x + ((ox + 1) * win.w) / outW) * sx, bottom, ifd.width, ifd.height);
+      const v = meanOver(at, (win.x + (ox * win.w) / outW) * sx, top, (win.x + ((ox + 1) * win.w) / outW) * sx, bottom, ifd.width, ifd.height);
+      values[oy * outW + ox] = typeof v === "number" ? v : await v;
     }
   }
   return values;

@@ -1,5 +1,8 @@
 const dev = process.env.NODE_ENV !== "production";
 
+// The basemaps under the map viewer (lib/basemaps.ts); MapLibre fetches their tiles and draws in a worker.
+const basemaps = "https://tile.openstreetmap.org https://server.arcgisonline.com https://tile.opentopomap.org";
+
 // Everything the app loads is its own: fonts are self-hosted by next/font, previews come through
 // the render route. Next.js needs inline scripts for hydration; dev also needs eval (React
 // Refresh) and a websocket (HMR).
@@ -7,9 +10,10 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  `img-src 'self' data: blob: ${basemaps}`,
   "font-src 'self' data:",
-  `connect-src 'self'${dev ? " ws: wss:" : ""}`,
+  `connect-src 'self' ${basemaps}${dev ? " ws: wss:" : ""}`,
+  "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

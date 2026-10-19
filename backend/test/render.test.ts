@@ -559,3 +559,66 @@ test("a shapefile's features come as data: geometry, and each row of its attribu
   assert.equal((await get("/repos/rhea/basin/features/main/README.md", "rhea")).status, 415);
   assert.equal((await get("/repos/rhea/basin/features/main/vectors/catchment.shp", "sol")).status, 404, "a private repository stays private");
 });
+
+test("a raster goes on a web map: where it is, Web Mercator tiles over it, a change heat map, and the value at a longitude and latitude", async () => {
+  const info = JSON.parse((await get("/repos/rhea/basin/tileinfo/main/terrain/basin_dem.tif", "rhea")).body.toString());
+  assert.ok(info.map, "a UTM raster can be placed");
+  const [w, s, e, n] = info.map.bounds as number[];
+  assert.ok(w > 60 && e < 90 && s > 0 && n < 30 && e > w && n > s, `in India (${info.map.bounds})`);
+  assert.ok(info.map.maxZoom >= 14 && info.map.maxZoom <= 20, `zoom for 2 m cells (${info.map.maxZoom})`);
+  assert.equal(info.ramps.terrain.length, 9);
+  assert.match(info.ramps.change[0], /^#[0-9a-f]{6}$/);
+
+  // The tile under the middle of the raster, at a zoom where it covers a few tiles.
+  const z = info.map.maxZoom - 2;
+  const lon = (w + e) / 2, lat = (s + n) / 2;
+  const tx = Math.floor(((lon + 180) / 360) * 2 ** z);
+  const ty = Math.floor(((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * 2 ** z);
+  const tile = await get(`/repos/rhea/basin/xyz/main/${z}/${tx}/${ty}/terrain/basin_dem.tif`, "rhea");
+  assert.equal(tile.status, 200);
+  assert.equal(tile.type, "image/png");
+  assert.deepEqual([tile.body.readUInt32BE(16), tile.body.readUInt32BE(20)], [256, 256]);
+  const centre = pixel(tile.body, 128, 128);
+  assert.equal(centre[3], 255, "the middle of the raster is drawn");
+  const grey = await get(`/repos/rhea/basin/xyz/main/${z}/${tx}/${ty}/terrain/basin_dem.tif?ramp=greys`, "rhea");
+  const g = pixel(grey.body, 128, 128);
+  assert.ok(Math.abs(g[0] - g[1]) <= 2 && Math.abs(g[1] - g[2]) <= 2, "the grey colour map is grey");
+
+  // Far from the data: an empty tile, not an error.
+  const away = await get(`/repos/rhea/basin/xyz/main/${z}/0/0/terrain/basin_dem.tif`, "rhea");
+  assert.equal(away.status, 200);
+  assert.deepEqual([away.body.readUInt32BE(16), away.body.readUInt32BE(20)], [1, 1]);
+
+  // The change heat map: the re-surveyed rows are coloured, the rest is faint.
+  const heat = await get(`/repos/rhea/basin/xyz/sample-resurvey/${z}/${tx}/${ty}/terrain/basin_dem.tif?base=main`, "rhea");
+  assert.equal(heat.status, 200);
+  let strong = 0, faint = 0;
+  for (let yy = 0; yy < 256; yy += 8) for (let xx = 0; xx < 256; xx += 8) {
+    const a = pixel(heat.body, xx, yy)[3];
+    if (a > 200) strong++;
+    else if (a > 0) faint++;
+  }
+  assert.ok(faint > 0, "unchanged ground is drawn faintly");
+
+  assert.equal((await get(`/repos/rhea/basin/xyz/main/${z}/${tx}/${ty}/terrain/basin_dem.tif?ramp=rainbow`, "rhea")).status, 400);
+  assert.equal((await get(`/repos/rhea/basin/xyz/main/${z}/${tx}/${ty}/terrain/basin_dem.tif`, "sol")).status, 404, "a private repository stays private");
+
+  const at = JSON.parse((await get(`/repos/rhea/basin/pixel/main/terrain/basin_dem.tif?lon=${lon}&lat=${lat}`, "rhea")).body.toString());
+  assert.equal(typeof at.value, "number");
+  assert.ok(Math.abs(at.column - 256) <= 2 && Math.abs(at.row - 256) <= 2, `the middle pixel (${at.column}, ${at.row})`);
+  assert.equal((await get("/repos/rhea/basin/pixel/main/terrain/basin_dem.tif?lon=500&lat=0", "rhea")).status, 400);
+  void strong;
+});
+
+test("a shapefile's features can come in longitude and latitude, for a web map", async () => {
+  const r = await get("/repos/rhea/basin/features/main/vectors/catchment.shp?lonlat=1", "rhea");
+  assert.equal(r.status, 200);
+  const data = JSON.parse(r.body.toString()) as { epsg: number; bbox: number[]; features: { parts: number[][] }[] };
+  assert.equal(data.epsg, 4326);
+  const [w, s, e, n] = data.bbox;
+  assert.ok(w > 70 && e < 80 && s > 5 && n < 15, `Kerala (${data.bbox})`);
+  assert.ok(data.features[0].parts[0][0] >= w && data.features[0].parts[0][1] <= n);
+  const own = JSON.parse((await get("/repos/rhea/basin/features/main/vectors/catchment.shp", "rhea")).body.toString()) as { epsg: number; bbox: number[] };
+  assert.equal(own.epsg, 32643);
+  assert.ok(own.bbox[0] > 100_000, "the file's own metres when not asked");
+});

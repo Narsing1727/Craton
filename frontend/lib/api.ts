@@ -345,6 +345,16 @@ async function get<T>(path: string, timeoutMs = READ_TIMEOUT_MS): Promise<T | nu
   }
 }
 
+/** One file's facts as the raw response, so a caller can tell "there is no such file" (404) from "the server didn't answer in time". */
+export async function fetchFileInfo(owner: string, repo: string, ref: string, path: string): Promise<Response | null> {
+  try {
+    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/file/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: await authHeaders(), cache: "no-store", signal: AbortSignal.timeout(20_000) });
+  } catch (err) {
+    unstable_rethrow(err);
+    return null;
+  }
+}
+
 /** The user a specific session token belongs to (right after sign-in, before the cookie is sent back). */
 export async function fetchUser(token: string): Promise<ApiUser | null> {
   try {
@@ -456,8 +466,8 @@ export async function fetchArchive(owner: string, repo: string, ref: string, pat
   }
 }
 
-export type ApiTileInfo = { width: number; height: number; tileSize: number; maxZoom: number; min: number; max: number; cellSize: [number, number]; origin: [number, number] | null; geographic: boolean; epsg: number | null; overviews: number; histogram: number[] };
-export type ApiVectorFeatures = { bbox: [number, number, number, number]; fields: { name: string; type: string; length: number; decimals: number }[]; count: number; shown: number; thinned: boolean; features: { i: number; kind: "point" | "line" | "polygon"; parts: number[][]; props: Record<string, string | number | boolean | null> }[] };
+export type ApiTileInfo = { width: number; height: number; tileSize: number; maxZoom: number; min: number; max: number; cellSize: [number, number]; origin: [number, number] | null; geographic: boolean; epsg: number | null; overviews: number; histogram: number[]; map?: { bounds: [number, number, number, number]; maxZoom: number } | null; ramps?: Record<string, string[]> };
+export type ApiVectorFeatures = { bbox: [number, number, number, number]; fields: { name: string; type: string; length: number; decimals: number }[]; count: number; shown: number; thinned: boolean; epsg?: number | null; features: { i: number; kind: "point" | "line" | "polygon"; parts: number[][]; props: Record<string, string | number | boolean | null> }[] };
 export type ApiPixel = { column: number; row: number; value: number | null; x: number | null; y: number | null };
 
 /** A raster's layout for zooming, or why it can not be zoomed. */
@@ -470,11 +480,23 @@ export async function fetchTileInfo(owner: string, repo: string, ref: string, pa
   }
 }
 
-/** A shapefile's features and attribute rows, for the features route. */
-export async function fetchFeatures(owner: string, repo: string, ref: string, path: string, ifNoneMatch?: string): Promise<Response | null> {
+/** A raster as one Web Mercator map tile, for the xyz route. */
+export async function fetchXyz(owner: string, repo: string, ref: string, path: string, z: string, x: string, y: string, opts: { ramp?: string; base?: string; ifNoneMatch?: string }): Promise<Response | null> {
   try {
     const headers = await authHeaders();
-    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/features/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: ifNoneMatch ? { ...headers, "if-none-match": ifNoneMatch } : headers, cache: "no-store" });
+    const q = new URLSearchParams({ ...(opts.ramp ? { ramp: opts.ramp } : {}), ...(opts.base ? { base: opts.base } : {}) });
+    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/xyz/${encodeURIComponent(ref)}/${encodeURIComponent(z)}/${encodeURIComponent(x)}/${encodeURIComponent(y)}/${path.split("/").map(encodeURIComponent).join("/")}${q.size ? `?${q}` : ""}`, { headers: opts.ifNoneMatch ? { ...headers, "if-none-match": opts.ifNoneMatch } : headers, cache: "no-store" });
+  } catch (err) {
+    unstable_rethrow(err);
+    return null;
+  }
+}
+
+/** A shapefile's features and attribute rows, for the features route (`lonlat`: in longitude and latitude, for a web map). */
+export async function fetchFeatures(owner: string, repo: string, ref: string, path: string, ifNoneMatch?: string, lonlat = false): Promise<Response | null> {
+  try {
+    const headers = await authHeaders();
+    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/features/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}${lonlat ? "?lonlat=1" : ""}`, { headers: ifNoneMatch ? { ...headers, "if-none-match": ifNoneMatch } : headers, cache: "no-store" });
   } catch (err) {
     unstable_rethrow(err);
     return null;
@@ -482,9 +504,9 @@ export async function fetchFeatures(owner: string, repo: string, ref: string, pa
 }
 
 /** What is at one pixel of a raster (value and map position), for the pixel route. */
-export async function fetchPixel(owner: string, repo: string, ref: string, path: string, column: string, row: string): Promise<Response | null> {
+export async function fetchPixel(owner: string, repo: string, ref: string, path: string, at: { column: string; row: string } | { lon: string; lat: string }): Promise<Response | null> {
   try {
-    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/pixel/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}?${new URLSearchParams({ column, row })}`, { headers: await authHeaders(), cache: "no-store" });
+    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/pixel/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}?${new URLSearchParams(at)}`, { headers: await authHeaders(), cache: "no-store" });
   } catch (err) {
     unstable_rethrow(err);
     return null;

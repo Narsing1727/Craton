@@ -18,13 +18,15 @@ import { RestoreButton } from "@/components/restore-button";
 import { TableDiffView } from "@/components/table-diff";
 import { parseCsv, sniffDelimiter } from "@/lib/csv";
 import { describeBBox, isBBox, osmLink } from "@/lib/geo";
-import { DataPreview, ElevationLegend, PreviewDiffLegend, frameStyle, previewCaption, previewSrc } from "@/components/data-preview";
+import { DataPreview, ElevationLegend, PreviewDiffLegend, previewCaption, previewSrc } from "@/components/data-preview";
 import { FileText } from "@/components/file-text";
 import { ImageViewer } from "@/components/image-viewer";
 import { StructureViewer } from "@/components/structure-viewer";
 import { TableViewer } from "@/components/table-viewer";
 import { RasterViewer } from "@/components/raster-viewer";
 import { VectorViewer } from "@/components/vector-viewer";
+import { VectorMap } from "@/components/vector-map";
+import { RasterMap } from "@/components/raster-map";
 import { getUnits } from "@/lib/units-server";
 import { EmbedDialog } from "@/components/embed-dialog";
 import { DataDictionary } from "@/components/data-dictionary";
@@ -36,11 +38,9 @@ import { buildSeries, detectTimeColumn, type Series } from "@/lib/timeseries";
 import { fitByGroup, fitStatistics, numericColumn } from "@/lib/fit";
 import { DICTIONARY_FILE, parseDictionary } from "@/lib/dictionary";
 import { matchesAny } from "@/lib/globs";
-import { CompareSlider, CompareSliderAfter, CompareSliderBefore, CompareSliderHandle } from "@/components/ui/compare-slider";
-import { TransitionPanel } from "@/components/ui/transition-panel";
 import type { DataType } from "@/lib/data";
 import { codecLabels, formatBytes, timeAgo } from "@/lib/format";
-import { dataTypeOf, loadFile, loadRepo } from "@/lib/source";
+import { dataTypeOf, loadFileStrict, loadRepo } from "@/lib/source";
 
 // Shown when the API isn't running.
 const demoMetadata = [
@@ -181,7 +181,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   const filePath = path.join("/");
   const refQuery = ref === summary.repo.defaultBranch ? "" : `?ref=${encodeURIComponent(ref)}`;
 
-  const [file, lockList] = summary.live ? await Promise.all([loadFile(owner, repo, ref, filePath), api.locks(owner, repo)]) : [null, null];
+  const [file, lockList] = summary.live ? await Promise.all([loadFileStrict(owner, repo, ref, filePath), api.locks(owner, repo)]) : [null, null];
   const lock = lockList?.find((l) => l.path === filePath) ?? null;
   if (summary.live && !file) notFound();
 
@@ -200,7 +200,6 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   // before the last commit that touched the file.
   const previous = file?.history[1]?.sha ?? null;
   const showChange = view === "change" && previous !== null;
-  const swipeMode = view === "swipe" && previous !== null;
   const previewBase = showChange ? previous : undefined;
   // Column descriptions for a table, from the repository's own dictionary file.
   const dictionaryText = summary.live && (kind === "table" || (kind === "vector" && (file?.vector?.fields?.length ?? 0) > 0)) ? await api.raw(owner, repo, ref, DICTIONARY_FILE) : null;
@@ -269,8 +268,10 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   const rendered = file && (kind === "raster" || kind === "vector" || kind === "pointcloud") ? await renderMeta(owner, repo, ref, filePath, { base: previewBase, size: drawSize }) : null;
   // The picture's own shape, so its frame has no empty bands beside it.
   const aspect = rendered?.meta?.sourceWidth && rendered.meta.sourceHeight ? rendered.meta.sourceWidth / rendered.meta.sourceHeight : rendered?.meta?.width && rendered.meta.height ? rendered.meta.width / rendered.meta.height : 16 / 10;
-  const vectorViewer = kind === "vector" && file && file.vector && rendered && !rendered.error && !showChange && !swipeMode && /\.shp$/i.test(filePath);
-  const viewer = kind === "raster" && file && rendered && !rendered.error && !showChange && !swipeMode && /\.tiff?$/i.test(filePath);
+  const vectorViewer = kind === "vector" && file && file.vector && rendered && !rendered.error && !showChange && /\.shp$/i.test(filePath);
+  const placed = Boolean(where);
+  const rasterMap = kind === "raster" && file && rendered && !rendered.error && placed && /\.tiff?$/i.test(filePath);
+  const viewer = kind === "raster" && file && rendered && !rendered.error && !showChange && /\.tiff?$/i.test(filePath);
   const tableDiff = file && kind === "table" && showChange && previous ? await api.tableDiff(owner, repo, ref, filePath, previous) : null;
   const lineDiff = file && kind === "text" && showChange && previous ? await api.textDiff(owner, repo, ref, filePath, previous) : null;
   const previewHref = (v?: string) => `${base}/blob/${path.map(encodeURIComponent).join("/")}?${new URLSearchParams({ ...(ref !== summary.repo.defaultBranch ? { ref } : {}), ...(v ? { view: v } : {}) })}`;
@@ -393,27 +394,33 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                 <CardContent className="p-4">
                   {file && previous && (
                     <div className="mb-3 flex flex-wrap gap-1 text-xs" role="group" aria-label="Preview mode">
-                      <Button asChild size="sm" variant={!showChange && !swipeMode ? "default" : "ghost"}>
-                        <Link href={previewHref()} aria-current={!showChange && !swipeMode ? "true" : undefined}>This version</Link>
+                      <Button asChild size="sm" variant={!showChange ? "default" : "ghost"}>
+                        <Link href={previewHref()} aria-current={!showChange ? "true" : undefined}>This version</Link>
                       </Button>
                       <Button asChild size="sm" variant={showChange ? "default" : "ghost"}>
                         <Link href={previewHref("change")} aria-current={showChange ? "true" : undefined}>
                           Change since <span className="font-mono">{previous.slice(0, 7)}</span>
                         </Link>
                       </Button>
-                      <Button asChild size="sm" variant={swipeMode ? "default" : "ghost"}>
-                        <Link href={previewHref("swipe")} aria-current={swipeMode ? "true" : undefined}>Swipe to compare</Link>
-                      </Button>
                     </div>
                   )}
                   {file && rendered ? (
-                    <TransitionPanel
-                      activeIndex={swipeMode ? 1 : 0}
-                      transition={{ duration: 0.15 }}
-                      variants={{ enter: { opacity: 0 }, center: { opacity: 1 }, exit: { opacity: 0 } }}
-                    >
-                      {[
-                        vectorViewer ? (
+                    <>
+                      {vectorViewer && placed ? (
+                          <VectorMap key="vector-map" owner={owner} repo={repo} reference={ref} path={filePath} alt={`Features of ${filename} on a map`} />
+                        ) : rasterMap ? (
+                          <RasterMap
+                            key={showChange ? "raster-change" : "raster-map"}
+                            owner={owner}
+                            repo={repo}
+                            reference={ref}
+                            path={filePath}
+                            units={units}
+                            base={showChange && previous ? previous : undefined}
+                            span={showChange ? Math.max(Math.abs(rendered?.meta?.minChange ?? 0), Math.abs(rendered?.meta?.maxChange ?? 0)) : undefined}
+                            alt={showChange ? `Change in ${filename} since ${previous?.slice(0, 7)}, on a map` : `${filename} on a map`}
+                          />
+                        ) : vectorViewer ? (
                           <VectorViewer key="vector" owner={owner} repo={repo} reference={ref} path={filePath} base={previewSrc(owner, repo, ref, filePath)} alt={`Geometry of ${filename}`} geometry={file!.vector!.shapeType} epsg={file!.vector!.epsg} />
                         ) : viewer ? (
                           <RasterViewer
@@ -437,34 +444,13 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                             aspect={kind === "raster" ? aspect : undefined}
                             className={kind === "raster" ? undefined : "aspect-16/10"}
                           />
-                        ),
-                        previous ? (
-                          <CompareSlider key="swipe" defaultValue={50} className="relative mx-auto overflow-hidden border border-border bg-muted/30" style={frameStyle(aspect)}>
-                            <CompareSliderBefore>
-                              {/* eslint-disable-next-line @next/next/no-img-element -- rendered per blob by the API, already sized */}
-                              <img src={previewSrc(owner, repo, previous, filePath, { size: drawSize })} alt={`${filename} at ${previous.slice(0, 7)}`} className="size-full object-contain" />
-                            </CompareSliderBefore>
-                            <CompareSliderAfter>
-                              {/* eslint-disable-next-line @next/next/no-img-element -- rendered per blob by the API, already sized */}
-                              <img src={previewSrc(owner, repo, ref, filePath, { size: drawSize })} alt={`${filename} now`} className="size-full object-contain" />
-                            </CompareSliderAfter>
-                            <CompareSliderHandle />
-                          </CompareSlider>
-                        ) : (
-                          <div key="swipe" />
-                        ),
-                      ]}
-                    </TransitionPanel>
+                        )}
+                    </>
                   ) : (
                     <MapPreview seed={21} variant={kind === "vector" ? "vector" : "terrain"} className="aspect-16/10" />
                   )}
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-muted-foreground">
-                    {swipeMode ? (
-                      <span className="flex items-center gap-1.5">
-                        <Ruler className="size-3.5" aria-hidden />
-                        Drag to compare <span className="font-mono">{previous?.slice(0, 7)}</span> against this version
-                      </span>
-                    ) : showChange ? (
+                    {showChange ? (
                       <PreviewDiffLegend meta={rendered?.meta ?? null} />
                     ) : (
                       <span className="flex items-center gap-1.5">

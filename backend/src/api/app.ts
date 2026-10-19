@@ -71,6 +71,7 @@ import { citationFor } from "../services/citation.ts";
 import { LICENSES } from "../services/licenses.ts";
 import * as idempotency from "./idempotency.ts";
 import * as previews from "../render/previews.ts";
+import * as maptiles from "../render/maptiles.ts";
 import { latestCheckStatus, listCheckRuns, runChecks } from "../checks/runner.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { config } from "../config.ts";
@@ -1751,7 +1752,9 @@ export function createApp(ctx: Ctx) {
     const repo = await repoFor(c);
     const ref = c.req.param("ref"), path = c.req.param("path");
     if (!/\.shp$/i.test(path)) throw new ApiError(415, "no_preview", "Features are listed for shapefiles.");
-    const key = await previews.vectorKey(ctx, repo, ref, path);
+    const lonlat = c.req.query("lonlat") === "1";
+    const ownKey = await previews.vectorKey(ctx, repo, ref, path);
+    const key = ownKey ? `${ownKey}${lonlat ? ":lonlat" : ""}` : null;
     let pinned = false;
     if (/^[0-9a-f]{64}$/.test(ref)) {
       try {
@@ -1762,8 +1765,9 @@ export function createApp(ctx: Ctx) {
     const headers: Record<string, string> = { "cache-control": pinned ? "private, max-age=31536000, immutable" : "private, max-age=300", ...(tag ? { etag: tag } : {}) };
     if (tag && c.req.header("if-none-match")?.split(",").some((v) => v.trim().replace(/^W\//, "") === tag)) return c.body(null, 304, headers);
     try {
-      return c.json(await previews.vectorFeatures(ctx, repo, ref, path), 200, headers);
+      return c.json(await previews.vectorFeatures(ctx, repo, ref, path, { lonlat }), 200, headers);
     } catch (err) {
+      if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
       if (err instanceof Error && /Not a shapefile/.test(err.message)) throw new ApiError(415, "no_preview", err.message);
       throw err;
     }
@@ -1789,7 +1793,12 @@ export function createApp(ctx: Ctx) {
     const path = c.req.param("path");
     rasterOnly(path);
     try {
-      return c.json(await previews.rasterTileInfo(ctx, repo, c.req.param("ref"), path));
+      const ref = c.req.param("ref");
+      const info = await previews.rasterTileInfo(ctx, repo, ref, path);
+      // Where it is on Earth, for a web map, and the colour maps its map tiles can be drawn with (as legend stops).
+      const map = await maptiles.rasterPlacement(ctx, repo, ref, path);
+      const ramps = Object.fromEntries((["terrain", "viridis", "magma", "greys", "change"] as const).map((r) => [r, maptiles.rampStops(r)]));
+      return c.json({ ...info, map, ramps });
     } catch (err) {
       if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
       throw err;
@@ -1800,10 +1809,42 @@ export function createApp(ctx: Ctx) {
     const repo = await repoFor(c);
     const path = c.req.param("path");
     rasterOnly(path);
+    // By longitude and latitude (?lon=&lat=), for a web map's cursor.
+    if (c.req.query("lon") !== undefined || c.req.query("lat") !== undefined) {
+      const [lon, lat] = [c.req.query("lon"), c.req.query("lat")].map((v) => (v !== undefined && /^-?\d{1,3}(\.\d{1,20})?$/.test(v) ? Number(v) : NaN));
+      if (!(Math.abs(lon) <= 180 && Math.abs(lat) <= 90)) throw badRequest("Give the place as ?lon=<degrees>&lat=<degrees>.");
+      try {
+        return c.json(await maptiles.rasterPixelAtLonLat(ctx, repo, c.req.param("ref"), path, lon, lat), 200, { "cache-control": "private, max-age=300" });
+      } catch (err) {
+        if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
+        throw err;
+      }
+    }
     const [column, row] = [c.req.query("column"), c.req.query("row")].map((v) => (v !== undefined && /^\d{1,9}$/.test(v) ? Number(v) : NaN));
     if (Number.isNaN(column) || Number.isNaN(row)) throw badRequest("Give the pixel as ?column=<whole number>&row=<whole number>.");
     try {
       return c.json(await previews.rasterPixel(ctx, repo, c.req.param("ref"), path, column, row), 200, { "cache-control": "private, max-age=300" });
+    } catch (err) {
+      if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
+      throw err;
+    }
+  });
+  // A raster as Web Mercator map tiles (z/x/y, 256 pixels), to lay over a basemap: ?ramp=terrain|viridis|magma|greys, or ?base=<ref> for the
+  // elevation change as a heat map. Pure functions of the blobs, so a pinned commit caches for a year.
+  v1.get("/repos/:owner/:repo/xyz/:ref/:z/:x/:y/:path{.+}", async (c) => {
+    const repo = await repoFor(c);
+    const ref = c.req.param("ref"), path = c.req.param("path");
+    rasterOnly(path);
+    const [z, x, y] = [c.req.param("z"), c.req.param("x"), c.req.param("y")].map((v) => (/^\d{1,8}$/.test(v) ? Number(v) : NaN));
+    if ([z, x, y].some(Number.isNaN)) throw badRequest("Tile numbers are whole numbers.");
+    const rampName = c.req.query("ramp") ?? "terrain";
+    if (!maptiles.isRamp(rampName) || rampName === "change") throw badRequest("The colour map is one of terrain, viridis, magma or greys.");
+    const base = c.req.query("base") || undefined;
+    const headers = await cacheFor(repo, ref, await maptiles.xyzKey(ctx, repo, ref, path, z, x, y, { ramp: rampName, base }));
+    if (base && !/^[0-9a-f]{64}$/.test(base)) headers["cache-control"] = "private, max-age=300";
+    if (headers.etag && c.req.header("if-none-match")?.split(",").some((v) => v.trim().replace(/^W\//, "") === headers.etag)) return c.body(null, 304, headers);
+    try {
+      return c.body(new Uint8Array(await maptiles.rasterXyzTile(ctx, repo, ref, path, z, x, y, { ramp: rampName, base })), 200, { ...headers, "content-type": "image/png" });
     } catch (err) {
       if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
       throw err;
