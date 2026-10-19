@@ -283,6 +283,30 @@ export async function refreshRepoSummary(ctx: Ctx, repo: RepoRow, commitId: stri
   const size = tree.entries.reduce((n, e) => n + e.size, 0);
   const tags = dataTypesOf(tree.entries.map((e) => e.path));
   await ctx.db.run("UPDATE repos SET size_bytes = ?, tags = ? WHERE id = ?", size, JSON.stringify(tags), repo.id);
+  await replacePaths(ctx, repo.id, tree.entries);
+}
+
+/** The file paths of the default branch, kept in a table so a search for a file name is a query, not a walk through every repository. */
+async function replacePaths(ctx: Ctx, repoId: number, entries: { path: string; size: number }[]) {
+  await inTransaction(ctx, async (c) => {
+    await c.db.run("DELETE FROM repo_paths WHERE repo_id = ?", repoId);
+    await insertMany(c.db, "repo_paths", ["repo_id", "path", "size"], entries.map((e) => [repoId, e.path, e.size]));
+    await c.db.run("UPDATE repos SET paths_at = now_iso() WHERE id = ?", repoId);
+  });
+}
+
+/** Index the files of repositories that have none yet (existing installations, after the table was added). Run once in the background at start. */
+export async function backfillPaths(ctx: Ctx) {
+  const rows = await ctx.db.all<RepoRow>("SELECT r.*, o.handle AS owner FROM repos r JOIN owners o ON o.id = r.owner_id WHERE r.paths_at IS NULL");
+  for (const repo of rows) {
+    try {
+      await refreshRepoSummary(ctx, repo, await resolveRef(ctx, repo, repo.default_branch));
+    } catch {
+      await ctx.db.run("UPDATE repos SET paths_at = now_iso() WHERE id = ?", repo.id); // nothing committed yet: nothing to index
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return rows.length;
 }
 
 export type CommitRow = { id: string; tree: string; parents: string; author: string; message: string; timestamp: string; merkle_root: string };

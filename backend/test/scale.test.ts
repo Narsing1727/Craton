@@ -9,7 +9,9 @@ import { openDb } from "../src/db/db.ts";
 import { MemoryStore } from "../src/storage/chunk-store.ts";
 import type { Ctx } from "../src/services/context.ts";
 import { repoAccess } from "../src/services/accounts.ts";
-import { listRepos, repoPage } from "../src/services/repos.ts";
+import { findRepo, listRepos, repoPage } from "../src/services/repos.ts";
+import { commitFiles } from "../src/dev/push.ts";
+import { backfillPaths } from "../src/services/history.ts";
 
 let ctx: Ctx;
 let app: ReturnType<typeof createApp>;
@@ -140,4 +142,31 @@ test("search is bounded and the same for text, people and files", async () => {
   assert.ok(r.repositories.every((x: any) => x.owner === "ann" || /ann/i.test(`${x.name} ${x.description}`)));
   assert.equal((await call("GET", "/search?q=labs", null)).json.organizations[0].handle, "labs");
   assert.deepEqual((await call("GET", "/search?q=zzzz-nothing", "ann")).json.repositories, []);
+});
+
+test("file names are found through the index: case-blind, literal wildcards, only where the viewer may look, following pushes and the backfill", async () => {
+  const open = await findRepo(ctx, "ann", "open-a");
+  const secret = await findRepo(ctx, "ann", "secret-a");
+  const push = (repo: typeof open, changes: Record<string, Buffer | null>, message: string) => commitFiles(ctx, repo, { branch: "main", author: "ann", message, timestamp: new Date(), changes });
+  await push(open, { "terrain/basin_dem.tif": Buffer.from("x".repeat(100)), "notes/Readme_100%.md": Buffer.from("y") }, "add");
+  await push(secret, { "keys/server.pem": Buffer.from("k") }, "add key");
+  const files = async (q: string, who: string | null) => ((await call("GET", `/search?q=${encodeURIComponent(q)}`, who)).json.files as { repo: string; path: string }[]).map((f) => `${f.repo}:${f.path}`);
+
+  assert.deepEqual(await files("BASIN_DEM", "ann"), ["ann/open-a:terrain/basin_dem.tif"], "case does not matter");
+  assert.deepEqual(await files("100%", "ann"), ["ann/open-a:notes/Readme_100%.md"], "a percent sign is a character");
+  assert.deepEqual(await files("basin", null), ["ann/open-a:terrain/basin_dem.tif"], "a visitor finds files of public repositories");
+  assert.deepEqual(await files("server.pem", null), [], "and not of private ones");
+  assert.deepEqual(await files("server.pem", "ed"), []);
+  assert.deepEqual(await files("server.pem", "ann"), ["ann/secret-a:keys/server.pem"]);
+
+  await push(open, { "terrain/basin_dem.tif": null, "terrain/new_dem.tif": Buffer.from("z") }, "swap");
+  assert.deepEqual(await files("dem", "ann"), ["ann/open-a:terrain/new_dem.tif"], "the index follows the default branch");
+
+  // An installation from before the index: nothing indexed, then the backfill catches up.
+  await ctx.db.run("DELETE FROM repo_paths");
+  await ctx.db.run("UPDATE repos SET paths_at = NULL");
+  assert.deepEqual(await files("dem", "ann"), []);
+  assert.ok((await backfillPaths(ctx)) >= 6);
+  assert.deepEqual(await files("dem", "ann"), ["ann/open-a:terrain/new_dem.tif"]);
+  assert.ok((await ctx.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM repos WHERE paths_at IS NULL"))!.n === 0, "repositories with nothing committed are marked done too");
 });

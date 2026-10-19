@@ -303,7 +303,7 @@ const groups: Group[] = [
     title: "Search and activity",
     intro: "Everything here covers only repositories the caller can read.",
     endpoints: [
-      { method: "GET", path: "/search", note: "Repositories (up to 100), file paths (looked for in the 100 most recently updated repositories you can read), and up to 50 people and 50 organizations matching ?q=." },
+      { method: "GET", path: "/search", note: "Repositories (up to 100), file paths (on the default branch of any repository you can read, up to 100, newest repositories first), and up to 50 people and 50 organizations matching ?q=." },
       { method: "GET", path: "/trending", note: "Public repositories ranked by recent stars. ?period=day|week|month." },
       { method: "GET", path: "/readme-templates", note: "The README starters for new repositories (HEC-RAS model, DEM survey, gauges, and others)." },
       { method: "GET", path: "/user/starred", note: "Repositories you starred." },

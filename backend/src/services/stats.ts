@@ -5,7 +5,7 @@ import { statement } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
 import { notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
-import { repoJson, listRepos, repoPage } from "./repos.ts";
+import { readableBy, repoJson, listRepos, repoPage } from "./repos.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { getObject, listCommits, objectsAmong, resolveRef } from "./history.ts";
 import { chunkInfos } from "./chunks.ts";
@@ -111,34 +111,31 @@ export async function auditPackage(ctx: Ctx, repo: RepoRow) {
   };
 }
 
-/** File names are looked for in this many of the most recently updated repositories the person can read (there is no file index yet). */
-const FILE_SEARCH_REPOSITORIES = 100;
 const SEARCH_PEOPLE = 50;
 
 export async function search(ctx: Ctx, userId: number | null, q: string) {
   const needle = q.trim().toLowerCase();
-  const repos = (await repoPage(ctx, userId, needle ? { q: needle } : {}, { limit: 100, offset: 0 })).rows.map(repoJson);
-  const files: { repo: string; path: string; size: number }[] = [];
-  for (const r of (await repoPage(ctx, userId, {}, { limit: FILE_SEARCH_REPOSITORIES, offset: 0 })).rows) {
-    let tip: string;
-    try {
-      tip = await resolveRef(ctx, r, r.default_branch);
-    } catch {
-      continue;
-    }
-    const tree = await getObject<TreeObject>(ctx, r, (await getObject<CommitObject>(ctx, r, tip, "commit")).tree, "tree");
-    for (const e of tree.entries) if (!needle || e.path.toLowerCase().includes(needle)) files.push({ repo: `${r.owner}/${r.name}`, path: e.path, size: e.size });
-    if (files.length >= 100) break;
-  }
-  const like = `%${needle.replace(/[\%_]/g, (c) => `\${c}`)}%`;
-  const ownersOf = (kind: "user" | "org") =>
-    ctx.db.all<{ handle: string; kind: string; name: string; bio: string }>(
-      `SELECT handle, kind, name, bio FROM owners WHERE kind = ? AND lower(handle || ' ' || name || ' ' || bio) LIKE ? ESCAPE '\' ORDER BY handle LIMIT ?`,
-      kind, like, SEARCH_PEOPLE,
-    );
-  const [people, organizations] = await Promise.all([ownersOf("user"), ownersOf("org")]);
-  return { repositories: repos, files: files.slice(0, 100), people, organizations };
+  const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const access = readableBy(userId);
+  const [repos, fileRows, people, organizations] = await Promise.all([
+    repoPage(ctx, userId, needle ? { q: needle } : {}, { limit: 100, offset: 0 }),
+    // File names, from the table of each repository's default-branch paths: one query whatever the number of repositories.
+    ctx.db.all<{ owner: string; name: string; path: string; size: number }>(
+      `SELECT o.handle AS owner, r.name, p.path, p.size FROM repo_paths p JOIN repos r ON r.id = p.repo_id JOIN owners o ON o.id = r.owner_id
+        WHERE ${access.sql}${needle ? " AND lower(p.path) LIKE ? ESCAPE '\\'" : ""} ORDER BY r.updated_at DESC, r.id, p.path LIMIT 100`,
+      ...access.params, ...(needle ? [like] : []),
+    ),
+    ownersOf(ctx, "user", like),
+    ownersOf(ctx, "org", like),
+  ]);
+  return { repositories: repos.rows.map(repoJson), files: fileRows.map((f) => ({ repo: `${f.owner}/${f.name}`, path: f.path, size: f.size })), people, organizations };
 }
+
+const ownersOf = (ctx: Ctx, kind: "user" | "org", like: string) =>
+  ctx.db.all<{ handle: string; kind: string; name: string; bio: string }>(
+    `SELECT handle, kind, name, bio FROM owners WHERE kind = ? AND lower(handle || ' ' || name || ' ' || bio) LIKE ? ESCAPE '\\' ORDER BY handle LIMIT ?`,
+    kind, like, SEARCH_PEOPLE,
+  );
 
 /** Owners a user can push to (themselves and orgs where they can create repositories). */
 export async function writableOwners(ctx: Ctx, userId: number) {

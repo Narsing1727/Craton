@@ -7,6 +7,7 @@ import { config } from "./config.ts";
 import { startRetryLoop } from "./services/webhooks.ts";
 import { startDigestLoop } from "./services/digest.ts";
 import { backfillFootprints } from "./services/extent.ts";
+import { backfillPaths } from "./services/history.ts";
 
 const ctx = await createContext();
 const app = await createApp(ctx);
@@ -18,6 +19,9 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
 
 // Work out where existing repositories' data is, once, in the background.
 void backfillFootprints(ctx).then((n) => n && console.log(`Located ${n} repositories.`)).catch((err) => console.error("footprint backfill failed:", err));
+
+// Index the file names of repositories that predate the file index, once, in the background.
+void backfillPaths(ctx).then((n) => n && console.log(`Indexed the files of ${n} repositories.`)).catch((err) => console.error("file index backfill failed:", err));
 
 // Retry webhook deliveries that failed and are due again.
 startRetryLoop(ctx);

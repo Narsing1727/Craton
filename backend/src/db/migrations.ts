@@ -70,4 +70,14 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX collaborators_user ON collaborators (user_id);
   CREATE INDEX memberships_user ON memberships (user_id);
   `,
+  // 6: a table of the file paths on each repository's default branch, so a file-name search is one query (history.ts, stats.ts).
+  `
+  CREATE TABLE repo_paths (
+    repo_id BIGINT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    size BIGINT NOT NULL,
+    PRIMARY KEY (repo_id, path)
+  );
+  ALTER TABLE repos ADD COLUMN paths_at TEXT;
+  `,
 ];
