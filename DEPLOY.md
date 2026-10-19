@@ -14,6 +14,7 @@ identity provider / CI / CLI ─────────────────
 | Web image | ECS Fargate service | `frontend/Dockerfile` |
 | Database | RDS for PostgreSQL 14+ or Aurora PostgreSQL | `CRATON_DATABASE_URL`, `CRATON_DB_CA` |
 | Chunks | S3 bucket, versioning on | `CRATON_S3_BUCKET`, `CRATON_S3_REGION` |
+| Shared cache (optional) | ElastiCache for Redis OSS or Valkey, in the same VPC | `CRATON_REDIS_URL` |
 | Secrets | Secrets Manager / SSM, injected as environment | `CRATON_DATABASE_URL`, `CRATON_SECRET_KEY`, `EMAIL_API_KEY` |
 | Email | Resend or Postmark (a key) | `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM` |
 
@@ -59,6 +60,10 @@ Moving an existing SQLite-era installation: run `npm run migrate-sqlite` once ag
 
 A bucket in the same region as the API costs nothing for traffic between them.
 
+## 2b. A shared cache (optional, recommended from two API tasks up)
+
+Create an ElastiCache cluster (Redis OSS or Valkey, one node is enough; no persistence, no replicas needed), in the same VPC, reachable from the API's security group on 6379, with `maxmemory-policy allkeys-lru`. Set `CRATON_REDIS_URL=rediss://<endpoint>:6379` (`rediss://` when in-transit encryption is on). With it, rate limits are counted across all tasks, rendered raster tiles are shared between tasks and survive deploys, and anonymous visitors to the explore list are answered from a short copy. Without it everything still works, per task. If it goes away, the API keeps serving (`/v1/ready` shows `cache: degraded`).
+
 ## 3. The API service
 
 - Image from `backend/Dockerfile`; container port 4000; health check path `/v1/ready`.
@@ -72,6 +77,7 @@ A bucket in the same region as the API costs nothing for traffic between them.
   CRATON_TRUSTED_PROXIES=10.0.0.0/16                   # your VPC range: the web tasks may pass on a visitor's real address
   EMAIL_PROVIDER=resend  EMAIL_API_KEY=...  EMAIL_FROM="Craton <no-reply@craton.example.org>"
   ```
+- Metrics: set `CRATON_METRICS_TOKEN` and scrape `https://<api>/metrics` with that token (Prometheus, Grafana Agent, the CloudWatch agent with a Prometheus config). Alarms worth having: `craton_database_unavailable_total` rising, `craton_db_pool_connections{state="waiting"}` above zero for minutes, `craton_cache_up` at 0, the 5xx share of requests.
 - Any number of tasks. Background work is safe on several (OPERATING.md → Running several servers). Run maintenance (`recode`, `repack`, `gc`) as a one-off task, not inside the service.
 - Memory: 1 GB is a floor for a small installation; previews and tiles of large rasters are cached in memory, so size up with use.
 
