@@ -124,6 +124,10 @@ What is per server, and what to do about it:
 
 Every server runs the schema migrations when it starts, one at a time (a lock in the database), so start one, then the others, when upgrading; do not run an old and a new version together while a migration is pending.
 
+## When the database is away
+
+A restart, a failover or a dropped network does not need anyone's attention: connections that were cut are replaced the next time one is needed, and while the database cannot be reached the API answers 503 with `Retry-After: 5` and the code `database_unavailable` (also when no connection is free in time, or a statement runs past `CRATON_DB_STATEMENT_TIMEOUT_MS`). `/v1/ready` reports 503 with the database check failed, so a load balancer takes the server out of rotation; `/v1/health` stays 200 because the process is fine. When the database is back the API answers again by itself (tested by stopping a real Postgres under a running API; a database recovering from a hard stop can take minutes to start accepting connections, and the API answers 503 until it does).
+
 ## Backups
 
 ```sh

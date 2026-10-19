@@ -16,6 +16,7 @@ import * as accounts from "../services/accounts.ts";
 import * as scim from "../services/scim.ts";
 import * as saml from "../services/saml.ts";
 import * as guards from "./guards.ts";
+import { isDatabaseUnavailable } from "../db/db.ts";
 import { addressInList } from "./ip.ts";
 import * as repos from "../services/repos.ts";
 import { datasetJsonLd } from "../services/dataset.ts";
@@ -198,6 +199,11 @@ export function createApp(ctx: Ctx) {
   app.onError((err, c) => {
     if (err instanceof scim.ScimError) return c.body(JSON.stringify(err), err.status as 400, { "content-type": "application/scim+json" });
     if (err instanceof ApiError) return c.json({ error: { code: err.code, message: err.message, details: err.details } }, err.status as 400);
+    if (isDatabaseUnavailable(err)) {
+      console.error(`database unavailable: ${(err as Error).message}`);
+      c.header("Retry-After", "5");
+      return c.json({ error: { code: "database_unavailable", message: "Craton can’t reach its database right now. Try again in a few seconds." } }, 503);
+    }
     console.error(err);
     return c.json({ error: { code: "internal", message: "Something went wrong on our side." } }, 500);
   });

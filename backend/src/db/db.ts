@@ -324,3 +324,16 @@ export async function openDb(target: string, opts: OpenOptions = {}): Promise<DB
   await migrate(db);
   return db;
 }
+
+/**
+ * Whether an error means the database could not be reached or was too busy, rather than that a request was wrong or the code failed: the
+ * server was restarted or failed over, the network dropped, no connection was free in time, or a statement ran past its limit. The API
+ * answers these with 503 and a Retry-After, so a client (and a load balancer) knows to try again soon.
+ */
+export function isDatabaseUnavailable(err: unknown): boolean {
+  const e = err as { code?: string; message?: string; errors?: { code?: string }[] } | null;
+  if (!e) return false;
+  const codes = [e.code, ...(e.errors ?? []).map((x) => x.code)].filter((c): c is string => typeof c === "string");
+  if (codes.some((c) => /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|08\w{3}|53300|57P0[123]|57014)$/.test(c))) return true;
+  return /Connection terminated|timeout exceeded when trying to connect|Client has encountered a connection error|the database system is (starting up|shutting down)/i.test(e.message ?? "");
+}
