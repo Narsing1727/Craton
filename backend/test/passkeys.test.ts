@@ -261,7 +261,7 @@ test("an account is limited to twenty passkeys, and the options request is rate 
   const have = (await call("GET", "/user/passkeys", "alice")).json.length as number;
   for (let n = have; n < 19; n++) await insert(n);
   // The hourly limit on asking to add one may already be spent by this file's earlier registrations; clear it to test the cap.
-  clear(`passkey-add:${uid}`);
+  await clear(`passkey-add:${uid}`);
   assert.equal((await call("POST", "/user/passkeys/options", "alice")).status, 200, "nineteen: one more is allowed");
   await insert(99);
   const over = await call("POST", "/user/passkeys/options", "alice");
@@ -271,9 +271,9 @@ test("an account is limited to twenty passkeys, and the options request is rate 
 
 test("asking to add passkeys is rate limited per account", async () => {
   const uid = (await ctx.db.get("SELECT id FROM owners WHERE handle = 'carol'") as { id: number }).id;
-  clear(`passkey-add:${uid}`);
+  await clear(`passkey-add:${uid}`);
   let last = 0;
   for (let i = 0; i < 25 && last !== 429; i++) last = (await call("POST", "/user/passkeys/options", "carol")).status;
   assert.equal(last, 429);
-  clear(`passkey-add:${uid}`);
+  await clear(`passkey-add:${uid}`);
 });

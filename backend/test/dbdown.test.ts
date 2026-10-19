@@ -46,8 +46,13 @@ test("an unreachable database is a 503 with Retry-After; the readiness check say
   const app = createApp({ db: flaky, store: new MemoryStore() });
 
   assert.equal((await app.request("/v1/repos")).status, 200);
+  assert.equal((await app.request("/v1/owners/nobody")).status, 404, "an unknown name is a 404 while the database is up");
   mode = "down";
-  const down = await app.request("/v1/repos");
+  // The explore list for a visitor was copied a moment ago, so it is still served while the database is away.
+  const stillThere = await app.request("/v1/repos");
+  assert.equal(stillThere.status, 200);
+  assert.equal(stillThere.headers.get("x-craton-cache"), "hit");
+  const down = await app.request("/v1/owners/nobody");
   assert.equal(down.status, 503);
   assert.equal(down.headers.get("retry-after"), "5");
   const body = (await down.json()) as { error: { code: string; message: string } };
@@ -59,10 +64,10 @@ test("an unreachable database is a 503 with Retry-After; the readiness check say
   assert.equal((await app.request("/v1/health")).status, 200, "the process itself is alive, which is what health means");
 
   mode = "bug";
-  const bug = await app.request("/v1/repos");
+  const bug = await app.request("/v1/owners/nobody");
   assert.equal(bug.status, 500);
   assert.equal(((await bug.json()) as { error: { code: string } }).error.code, "internal");
 
   mode = "up";
-  assert.equal((await app.request("/v1/repos")).status, 200, "and it recovers by itself");
+  assert.equal((await app.request("/v1/owners/nobody")).status, 404, "and it recovers by itself");
 });

@@ -25,6 +25,19 @@ services:
       timeout: 3s
       retries: 10
 
+  # A shared cache and counter store (rate limits across servers, rendered tiles, short-lived copies of public pages). Optional: without
+  # CRATON_REDIS_URL each server keeps its own in memory. Nothing in it needs to survive a restart.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # The whole stack in containers (`docker compose --profile stack up --build`): the same images you would run on AWS.
   api:
     profiles: ["stack"]
@@ -32,8 +45,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       CRATON_DATABASE_URL: postgres://craton:craton@db:5432/craton
+      CRATON_REDIS_URL: redis://redis:6379
       CRATON_WEB_URL: http://localhost:${CRATON_WEB_PORT:-3100}
       CRATON_PUBLIC_API_URL: http://localhost:${CRATON_API_PORT:-4000}
       CRATON_CORS_ORIGINS: http://localhost:${CRATON_WEB_PORT:-3100}

@@ -17,6 +17,9 @@ import * as scim from "../services/scim.ts";
 import * as saml from "../services/saml.ts";
 import * as guards from "./guards.ts";
 import { isDatabaseUnavailable } from "../db/db.ts";
+import { getCache } from "../cache/cache.ts";
+import * as metrics from "./metrics.ts";
+import { publicPageCache } from "./pagecache.ts";
 import { addressInList } from "./ip.ts";
 import * as repos from "../services/repos.ts";
 import { datasetJsonLd } from "../services/dataset.ts";
@@ -143,6 +146,7 @@ export function createApp(ctx: Ctx) {
     const started = performance.now();
     await next();
     const route = (c as unknown as { req: { routePath?: string } }).req.routePath;
+    metrics.observe(c.req.method, route && route !== "/*" ? route.replace(/^\/v1/, "") : "unmatched", c.res.status, (performance.now() - started) / 1000);
     // The audit log and each token's recent requests: from the request's shape and outcome, never its body.
     const who = c.get("user");
     if (who) {
@@ -190,9 +194,12 @@ export function createApp(ctx: Ctx) {
     }
     c.set("user", effective);
     // One budget per token (or per IP when anonymous) across the whole API.
-    const r = limits.take(user ? `tok:${user.tokenId}` : `ip:${clientIp(c)}`, config.limits.api);
+    const r = await limits.take(user ? `tok:${user.tokenId}` : `ip:${clientIp(c)}`, config.limits.api);
     for (const [k, v] of Object.entries(limits.headersFor(r))) c.header(k, v);
-    if (!r.allowed) return c.json({ error: { code: "rate_limited", message: "Too many requests. Slow down and try again shortly." } }, 429);
+    if (!r.allowed) {
+      metrics.counters.rateLimited++;
+      return c.json({ error: { code: "rate_limited", message: "Too many requests. Slow down and try again shortly." } }, 429);
+    }
     await next();
   });
 
@@ -200,6 +207,7 @@ export function createApp(ctx: Ctx) {
     if (err instanceof scim.ScimError) return c.body(JSON.stringify(err), err.status as 400, { "content-type": "application/scim+json" });
     if (err instanceof ApiError) return c.json({ error: { code: err.code, message: err.message, details: err.details } }, err.status as 400);
     if (isDatabaseUnavailable(err)) {
+      metrics.counters.databaseUnavailable++;
       console.error(`database unavailable: ${(err as Error).message}`);
       c.header("Retry-After", "5");
       return c.json({ error: { code: "database_unavailable", message: "Craton can’t reach its database right now. Try again in a few seconds." } }, 503);
@@ -237,7 +245,7 @@ export function createApp(ctx: Ctx) {
     if (idemKey.length > 255) return c.json({ error: { code: "bad_request", message: "Idempotency-Key is at most 255 characters." } }, 400);
     const actor = c.get("user") ? `tok:${c.get("user")!.tokenId}` : `ip:${clientIp(c)}`;
     const key = idempotency.keyFor(actor, c.req.method, new URL(c.req.url).pathname, idemKey);
-    const cached = idempotency.get(key);
+    const cached = await idempotency.get(key);
     if (cached) {
       for (const [k, v] of cached.headers) c.header(k, v);
       c.header("Idempotency-Replayed", "true");
@@ -251,13 +259,14 @@ export function createApp(ctx: Ctx) {
       const body = await c.res.clone().text();
       const headers: [string, string][] = [];
       c.res.headers.forEach((v, k) => k.toLowerCase() !== "set-cookie" && headers.push([k, v]));
-      idempotency.set(key, c.res.status, headers, body);
+      await idempotency.set(key, c.res.status, headers, body);
     }
   });
 
-  function limit(c: Context<Env>, key: string, w: { max: number; windowMs: number }, message: string) {
-    const r = limits.take(key, w);
+  async function limit(c: Context<Env>, key: string, w: { max: number; windowMs: number }, message: string) {
+    const r = await limits.take(key, w);
     if (!r.allowed) {
+      metrics.counters.rateLimited++;
       for (const [k, v] of Object.entries(limits.headersFor(r))) c.header(k, v);
       throw new ApiError(429, "rate_limited", message);
     }
@@ -331,6 +340,11 @@ export function createApp(ctx: Ctx) {
   };
 
   const v1 = new Hono<Env>();
+  // The pages everyone asks for and nobody signed in needs: a few seconds' copy, shared between servers (pagecache.ts).
+  if (config.pageCacheSeconds > 0) {
+    v1.use("/repos", publicPageCache(config.pageCacheSeconds));
+    v1.use("/trending", publicPageCache(config.pageCacheSeconds));
+  }
 
   /** Who is asking, as the audit log records them. */
   const secretActor = (c: Context<Env>) => {
@@ -374,7 +388,10 @@ export function createApp(ctx: Ctx) {
     } catch (err) {
       checks.store = `failed: ${(err as Error).message}`;
     }
-    const body = { ready: Object.values(checks).every((v) => v === "ok"), checks, ms: Math.round(performance.now() - started) };
+    // The shared cache is a speed-up: if it is away the server is slower, not unready, so it is reported but does not count.
+    const ready = Object.values(checks).every((v) => v === "ok");
+    checks.cache = await getCache().status();
+    const body = { ready, checks, ms: Math.round(performance.now() - started) };
     lastReady = { at: Date.now(), body };
     return c.json(body, body.ready ? 200 : 503);
   });
@@ -391,7 +408,7 @@ export function createApp(ctx: Ctx) {
 
   // ── Accounts ─────────────────────────────────────────────────────────────
   v1.post("/auth/signup", async (c) => {
-    limit(c, `signup:${clientIp(c)}`, config.limits.signup, "Too many new accounts from this network. Try again in an hour.");
+    await limit(c, `signup:${clientIp(c)}`, config.limits.signup, "Too many new accounts from this network. Try again in an hour.");
     const b = await body<{ username: string; email: string; password: string; name?: string }>(c);
     const user = await accounts.createUser(ctx, { handle: b.username, email: b.email, password: b.password, name: b.name });
     const session = await accounts.issueToken(ctx, user.id, { kind: "session", note: "web session", expiresInDays: 30, client: clientInfo(c) });
@@ -401,7 +418,7 @@ export function createApp(ctx: Ctx) {
   v1.post("/auth/login", async (c) => {
     const b = await body<{ login: string; password: string }>(c);
     const login = (b.login ?? "").trim().toLowerCase();
-    limit(c, `login:${clientIp(c)}`, { ...config.limits.login, max: config.limits.login.max * 5 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    await limit(c, `login:${clientIp(c)}`, { ...config.limits.login, max: config.limits.login.max * 5 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     // Lock one account after repeated failures, whoever is trying.
     if (await guards.count(ctx.db, `fail:${login}`, config.limits.lockout) >= config.limits.lockout.max) {
       throw new ApiError(429, "account_locked", "Too many failed sign-ins for this account. Wait 15 minutes, or reset your password.");
@@ -441,7 +458,7 @@ export function createApp(ctx: Ctx) {
 
   v1.post("/auth/login/2fa", async (c) => {
     const b = await body<{ ticket: string; code: string }>(c);
-    limit(c, `mfa-ip:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
+    await limit(c, `mfa-ip:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
     const who = await twofactor.ticketUser(ctx, b.ticket);
     const budget = { max: 10, windowMs: 15 * 60_000 };
     // Across tickets, one account only gets so many code guesses.
@@ -464,7 +481,7 @@ export function createApp(ctx: Ctx) {
   // Step 1: a one-time state and PKCE challenge are stored, and the web app sends the browser to `url`.
   // With a signed-in session and { link: true } the result is added to that account instead of signing anyone in.
   v1.post("/auth/:provider{google|github}/start", async (c) => {
-    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    await limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     const b = await body<{ next?: string; link?: boolean }>(c);
     const linkUserId = b.link ? requireSession(c).id : null;
     return c.json(await oauth.startOAuth(ctx, providerOf(c), { next: b.next, linkUserId }));
@@ -472,7 +489,7 @@ export function createApp(ctx: Ctx) {
   // Step 2: the provider sent the browser back with a code. Answers one of: a session, a two-step ticket, "choose a
   // username" (first time here), or { linked } when the request began in Settings.
   v1.post("/auth/:provider{google|github}/callback", async (c) => {
-    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    await limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     const provider = providerOf(c);
     const label = oauth.providerName(provider);
     const b = await body<{ code?: string; state?: string }>(c);
@@ -511,14 +528,14 @@ export function createApp(ctx: Ctx) {
   });
   // What the "choose a username" page shows for a ticket.
   v1.post("/auth/:provider{google|github}/pending", async (c) => {
-    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
+    await limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
     const b = await body<{ ticket?: string }>(c);
     const p = await oauth.readPending(ctx, b.ticket ?? "", providerOf(c));
     return c.json({ email: p.email, name: p.name, suggestion: await oauth.suggestHandle(ctx, p.email, p.name) });
   });
   // Step 3 (first time only): the username chosen, then the account exists and the session starts.
   v1.post("/auth/:provider{google|github}/complete", async (c) => {
-    limit(c, `signup:${clientIp(c)}`, config.limits.signup, "Too many new accounts from this network. Try again in an hour.");
+    await limit(c, `signup:${clientIp(c)}`, config.limits.signup, "Too many new accounts from this network. Try again in an hour.");
     const provider = providerOf(c);
     const b = await body<{ ticket?: string; username?: string; name?: string }>(c);
     const p = await oauth.readPending(ctx, b.ticket ?? "", provider);
@@ -533,7 +550,7 @@ export function createApp(ctx: Ctx) {
   // The person types their work email; if an organization has verified that domain and set up SSO, the web app is sent to
   // that organization's provider. The answer comes back to the one callback address every organization registers.
   v1.post("/auth/sso/start", async (c) => {
-    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    await limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     const b = await body<{ email?: string; next?: string }>(c);
     // The address's domain says whose provider, and that organization chose the protocol.
     const email = String(b.email ?? "").trim();
@@ -565,13 +582,13 @@ export function createApp(ctx: Ctx) {
     return c.json({ needsUsername: true, ticket, email: g.email, name: g.name, suggestion: await oauth.suggestHandle(ctx, g.email, g.name), next: done.next });
   };
   v1.post("/auth/sso/callback", async (c) => {
-    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    await limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     const b = await body<{ code?: string; state?: string }>(c);
     return ssoArrival(c, await sso.finish(ctx, { code: b.code ?? "", state: b.state ?? "" }));
   });
   // SAML: the identity provider posts its answer to the web app's /auth/saml/acs, which passes it here.
   v1.post("/auth/saml/acs", async (c) => {
-    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    await limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     const b = await body<{ samlResponse?: string; relayState?: string }>(c);
     return ssoArrival(c, await saml.finish(ctx, { samlResponse: b.samlResponse ?? "", relayState: b.relayState ?? "" }));
   });
@@ -581,7 +598,7 @@ export function createApp(ctx: Ctx) {
   v1.get("/orgs/:org/saml", async (c) => (requireScope(c, "admin:org"), c.json(await saml.getConfig(ctx, c.req.param("org"), requireUser(c).id))));
   v1.put("/orgs/:org/saml", async (c) => {
     requireScope(c, "admin:org");
-    limit(c, `sso-config:${requireUser(c).id}`, { max: 20, windowMs: 10 * 60_000 }, "Too many changes. Wait a few minutes.");
+    await limit(c, `sso-config:${requireUser(c).id}`, { max: 20, windowMs: 10 * 60_000 }, "Too many changes. Wait a few minutes.");
     return c.json(await saml.configure(ctx, c.req.param("org"), requireUser(c).id, await body(c)));
   });
   v1.patch("/orgs/:org/saml", async (c) => {
@@ -595,13 +612,13 @@ export function createApp(ctx: Ctx) {
     return c.body(null, 204);
   });
   v1.post("/auth/sso/pending", async (c) => {
-    limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
+    await limit(c, `oauth:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
     const b = await body<{ ticket?: string }>(c);
     const p = await oauth.readPending(ctx, b.ticket ?? "", "sso");
     return c.json({ email: p.email, name: p.name, suggestion: await oauth.suggestHandle(ctx, p.email, p.name) });
   });
   v1.post("/auth/sso/complete", async (c) => {
-    limit(c, `signup:${clientIp(c)}`, config.limits.signup, "Too many new accounts from this network. Try again in an hour.");
+    await limit(c, `signup:${clientIp(c)}`, config.limits.signup, "Too many new accounts from this network. Try again in an hour.");
     const b = await body<{ ticket?: string; username?: string; name?: string }>(c);
     const p = await oauth.readPending(ctx, b.ticket ?? "", "sso");
     const user = await accounts.createOAuthUser(ctx, { handle: b.username ?? "", email: p.email, name: b.name || p.name });
@@ -617,7 +634,7 @@ export function createApp(ctx: Ctx) {
   v1.get("/orgs/:org/sso", async (c) => (requireScope(c, "admin:org"), c.json(await sso.getConfig(ctx, c.req.param("org"), requireUser(c).id))));
   v1.put("/orgs/:org/sso", async (c) => {
     requireScope(c, "admin:org");
-    limit(c, `sso-config:${requireUser(c).id}`, { max: 20, windowMs: 10 * 60_000 }, "Too many changes. Wait a few minutes.");
+    await limit(c, `sso-config:${requireUser(c).id}`, { max: 20, windowMs: 10 * 60_000 }, "Too many changes. Wait a few minutes.");
     return c.json(await sso.configure(ctx, c.req.param("org"), requireUser(c).id, await body(c)));
   });
   v1.patch("/orgs/:org/sso", async (c) => {
@@ -635,7 +652,7 @@ export function createApp(ctx: Ctx) {
   v1.get("/orgs/:org/scim", async (c) => (requireScope(c, "admin:org"), c.json(await scim.overview(ctx, c.req.param("org"), requireUser(c).id))));
   v1.post("/orgs/:org/scim/tokens", async (c) => {
     requireScope(c, "admin:org");
-    limit(c, `scim-token:${requireUser(c).id}`, { max: 10, windowMs: 10 * 60_000 }, "Too many tokens made just now. Wait a few minutes.");
+    await limit(c, `scim-token:${requireUser(c).id}`, { max: 10, windowMs: 10 * 60_000 }, "Too many tokens made just now. Wait a few minutes.");
     const b = await body<{ note?: string }>(c);
     return c.json(await scim.createToken(ctx, c.req.param("org"), requireUser(c).id, b.note), 201);
   });
@@ -648,7 +665,7 @@ export function createApp(ctx: Ctx) {
   const scimJson = (c: Context<Env>, data: unknown, status = 200) => c.body(JSON.stringify(data), status as 200, { "content-type": "application/scim+json" });
   const scimOrg = async (c: Context<Env>) => {
     const org = await scim.authenticate(ctx, c.req.param("org") ?? "", c.req.header("authorization")?.replace(/^Bearer /i, "") ?? null);
-    const r = limits.take(`scim:${org.tokenId}`, { max: 1200, windowMs: 60_000 });
+    const r = await limits.take(`scim:${org.tokenId}`, { max: 1200, windowMs: 60_000 });
     if (!r.allowed) throw new scim.ScimError(429, "Too many requests. Slow down and try again shortly.");
     return org;
   };
@@ -676,11 +693,11 @@ export function createApp(ctx: Ctx) {
   // ── Passkeys ───────────────────────────────────────────────────────────
   // Sign in: the browser asks the device for any passkey it holds for this site; no username is needed first.
   v1.post("/auth/passkey/options", async (c) => {
-    limit(c, `passkey:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    await limit(c, `passkey:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     return c.json(await passkeys.loginOptions(ctx));
   });
   v1.post("/auth/passkey/login", async (c) => {
-    limit(c, `passkey:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
+    await limit(c, `passkey:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many sign-in attempts from this network. Wait a few minutes.");
     const proof = await passkeys.finishLogin(ctx, await body(c));
     if (proof.rolledBack) {
       await securitylog.record(ctx, proof.userId, "passkey_rollback", { detail: "signature counter went backwards", ...clientInfo(c) });
@@ -695,7 +712,7 @@ export function createApp(ctx: Ctx) {
   // Manage: web sessions only.
   v1.post("/user/passkeys/options", async (c) => {
     const u = requireSession(c);
-    limit(c, `passkey-add:${u.id}`, { max: 20, windowMs: 60 * 60_000 }, "Too many attempts. Try again in an hour.");
+    await limit(c, `passkey-add:${u.id}`, { max: 20, windowMs: 60 * 60_000 }, "Too many attempts. Try again in an hour.");
     return c.json(await passkeys.registrationOptions(ctx, { id: u.id, handle: u.handle, name: u.name }));
   });
   v1.post("/user/passkeys", async (c) => {
@@ -730,7 +747,7 @@ export function createApp(ctx: Ctx) {
   // Always 202, whether or not the account exists, so this can't be used to find accounts.
   v1.post("/auth/forgot", async (c) => {
     const b = await body<{ login: string }>(c);
-    limit(c, `reset:${clientIp(c)}:${(b.login ?? "").toLowerCase()}`, config.limits.reset, "Too many reset requests. Check your inbox, or try again in an hour.");
+    await limit(c, `reset:${clientIp(c)}:${(b.login ?? "").toLowerCase()}`, config.limits.reset, "Too many reset requests. Check your inbox, or try again in an hour.");
     const reset = await accounts.requestPasswordReset(ctx, b.login ?? "");
     if (reset) {
       const who = await accounts.findUserId(ctx, reset.handle);
@@ -788,7 +805,7 @@ export function createApp(ctx: Ctx) {
   });
   // The weekly email's one-click unsubscribe: no sign-in, the link itself is the proof (a keyed signature of the account).
   v1.post("/auth/digest/unsubscribe", async (c) => {
-    limit(c, `unsub:${clientIp(c)}`, { max: 30, windowMs: 15 * 60_000 }, "Too many attempts. Try again in a few minutes.");
+    await limit(c, `unsub:${clientIp(c)}`, { max: 30, windowMs: 15 * 60_000 }, "Too many attempts. Try again in a few minutes.");
     const b = await body<{ token?: string }>(c);
     return c.json({ handle: await digest.unsubscribe(ctx, b.token), digest: "off" });
   });
@@ -831,7 +848,7 @@ export function createApp(ctx: Ctx) {
   v1.post("/user/verify/resend", async (c) => {
     const u = requireSession(c);
     if (u.email_verified_at) return c.json({ ok: true, alreadyVerified: true });
-    limit(c, `verify:${u.id}`, { max: 3, windowMs: 60 * 60_000 }, "We've sent a few already. Check spam, or try again in an hour.");
+    await limit(c, `verify:${u.id}`, { max: 3, windowMs: 60 * 60_000 }, "We've sent a few already. Check spam, or try again in an hour.");
     void email.sendVerifyEmail(u.email, u.name, `${config.webUrl}/verify-email?token=${await accounts.createVerifyToken(ctx, u.id)}`);
     return c.json({ ok: true }, 202);
   });
@@ -885,12 +902,12 @@ export function createApp(ctx: Ctx) {
   v1.get("/user/security-log", async (c) => c.json(await securitylog.list(ctx, requireSession(c).id, Number(c.req.query("limit") ?? 50) || 50)));
   v1.post("/user/2fa/setup", async (c) => {
     const u = requireSession(c);
-    mfaBudget(c, u.id);
+    await mfaBudget(c, u.id);
     return c.json(await twofactor.beginSetup(ctx, u, (await body<{ password: string }>(c)).password));
   });
   v1.post("/user/2fa/enable", async (c) => {
     const u = requireSession(c);
-    mfaBudget(c, u.id);
+    await mfaBudget(c, u.id);
     const done = await twofactor.enable(ctx, u, (await body<{ code: string }>(c)).code);
     await securitylog.record(ctx, u.id, "two_factor_enabled", clientInfo(c));
     void email.sendTwoFactorChangedEmail(u.email, u.handle, true, `${config.webUrl}/settings/security`);
@@ -898,7 +915,7 @@ export function createApp(ctx: Ctx) {
   });
   v1.post("/user/2fa/disable", async (c) => {
     const u = requireSession(c);
-    mfaBudget(c, u.id);
+    await mfaBudget(c, u.id);
     const b = await body<{ password: string; code: string }>(c);
     await twofactor.disable(ctx, u, b.password, b.code);
     await securitylog.record(ctx, u.id, "two_factor_disabled", clientInfo(c));
@@ -907,7 +924,7 @@ export function createApp(ctx: Ctx) {
   });
   v1.post("/user/2fa/recovery-codes", async (c) => {
     const u = requireSession(c);
-    mfaBudget(c, u.id);
+    await mfaBudget(c, u.id);
     const b = await body<{ password: string; code: string }>(c);
     const codes = await twofactor.regenerateRecoveryCodes(ctx, u, b.password, b.code);
     await securitylog.record(ctx, u.id, "recovery_codes_regenerated", clientInfo(c));
@@ -924,7 +941,7 @@ export function createApp(ctx: Ctx) {
   // The data export's other half: the files themselves, the default branch of every repository the person owns, as one ZIP.
   v1.get("/user/export/repositories", async (c) => {
     const me = requireSession(c);
-    limit(c, `export-bundle:${me.id}`, { max: 5, windowMs: 60 * 60_000 }, "That export was requested a few times just now. Try again in an hour.");
+    await limit(c, `export-bundle:${me.id}`, { max: 5, windowMs: 60 * 60_000 }, "That export was requested a few times just now. Try again in an hour.");
     const mine = (await repos.listRepos(ctx, me.id, { owner: me.handle })).filter((r) => r.owner === me.handle);
     const plan = await archive.planAccountBundle(ctx, mine, me.handle);
     return c.body(archive.archiveStream(ctx, plan), 200, {
@@ -1049,7 +1066,7 @@ export function createApp(ctx: Ctx) {
     const org = await ctx.db.get("SELECT id, handle FROM owners WHERE handle = ? AND kind = 'org'", c.req.param("org").toLowerCase()) as { id: number; handle: string } | undefined;
     if (!org) throw new ApiError(404, "not_found", "Organization not found");
     if (await accounts.orgRole(ctx, org.id, u.id) !== "Owner") throw new ApiError(403, "forbidden", `Only owners of ${org.handle} can download all of its repositories.`);
-    limit(c, `export-bundle:${org.id}`, { max: 5, windowMs: 60 * 60_000 }, "That export was requested a few times just now. Try again in an hour.");
+    await limit(c, `export-bundle:${org.id}`, { max: 5, windowMs: 60 * 60_000 }, "That export was requested a few times just now. Try again in an hour.");
     const plan = await archive.planAccountBundle(ctx, (await repos.listRepos(ctx, u.id, { owner: org.handle })).filter((r) => r.owner === org.handle), org.handle);
     return c.body(archive.archiveStream(ctx, plan), 200, {
       "content-type": "application/zip",
@@ -1092,7 +1109,7 @@ export function createApp(ctx: Ctx) {
   });
   v1.post("/orgs/:org/domains/:domain/verify", async (c) => {
     requireScope(c, "admin:org");
-    limit(c, `domain-verify:${requireUser(c).id}`, { max: 30, windowMs: 10 * 60_000 }, "Too many checks. DNS changes take a few minutes: wait, then try again.");
+    await limit(c, `domain-verify:${requireUser(c).id}`, { max: 30, windowMs: 10 * 60_000 }, "Too many checks. DNS changes take a few minutes: wait, then try again.");
     return c.json(await domains.verifyDomain(ctx, c.req.param("org"), requireUser(c).id, c.req.param("domain")));
   });
   v1.patch("/orgs/:org/domains/:domain", async (c) => {
@@ -1868,7 +1885,7 @@ export function createApp(ctx: Ctx) {
   v1.post("/repos/:owner/:repo/invites", async (c) => {
     const me = requireUser(c);
     accounts.requireVerified(me, "invite people");
-    limit(c, `invite:${me.id}`, { max: 20, windowMs: 60 * 60_000 }, "You have sent a lot of invitations this hour. Try again later.");
+    await limit(c, `invite:${me.id}`, { max: 20, windowMs: 60 * 60_000 }, "You have sent a lot of invitations this hour. Try again later.");
     const repo = await repoFor(c, "admin");
     const b = await body<{ email?: string; role?: string }>(c);
     const known = await invites.accountWithEmail(ctx, String(b.email ?? "").trim());
@@ -1887,12 +1904,12 @@ export function createApp(ctx: Ctx) {
     return c.body(null, 204);
   });
   v1.get("/invites/:token", async (c) => {
-    limit(c, `invite-peek:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
+    await limit(c, `invite-peek:${clientIp(c)}`, { max: 60, windowMs: 15 * 60_000 }, "Too many attempts from this network. Wait a few minutes.");
     return c.json(await invites.previewInvite(ctx, c.req.param("token")));
   });
   v1.post("/invites/accept", async (c) => {
     const me = requireSession(c);
-    limit(c, `invite-accept:${me.id}`, { max: 20, windowMs: 15 * 60_000 }, "Too many attempts. Wait a few minutes.");
+    await limit(c, `invite-accept:${me.id}`, { max: 20, windowMs: 15 * 60_000 }, "Too many attempts. Wait a few minutes.");
     return c.json(await invites.acceptInvite(ctx, (await body<{ token?: string }>(c)).token, me));
   });
   // Ask a specific person to review a pull request (and take the request back).
@@ -2117,6 +2134,12 @@ export function createApp(ctx: Ctx) {
   v1.get("/openapi.json", (c) => c.json(buildOpenApi(v1.routes.map((r) => ({ method: r.method, path: r.path })), { version: "1", server: new URL(c.req.url).origin })));
 
   app.route("/v1", v1);
+  // Prometheus scrape endpoint: off unless CRATON_METRICS_TOKEN is set, and then only for a caller that sends it.
+  app.get("/metrics", async (c) => {
+    if (!config.metrics.token) return c.json({ error: { code: "not_found", message: "No route for GET /metrics" } }, 404);
+    if (!metrics.authorized(c.req.header("authorization"), config.metrics.token)) return c.json({ error: { code: "unauthenticated", message: "Send the metrics token as a Bearer token." } }, 401);
+    return c.body(metrics.render({ version: config.version, database: { kind: ctx.db.kind, pool: ctx.db.stats() }, cache: { kind: getCache().kind, status: await getCache().status() } }), 200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" });
+  });
   return app;
 }
 

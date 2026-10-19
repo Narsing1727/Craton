@@ -60,6 +60,10 @@ export const config = {
   },
   /** The address identity providers reach this API at (for the SCIM base URL shown in settings). */
   publicApiUrl: (env.CRATON_PUBLIC_API_URL ?? `http://localhost:${Number(env.PORT ?? 4000)}`).replace(/\/+$/, ""),
+  /** Serving /metrics (Prometheus text format) needs this token as a Bearer token; empty leaves the endpoint off. */
+  metrics: { token: env.CRATON_METRICS_TOKEN ?? "" },
+  /** How many seconds an anonymous visitor's copy of the explore list and trending may be reused (0 turns it off). */
+  pageCacheSeconds: Math.max(0, Number(env.CRATON_PAGE_CACHE_SECONDS ?? 10) || 0),
   /** Where the web app lives, for links the API writes (password reset). */
   webUrl: (env.CRATON_WEB_URL ?? "http://localhost:3100").replace(/\/+$/, ""),
   /** Origins allowed to call the API from a browser. */

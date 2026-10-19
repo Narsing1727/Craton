@@ -24,6 +24,11 @@ Both are plain Node processes. The database is PostgreSQL. Unless R2 is configur
 | `CRATON_PUBLIC_API_URL` | `http://localhost:<PORT>` | The address identity providers reach the API at; it is the start of the SCIM base URL shown in organization settings (`<this>/v1/scim/v2/<org>`). |
 | `CRATON_DB_STATEMENT_TIMEOUT_MS` | `120000` | A database statement that runs longer than this is cancelled by the server (0 turns it off). |
 | `CRATON_DB_SLOW_MS` | `0` (off) | Log every database statement that takes at least this many milliseconds, with its text. Turn it on (for example `200`) to see what a large installation is slow at. |
+| `CRATON_REDIS_URL` | none | A Redis (or Valkey, or AWS ElastiCache) address such as `redis://host:6379`, or `rediss://` with TLS. Shared by all servers for rate limits, rendered tiles and previews, idempotency keys and the short-lived copy of public pages. Optional: without it each server keeps these in its own memory. See "The shared cache" below. |
+| `CRATON_REDIS_PREFIX` | `craton:` | Put in front of every key, so several installations can share one Redis. |
+| `CRATON_PAGE_CACHE_SECONDS` | `10` | How long the explore list and trending, for a visitor who is not signed in, may be answered from a copy (0 turns it off). |
+| `CRATON_METRICS_TOKEN` | none | Turns on `GET /metrics` (Prometheus text format) for a caller that sends this token as a Bearer token; without it the endpoint does not exist. |
+| `CRATON_TEST_REDIS` | none | For `npm test` in `backend` only: a Redis address (for example the one from `docker compose up -d redis`, `redis://localhost:6380`). Each test process then uses its own key prefix. |
 | `CRATON_TEST_PG` | none | For `npm test` in `backend` only: a Postgres address (for example the container from `docker compose up -d db`). Every test database then gets its own schema on that server, dropped when it closes, so the suite runs against the real driver and server instead of the in-process database. |
 | `CRATON_WEB_URL` | `http://localhost:3100` | Where the web app lives, for links the API writes into emails. |
 | `CRATON_CORS_ORIGINS` | `http://localhost:3100` | Comma-separated origins allowed to call the API from a browser. |
@@ -123,6 +128,21 @@ What is per server, and what to do about it:
 - the development email outbox is a folder on the machine; configure a real email provider for more than one server.
 
 Every server runs the schema migrations when it starts, one at a time (a lock in the database), so start one, then the others, when upgrading; do not run an old and a new version together while a migration is pending.
+
+## The shared cache
+
+Redis is optional and is only ever a speed-up: nothing that must be right (accounts, tokens, repositories, who may read what) is kept in it, and if it stops answering the API carries on, using what it has in its own memory and leaving Redis alone for a few seconds at a time (`/v1/ready` shows `cache: degraded: ...` and does not fail). What it holds when it is there:
+
+- **Rate limits**, counted across every server (a sliding window per client, token or login name). Without Redis each server counts alone, so a limit of 60 a minute is 60 a minute per server. The failed-password lockout does not depend on Redis: it is in the database.
+- **Rendered tiles and previews** of rasters: the picture of a given stored file never changes, so one server's work is reused by all of them and survives a restart. Give the Redis a memory limit and an eviction policy (`maxmemory 256mb`, `maxmemory-policy allkeys-lru`; the `docker-compose.yml` does).
+- **Idempotency keys**, so a retried request that reaches another server still gets the first answer.
+- **The explore list and trending for visitors who are not signed in**, for `CRATON_PAGE_CACHE_SECONDS`: a burst of visitors costs the database one query. Only requests with no credentials at all are served from it, so nothing personal is stored. It also keeps those two pages answering during a short database outage.
+
+On AWS use ElastiCache (Redis OSS or Valkey), in the same VPC, a single node or a replica pair; no persistence is needed.
+
+## Watching a server
+
+Set `CRATON_METRICS_TOKEN` and scrape `/metrics` (at the root of the API address, not under `/v1`) with `Authorization: Bearer <token>`: request counts by route and status, request latency histograms by route, requests refused for rate, requests answered 503 for a missing database, public page copies served, the database connection pool (total, idle, waiting), whether the shared cache is answering, memory. Alert on: `craton_database_unavailable_total` rising, `craton_db_pool_connections{state="waiting"}` above zero for minutes, `craton_cache_up` at 0, and the 5xx share of `craton_http_requests_total`. `CRATON_DB_SLOW_MS` logs slow statements.
 
 ## When the database is away
 

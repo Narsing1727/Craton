@@ -10,6 +10,7 @@ import { readLasHeader } from "../checks/las.ts";
 import { getObject, resolveRef } from "../services/history.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { encodePng } from "./png.ts";
+import { getCache } from "../cache/cache.ts";
 import { describeTiff, openTiff, readGrid, readWindow, UnsupportedTiffError, type Grid, type OpenTiff } from "./tiff.ts";
 
 const cache = new Map<string, { at: number; value: unknown }>();
@@ -27,6 +28,22 @@ function cached<T>(key: string, make: () => Promise<T>): Promise<T> {
     }
     return value;
   });
+}
+
+/**
+ * Rendered images are a pure function of the stored data, so they never go stale and are worth sharing: with Redis configured, a tile
+ * one server drew is served by every server, and survives a restart. (With only in-process memory there is nothing to share, and the
+ * local copy above is the cache.)
+ */
+const sharedImages = () => (getCache().kind === "redis" ? getCache() : null);
+const IMAGE_TTL_SECONDS = 24 * 60 * 60;
+
+/** A picture with its numbers, as one value: the numbers (JSON) on the first line, then the PNG. */
+const packImage = (meta: object, png: Buffer) => Buffer.concat([Buffer.from(`${JSON.stringify(meta)}
+`), png]);
+function unpackImage<M>(bytes: Buffer): { meta: M; png: Buffer } {
+  const end = bytes.indexOf(10);
+  return { meta: JSON.parse(bytes.subarray(0, end).toString("utf8")) as M, png: bytes.subarray(end + 1) };
 }
 
 /** Bump when a preview's pixels or SVG would change for the same bytes, so cached copies are replaced. */
@@ -168,10 +185,23 @@ export async function rasterThumbnail(ctx: Ctx, repo: RepoRow, ref: string, path
   const found = await blobAt(ctx, repo, ref, path);
   if (!found) throw notFound(`File ${path}`);
   return cached(`thumb:${found.id}:${maxSide}`, async () => {
+    type Thumb = { width: number; height: number; min: number; max: number; sourceWidth: number; sourceHeight: number };
+    const shared = sharedImages();
+    const sharedKey = `thumb:v${RENDER_VERSION}:${found.id}:${maxSide}`;
+    const hit = shared ? await shared.get(sharedKey) : null;
+    if (hit) {
+      const { meta, png } = unpackImage<Thumb>(hit);
+      return { png, ...meta };
+    }
     const g = await gridOf(ctx, found.blob, found.id, maxSide);
     const shade = hillshade(g);
     const { min, max } = range(g.values);
-    return { png: encodePng(g.width, g.height, colorize(g, shade, min, max)), width: g.width, height: g.height, min, max, sourceWidth: g.sourceWidth, sourceHeight: g.sourceHeight };
+    const out = { png: encodePng(g.width, g.height, colorize(g, shade, min, max)), width: g.width, height: g.height, min, max, sourceWidth: g.sourceWidth, sourceHeight: g.sourceHeight };
+    if (shared) {
+      const { png, ...meta } = out;
+      void shared.set(sharedKey, packImage(meta, Buffer.from(png)), IMAGE_TTL_SECONDS);
+    }
+    return out;
   });
 }
 
@@ -224,6 +254,13 @@ export async function rasterTile(ctx: Ctx, repo: RepoRow, ref: string, path: str
     hit.at = Date.now();
     return hit.png;
   }
+  const shared = sharedImages();
+  const sharedKey = `tile:v${RENDER_VERSION}:${key}`;
+  const sharedHit = shared ? await shared.get(sharedKey) : null;
+  if (sharedHit) {
+    tileCache.set(key, { at: Date.now(), png: sharedHit });
+    return sharedHit;
+  }
   const info = await rasterTileInfo(ctx, repo, ref, path);
   if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y) || z < 0 || z > info.maxZoom || x < 0 || y < 0) throw notFound("Tile");
   const f = 2 ** (info.maxZoom - z); // image pixels per tile pixel
@@ -241,6 +278,7 @@ export async function rasterTile(ctx: Ctx, repo: RepoRow, ref: string, path: str
   for (let r = 0; r < outH; r++) cropped.set(rgba.subarray(((r + 1) * (outW + 2) + 1) * 4, ((r + 1) * (outW + 2) + 1 + outW) * 4), r * outW * 4);
   const png = encodePng(outW, outH, cropped);
   tileCache.set(key, { at: Date.now(), png });
+  if (shared) void shared.set(sharedKey, Buffer.from(png), IMAGE_TTL_SECONDS);
   if (tileCache.size > 600) tileCache.delete([...tileCache.entries()].sort((a, b) => a[1].at - b[1].at)[0][0]);
   return png;
 }

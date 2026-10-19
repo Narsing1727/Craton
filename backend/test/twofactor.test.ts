@@ -252,7 +252,7 @@ test("turning it off needs the password and a code, then sign-in is one step aga
   assert.ok(r.json.token && !r.json.mfaRequired);
   assert.equal((await ctx.db.get("SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id = (SELECT id FROM owners WHERE handle = 'rhea')") as { n: number }).n, 0, "recovery codes are deleted");
   assert.ok(sentEmails.some((m) => m.to === "rhea@example.org" && m.kind === "twofactor" && /turned off/.test(m.subject)));
-  limits.clear(`2fa:${(await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number }).id}`); // this test has used up the 10 tries per 15 minutes
+  await limits.clear(`2fa:${(await ctx.db.get("SELECT id FROM owners WHERE handle = 'rhea'") as { id: number }).id}`); // this test has used up the 10 tries per 15 minutes
   assert.equal((await call("POST", "/user/2fa/disable", "rhea", { password: PASSWORD, code: "123456" })).status, 400, "already off");
 });
 

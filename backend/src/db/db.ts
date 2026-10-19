@@ -67,6 +67,8 @@ export interface DB extends Queryable {
    */
   tx<T>(fn: (db: DB) => Promise<T>): Promise<T>;
   close(): Promise<void>;
+  /** Connections held, idle and waited for, on a server pool; null where there is no pool. */
+  stats(): { total: number; idle: number; waiting: number } | null;
 }
 
 /** `?` placeholders to $1, $2 ... (a `?` inside a quoted string is left alone). */
@@ -152,6 +154,17 @@ class PgDb extends PgQueries implements DB {
     this.pool = pool;
     this.onClose = onClose;
   }
+  stats() {
+    return { total: this.pool.totalCount, idle: this.pool.idleCount, waiting: this.pool.waitingCount };
+  }
+  // A read outside a transaction is safe to repeat: when the connection it used was cut (a failover, a restart), try again on a fresh one,
+  // twice, with a short wait, before telling the caller the database is away.
+  async get<T = any>(sql: string, ...params: Param[]) {
+    return retryRead(() => super.get<T>(sql, ...params));
+  }
+  async all<T = any>(sql: string, ...params: Param[]) {
+    return retryRead(() => super.all<T>(sql, ...params));
+  }
   async tx<T>(fn: (db: DB) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     const inside = new PgTx(client);
@@ -173,9 +186,24 @@ class PgDb extends PgQueries implements DB {
   }
 }
 
+/** Run a read again (after 150 ms, then 600 ms) if it failed because the connection was cut; any other failure goes straight back. */
+async function retryRead<T>(go: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await go();
+    } catch (err) {
+      if (attempt >= 2 || !isDatabaseUnavailable(err) || (err as { code?: string }).code === "57014") throw err; // a statement past its limit would only be slower again
+      await new Promise((r) => setTimeout(r, attempt === 0 ? 150 : 600));
+    }
+  }
+}
+
 /** The handle given to a transaction on one connection: its own `tx` just continues in the same transaction. */
 class PgTx extends PgQueries implements DB {
   readonly kind = "postgres" as const;
+  stats() {
+    return null;
+  }
   async tx<T>(fn: (db: DB) => Promise<T>): Promise<T> {
     return fn(this);
   }
@@ -210,6 +238,9 @@ class LiteQueries implements Queryable {
 
 class LiteDb extends LiteQueries implements DB {
   readonly kind = "pglite" as const;
+  stats() {
+    return null;
+  }
   private readonly lite: PGlite;
   constructor(lite: PGlite) {
     super(lite);
@@ -226,6 +257,9 @@ class LiteDb extends LiteQueries implements DB {
 
 class LiteTx extends LiteQueries implements DB {
   readonly kind = "pglite" as const;
+  stats() {
+    return null;
+  }
   async tx<T>(fn: (db: DB) => Promise<T>): Promise<T> {
     return fn(this);
   }
