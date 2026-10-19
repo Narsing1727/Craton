@@ -14,7 +14,10 @@ import { formatLength, type UnitSystem } from "@/lib/units";
 export function previewSrc(owner: string, repo: string, ref: string, path: string, opts: { base?: string; size?: number } = {}) {
   const q = new URLSearchParams({ ref });
   if (opts.base) q.set("base", opts.base);
-  if (opts.size) q.set("size", String(opts.size));
+  // Drawn at the same sharp size everywhere unless a page asks otherwise, so a file looks the same wherever it is opened.
+  q.set("size", String(opts.size ?? 1024));
+  // A picture for a pinned version is kept by the browser for a year; this number changes when the way pictures are drawn does.
+  q.set("v", "3");
   return `/${owner}/${repo}/render/${path.split("/").map(encodeURIComponent).join("/")}?${q}`;
 }
 
@@ -25,12 +28,14 @@ type Props = {
   className?: string;
   /** Width over height of the picture: the frame takes its shape, so there are no empty bands beside it. */
   aspect?: number;
+  /** The tallest the frame may be (a CSS length). */
+  tall?: string;
 };
 
 /** The frame of a picture of known shape: as wide as the space allows without running taller than most of a screen. */
-export const frameStyle = (aspect: number) => ({ aspectRatio: String(aspect), width: `min(100%, calc(72vh * ${aspect}))` });
+export const frameStyle = (aspect: number, tall = "72vh") => ({ aspectRatio: String(aspect), width: `min(100%, calc(${tall} * ${aspect}))` });
 
-export function DataPreview({ src, alt, error, className, aspect }: Props) {
+export function DataPreview({ src, alt, error, className, aspect, tall }: Props) {
   if (error) {
     return (
       <div className={cn("flex flex-col items-center justify-center gap-2 border border-border bg-muted/30 p-6 text-center text-xs text-muted-foreground", className)}>
@@ -41,7 +46,7 @@ export function DataPreview({ src, alt, error, className, aspect }: Props) {
     );
   }
   return (
-    <div className={cn("relative overflow-hidden border border-border bg-muted/30", aspect && "mx-auto", className)} style={aspect ? frameStyle(aspect) : undefined}>
+    <div className={cn("relative overflow-hidden border border-border bg-muted/30", aspect && "mx-auto", className)} style={aspect ? frameStyle(aspect, tall) : undefined}>
       {/* eslint-disable-next-line @next/next/no-img-element -- rendered per blob by the API, already sized */}
       <img src={src} alt={alt} loading="lazy" decoding="async" className="size-full object-contain" />
     </div>
@@ -119,10 +124,20 @@ export function previewCaption(meta: RenderMeta | null, units: UnitSystem = "met
 /** A changed file's preview: the change from the base version, or the file itself when it's new. */
 export function ChangePreview({ preview, className }: { preview: { path: string; src: string; meta: RenderMeta | null; error: string | null; isDiff: boolean; stats?: ApiRasterStats | null; text?: ApiTextDiff | null }; className?: string }) {
   const name = preview.path.split("/").pop();
+  // A raster's picture is drawn in its own shape, so the frame is too: no empty bands beside it.
+  const m = preview.meta;
+  const shape = m?.sourceWidth && m.sourceHeight ? m.sourceWidth / m.sourceHeight : m?.width && m.height ? m.width / m.height : undefined;
   if (preview.text) return <TextDiffView diff={preview.text} />;
   return (
     <figure className="flex flex-col gap-2">
-      <DataPreview src={preview.src} alt={preview.isDiff ? `Change in ${name}` : `Preview of ${name}`} error={preview.error} className={cn("aspect-video max-h-96 w-full", className)} />
+      <DataPreview
+        src={preview.src}
+        alt={preview.isDiff ? `Change in ${name}` : `Preview of ${name}`}
+        error={preview.error}
+        aspect={shape}
+        tall="24rem"
+        className={cn(shape ? "" : "aspect-video max-h-96 w-full", className)}
+      />
       {!preview.error && (
         <figcaption>
           {preview.isDiff ? <PreviewDiffLegend meta={preview.meta} /> : <span className="text-xs text-muted-foreground"><PreviewCaption meta={preview.meta} fallback="New file" /></span>}

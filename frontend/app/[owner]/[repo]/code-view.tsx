@@ -24,7 +24,7 @@ import type { Branch, Repo } from "@/lib/data";
 import FileTree, { type FileTreeItem } from "@/components/file-tree";
 
 /** `src` is the rendered preview; null in demo mode, where a schematic stands in. */
-export type CodeViewPreview = { path: string; caption: string; src: string | null; error: string | null };
+export type CodeViewPreview = { path: string; caption: string; src: string | null; error: string | null; /** Width over height of the picture, so its frame has no empty bands. */ aspect?: number };
 
 export type CodeViewProps = {
   owner: string;
@@ -217,7 +217,7 @@ export function CodeView({ owner, repo, data, branches, currentRef, head, items,
               <div>
                 <h2 className="mb-3 text-sm font-medium">Latest preview</h2>
                 {preview.src ? (
-                  <DataPreview src={preview.src} alt={`Hillshade of ${preview.path}`} error={preview.error} className="aspect-4/3" />
+                  <DataPreview src={preview.src} alt={`Hillshade of ${preview.path}`} error={preview.error} aspect={preview.aspect} className={preview.aspect ? undefined : "aspect-4/3"} />
                 ) : (
                   <MapPreview seed={5} className="aspect-video" />
                 )}

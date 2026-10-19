@@ -400,7 +400,8 @@ export type RenderMeta = {
 const renderUrl = (owner: string, repo: string, ref: string, path: string, opts: { base?: string; size?: number }) => {
   const q = new URLSearchParams();
   if (opts.base) q.set("base", opts.base);
-  if (opts.size) q.set("size", String(opts.size));
+  // The same sharp size as the pictures themselves (see previewSrc), so the numbers describe what is shown.
+  q.set("size", String(opts.size ?? 1024));
   return `${BASE}/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/render/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}${q.size ? `?${q}` : ""}`;
 };
 

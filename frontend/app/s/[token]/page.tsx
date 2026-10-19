@@ -84,7 +84,7 @@ function Snapshot({ token, view }: { token: string; view: ApiSharedView }) {
           <div className="border border-border bg-card p-3">
             {/* Drawn by the API from the file's bytes, already sized. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={`/s/${token}/render/${enc(previewable.path)}?size=640`} alt={`Preview of ${previewable.path}`} className="mx-auto max-h-96 w-auto max-w-full object-contain" loading="lazy" />
+            <img src={`/s/${token}/render/${enc(previewable.path)}?size=1024`} alt={`Preview of ${previewable.path}`} className="mx-auto max-h-96 w-auto max-w-full object-contain" loading="lazy" />
             <p className="mt-2 text-center font-mono text-xs text-muted-foreground">{previewable.path}</p>
           </div>
         </section>

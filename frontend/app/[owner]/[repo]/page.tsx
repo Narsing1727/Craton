@@ -98,10 +98,10 @@ export default async function RepoPage({
   if (raster) {
     const path = raster.path ?? raster.name;
     if (summary.live) {
-      const [info, rendered] = await Promise.all([loadFile(owner, repo, ref, path), renderMeta(owner, repo, ref, path, { size: 384 })]);
+      const [info, rendered] = await Promise.all([loadFile(owner, repo, ref, path), renderMeta(owner, repo, ref, path)]);
       const scale = info?.raster?.pixelScale;
       const caption = [scale ? `${scale[0]} m cells` : null, previewCaption(rendered.meta, units)?.split(" · ")[0]].filter(Boolean).join(" · ");
-      preview = { path, caption, src: previewSrc(owner, repo, ref, path, { size: 384 }), error: rendered.error };
+      preview = { path, caption, src: previewSrc(owner, repo, ref, path), error: rendered.error, aspect: rendered.meta?.sourceWidth && rendered.meta.sourceHeight ? rendered.meta.sourceWidth / rendered.meta.sourceHeight : undefined };
     } else preview = { path, caption: "2 m resolution", src: null, error: null };
   }
 
