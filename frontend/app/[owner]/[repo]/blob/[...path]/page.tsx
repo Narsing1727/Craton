@@ -18,8 +18,12 @@ import { RestoreButton } from "@/components/restore-button";
 import { TableDiffView } from "@/components/table-diff";
 import { parseCsv, sniffDelimiter } from "@/lib/csv";
 import { describeBBox, isBBox, osmLink } from "@/lib/geo";
-import { DataPreview, PreviewDiffLegend, previewCaption, previewSrc } from "@/components/data-preview";
-import { RasterExplorerToggle } from "@/components/raster-explorer";
+import { DataPreview, ElevationLegend, PreviewDiffLegend, frameStyle, previewCaption, previewSrc } from "@/components/data-preview";
+import { FileText } from "@/components/file-text";
+import { StructureViewer } from "@/components/structure-viewer";
+import { TableViewer } from "@/components/table-viewer";
+import { RasterViewer } from "@/components/raster-viewer";
+import { VectorViewer } from "@/components/vector-viewer";
 import { getUnits } from "@/lib/units-server";
 import { EmbedDialog } from "@/components/embed-dialog";
 import { DataDictionary } from "@/components/data-dictionary";
@@ -49,6 +53,7 @@ const demoMetadata = [
 ];
 
 const RAW_LIMIT = 16 * 1024 * 1024;
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const n = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 function isGeographic(epsg: number | null) {
@@ -175,7 +180,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   const downloadable = file ? file.size <= RAW_LIMIT : false;
   const rawHref = `${base}/raw/${path.map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
 
-  const kind = file?.raster ? "raster" : file?.vector ? "vector" : file?.table ? "table" : file?.pointCloud && !file.pointCloud.compressed ? "pointcloud" : file?.preview !== null && file ? "text" : file ? "binary" : "raster";
+  const kind = file?.raster ? "raster" : file?.vector ? "vector" : file?.table ? "table" : file?.pointCloud && !file.pointCloud.compressed ? "pointcloud" : file && (file.netcdf || file.hdf5) ? "structure" : file?.preview !== null && file ? "text" : file ? "binary" : "raster";
 
   // The map preview, drawn from this version's bytes; "change" compares it with the version
   // before the last commit that touched the file.
@@ -189,6 +194,10 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   // Writers can edit it here; the commit goes to the branch being viewed (when that is a branch, not a commit).
   const canEdit = summary.live && (summary.access === "write" || summary.access === "admin") && !/^[0-9a-f]{40,64}$/.test(ref);
   const dictEdit = canEdit ? { owner, repo, currentText: dictionaryText ?? "", branch: ref, head: ref === summary.repo.defaultBranch ? summary.head?.sha : undefined } : undefined;
+
+  // The whole of a text file or table that is small enough to read in the browser, for the viewers that need all of it (a tree, an outline, sorting).
+  const wholeLimit = kind === "table" ? 2 * 1024 * 1024 : 1024 * 1024;
+  const wholeText = summary.live && file && !(view === "change") && (kind === "text" || kind === "table") && file.size <= wholeLimit ? await api.raw(owner, repo, ref, filePath) : null;
 
   // A time-series plot of one column, optionally one line per station and the previous version dashed behind it.
   let seriesNow: Series[] = [], seriesBefore: Series[] = [], seriesNote: string | null = null;
@@ -241,7 +250,13 @@ export default async function FileViewPage({ params, searchParams }: { params: P
       }
     }
   }
-  const rendered = file && (kind === "raster" || kind === "vector" || kind === "pointcloud") ? await renderMeta(owner, repo, ref, filePath, { base: previewBase }) : null;
+  // A raster is drawn at up to 1024 pixels on its long side: its own detail for most files, rather than a small picture stretched to fit.
+  const drawSize = kind === "raster" ? 1024 : undefined;
+  const rendered = file && (kind === "raster" || kind === "vector" || kind === "pointcloud") ? await renderMeta(owner, repo, ref, filePath, { base: previewBase, size: drawSize }) : null;
+  // The picture's own shape, so its frame has no empty bands beside it.
+  const aspect = rendered?.meta?.sourceWidth && rendered.meta.sourceHeight ? rendered.meta.sourceWidth / rendered.meta.sourceHeight : rendered?.meta?.width && rendered.meta.height ? rendered.meta.width / rendered.meta.height : 16 / 10;
+  const vectorViewer = kind === "vector" && file && file.vector && rendered && !rendered.error && !showChange && !swipeMode && /\.shp$/i.test(filePath);
+  const viewer = kind === "raster" && file && rendered && !rendered.error && !showChange && !swipeMode && /\.tiff?$/i.test(filePath);
   const tableDiff = file && kind === "table" && showChange && previous ? await api.tableDiff(owner, repo, ref, filePath, previous) : null;
   const lineDiff = file && kind === "text" && showChange && previous ? await api.textDiff(owner, repo, ref, filePath, previous) : null;
   const previewHref = (v?: string) => `${base}/blob/${path.map(encodeURIComponent).join("/")}?${new URLSearchParams({ ...(ref !== summary.repo.defaultBranch ? { ref } : {}), ...(v ? { view: v } : {}) })}`;
@@ -249,7 +264,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   return (
     <>
       <h1 className="sr-only">{filePath} · {owner}/{repo}</h1>
-      <div className="mx-auto max-w-7xl px-4 py-6 md:px-6">
+      <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Breadcrumb>
             <BreadcrumbList>
@@ -346,16 +361,19 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                 <span className="font-mono">{filename}</span>
                 {dataType && <DataTypeBadge type={dataType} />}
                 <Badge variant="outline" className="ml-auto">
-                  {kind === "raster" ? "Raster" : kind === "vector" ? "Vector" : kind === "pointcloud" ? "Point cloud" : kind === "table" ? "Table" : kind === "text" ? "Text" : "Binary"}
+                  {kind === "raster" ? "Raster" : kind === "vector" ? "Vector" : kind === "pointcloud" ? "Point cloud" : kind === "table" ? "Table" : kind === "structure" ? (file?.netcdf ? "NetCDF" : "HDF5") : kind === "text" ? "Text" : "Binary"}
                 </Badge>
               </div>
               {kind === "pointcloud" && file ? (
                 <CardContent className="p-4">
-                  <DataPreview src={previewSrc(owner, repo, ref, filePath)} alt={`${filename} seen from above, coloured by elevation`} error={rendered?.error ?? null} className="aspect-16/10" />
-                  <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Ruler className="size-3.5" aria-hidden />
-                    {previewCaption(rendered?.meta ?? null, units) ?? "Seen from above, coloured by elevation"}
-                  </p>
+                  <DataPreview src={previewSrc(owner, repo, ref, filePath)} alt={`${filename} seen from above, coloured by elevation`} error={rendered?.error ?? null} aspect={rendered?.meta?.width && rendered.meta.height ? clamp(rendered.meta.width / rendered.meta.height, 0.4, 2.5) : 16 / 10} className={rendered?.error ? "aspect-16/10" : undefined} />
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1.5">
+                      <Ruler className="size-3.5" aria-hidden />
+                      {previewCaption(rendered?.meta ?? null, units) ?? "Seen from above, coloured by elevation"}
+                    </span>
+                    {rendered?.meta?.min !== undefined && rendered.meta.max !== undefined && !rendered.error && <ElevationLegend min={rendered.meta.min} max={rendered.meta.max} units={units} />}
+                  </div>
                 </CardContent>
               ) : kind === "raster" || kind === "vector" ? (
                 <CardContent className="p-4">
@@ -381,22 +399,40 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                       variants={{ enter: { opacity: 0 }, center: { opacity: 1 }, exit: { opacity: 0 } }}
                     >
                       {[
-                        <DataPreview
-                          key="single"
-                          src={previewSrc(owner, repo, ref, filePath, { base: previewBase })}
-                          alt={showChange ? `Change in ${filename} since ${previous?.slice(0, 7)}` : kind === "vector" ? `Geometry of ${filename}` : `Hillshade of ${filename}`}
-                          error={rendered.error}
-                          className="aspect-16/10"
-                        />,
+                        vectorViewer ? (
+                          <VectorViewer key="vector" owner={owner} repo={repo} reference={ref} path={filePath} base={previewSrc(owner, repo, ref, filePath)} alt={`Geometry of ${filename}`} geometry={file!.vector!.shapeType} epsg={file!.vector!.epsg} />
+                        ) : viewer ? (
+                          <RasterViewer
+                            key="viewer"
+                            owner={owner}
+                            repo={repo}
+                            reference={ref}
+                            path={filePath}
+                            base={previewSrc(owner, repo, ref, filePath, { size: drawSize })}
+                            alt={`Hillshade of ${filename}`}
+                            aspect={aspect}
+                            units={units}
+                            range={rendered.meta?.min !== undefined && rendered.meta.max !== undefined ? { min: rendered.meta.min, max: rendered.meta.max, width: rendered.meta.sourceWidth ?? rendered.meta.width ?? 0, height: rendered.meta.sourceHeight ?? rendered.meta.height ?? 0 } : null}
+                          />
+                        ) : (
+                          <DataPreview
+                            key="single"
+                            src={previewSrc(owner, repo, ref, filePath, { base: previewBase, size: drawSize })}
+                            alt={showChange ? `Change in ${filename} since ${previous?.slice(0, 7)}` : kind === "vector" ? `Geometry of ${filename}` : `Hillshade of ${filename}`}
+                            error={rendered.error}
+                            aspect={kind === "raster" ? aspect : undefined}
+                            className={kind === "raster" ? undefined : "aspect-16/10"}
+                          />
+                        ),
                         previous ? (
-                          <CompareSlider key="swipe" defaultValue={50} className="relative aspect-16/10 overflow-hidden border border-border bg-muted/30">
+                          <CompareSlider key="swipe" defaultValue={50} className="relative mx-auto overflow-hidden border border-border bg-muted/30" style={frameStyle(aspect)}>
                             <CompareSliderBefore>
                               {/* eslint-disable-next-line @next/next/no-img-element -- rendered per blob by the API, already sized */}
-                              <img src={previewSrc(owner, repo, previous, filePath)} alt={`${filename} at ${previous.slice(0, 7)}`} className="size-full object-contain" />
+                              <img src={previewSrc(owner, repo, previous, filePath, { size: drawSize })} alt={`${filename} at ${previous.slice(0, 7)}`} className="size-full object-contain" />
                             </CompareSliderBefore>
                             <CompareSliderAfter>
                               {/* eslint-disable-next-line @next/next/no-img-element -- rendered per blob by the API, already sized */}
-                              <img src={previewSrc(owner, repo, ref, filePath)} alt={`${filename} now`} className="size-full object-contain" />
+                              <img src={previewSrc(owner, repo, ref, filePath, { size: drawSize })} alt={`${filename} now`} className="size-full object-contain" />
                             </CompareSliderAfter>
                             <CompareSliderHandle />
                           </CompareSlider>
@@ -419,7 +455,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                     ) : (
                       <span className="flex items-center gap-1.5">
                         <Ruler className="size-3.5" aria-hidden />
-                        {file ? (previewCaption(rendered?.meta ?? null, units) ?? (kind === "vector" ? "Geometry" : "Hillshade")) : "Demo preview"}
+                        {file ? (viewer ? "Hillshade lit from the north-west, tinted by elevation" : (previewCaption(rendered?.meta ?? null, units) ?? (kind === "vector" ? "Geometry" : "Hillshade"))) : "Demo preview"}
                       </span>
                     )}
                     <span className="flex items-center gap-3">
@@ -429,9 +465,6 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                       )}
                     </span>
                   </div>
-                  {kind === "raster" && file && !rendered?.error && !showChange && !swipeMode && /\.tiff?$/i.test(filePath) && (
-                    <RasterExplorerToggle owner={owner} repo={repo} reference={ref} path={filePath} base={previewSrc(owner, repo, ref, filePath)} alt={`${filename} at full resolution`} />
-                  )}
                 </CardContent>
               ) : kind === "table" && file?.preview ? (
                 <>
@@ -454,7 +487,7 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                       <p className="px-4 py-6 text-sm text-muted-foreground">Couldn’t compare this table with the earlier version. It may be too large, or the API isn’t reachable.</p>
                     )
                   ) : (
-                    <TablePreview text={file.preview} rows={file.table?.rows ?? 0} />
+                    <TableBody text={wholeText ?? file.preview} rows={file.table?.rows ?? 0} />
                   )}
                 </>
               ) : kind === "text" && file?.preview ? (
@@ -480,15 +513,17 @@ export default async function FileViewPage({ params, searchParams }: { params: P
                       <p className="px-4 py-6 text-sm text-muted-foreground">Couldn’t compare this file with the earlier version. It may be too large, or the API isn’t reachable.</p>
                     )
                   ) : (
-                    <pre tabIndex={0} className="max-h-128 overflow-auto p-4 font-mono text-xs leading-relaxed text-foreground">
-                      {file.preview}
-                      {file.truncated && <span className="text-muted-foreground">{"\n"}… first 8 KB of {sizeLabel}</span>}
-                    </pre>
+                    <FileText name={filename} text={wholeText ?? file.preview} note={wholeText === null && file.truncated ? `Showing the first 8 KB of ${sizeLabel}. Download the file for the rest.` : null} />
                   )}
                 </>
+              ) : kind === "structure" && file ? (
+                <StructureViewer file={file} />
               ) : (
-                <CardContent className="p-6 text-sm text-muted-foreground">
-                  Binary file, {sizeLabel}. Download it or open it with <code className="font-mono">craton clone</code>.
+                <CardContent className="flex flex-col gap-2 p-6 text-sm text-muted-foreground">
+                  <p className="text-foreground">No viewer for this kind of file.</p>
+                  <p className="text-pretty">
+                    It is {sizeLabel}, stored as {file ? `${n(file.chunkCount)} ${file.chunkCount === 1 ? "chunk" : "chunks"}` : "chunks"}, and every byte is kept exactly as it was uploaded. Download it, or open it with <code className="font-mono">craton clone</code> and use the program that made it.
+                  </p>
                 </CardContent>
               )}
             </Card>
@@ -607,39 +642,10 @@ export default async function FileViewPage({ params, searchParams }: { params: P
   );
 }
 
-function TablePreview({ text, rows }: { text: string; rows: number }) {
-  // The preview is the first 8 KB, so its last row may be cut off; drop a final row that is short of columns.
+function TableBody({ text, rows }: { text: string; rows: number }) {
+  // The text may be the first 8 KB only, so its last row may be cut off; drop a final row that is short of columns.
   const parsed = parseCsv(text, sniffDelimiter(text));
   const width = parsed[0]?.length ?? 0;
   const [header, ...body] = parsed.length > 1 && parsed[parsed.length - 1].length < width ? parsed.slice(0, -1) : parsed;
-  const shown = body.slice(0, 20);
-  return (
-    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Table preview">
-      <table className="w-full text-left font-mono text-xs">
-        <thead className="border-b border-border bg-muted/20 text-muted-foreground">
-          <tr>
-            {header?.map((h, i) => (
-              <th key={i} scope="col" className="px-3 py-2 font-medium">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {shown.map((r, i) => (
-            <tr key={i}>
-              {r.map((c, j) => (
-                <td key={j} className="px-3 py-1.5 tabular-nums">
-                  {c}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
-        Showing {shown.length} of {rows.toLocaleString("en-US")} rows
-      </p>
-    </div>
-  );
+  return <TableViewer columns={header ?? []} rows={body.slice(0, 2000)} totalRows={Math.max(rows, body.length)} />;
 }

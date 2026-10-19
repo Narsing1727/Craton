@@ -453,12 +453,35 @@ export async function fetchArchive(owner: string, repo: string, ref: string, pat
   }
 }
 
-export type ApiTileInfo = { width: number; height: number; tileSize: number; maxZoom: number; min: number; max: number; cellSize: [number, number]; geographic: boolean; epsg: number | null; overviews: number };
+export type ApiTileInfo = { width: number; height: number; tileSize: number; maxZoom: number; min: number; max: number; cellSize: [number, number]; origin: [number, number] | null; geographic: boolean; epsg: number | null; overviews: number; histogram: number[] };
+export type ApiVectorFeatures = { bbox: [number, number, number, number]; fields: { name: string; type: string; length: number; decimals: number }[]; count: number; shown: number; thinned: boolean; features: { i: number; kind: "point" | "line" | "polygon"; parts: number[][]; props: Record<string, string | number | boolean | null> }[] };
+export type ApiPixel = { column: number; row: number; value: number | null; x: number | null; y: number | null };
 
 /** A raster's layout for zooming, or why it can not be zoomed. */
 export async function fetchTileInfo(owner: string, repo: string, ref: string, path: string): Promise<Response | null> {
   try {
     return await fetch(`${BASE}/v1${repoPath(owner, repo)}/tileinfo/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: await authHeaders(), cache: "no-store" });
+  } catch (err) {
+    unstable_rethrow(err);
+    return null;
+  }
+}
+
+/** A shapefile's features and attribute rows, for the features route. */
+export async function fetchFeatures(owner: string, repo: string, ref: string, path: string, ifNoneMatch?: string): Promise<Response | null> {
+  try {
+    const headers = await authHeaders();
+    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/features/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`, { headers: ifNoneMatch ? { ...headers, "if-none-match": ifNoneMatch } : headers, cache: "no-store" });
+  } catch (err) {
+    unstable_rethrow(err);
+    return null;
+  }
+}
+
+/** What is at one pixel of a raster (value and map position), for the pixel route. */
+export async function fetchPixel(owner: string, repo: string, ref: string, path: string, column: string, row: string): Promise<Response | null> {
+  try {
+    return await fetch(`${BASE}/v1${repoPath(owner, repo)}/pixel/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}?${new URLSearchParams({ column, row })}`, { headers: await authHeaders(), cache: "no-store" });
   } catch (err) {
     unstable_rethrow(err);
     return null;

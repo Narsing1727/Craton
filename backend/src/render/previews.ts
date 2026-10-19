@@ -11,7 +11,8 @@ import { getObject, resolveRef } from "../services/history.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { encodePng } from "./png.ts";
 import { getCache } from "../cache/cache.ts";
-import { describeTiff, openTiff, readGrid, readWindow, UnsupportedTiffError, type Grid, type OpenTiff } from "./tiff.ts";
+import { readDbfFields, type DbfField } from "../services/files.ts";
+import { describeTiff, openTiff, readGrid, readPixel, readWindow, UnsupportedTiffError, type Grid, type OpenTiff } from "./tiff.ts";
 
 const cache = new Map<string, { at: number; value: unknown }>();
 function cached<T>(key: string, make: () => Promise<T>): Promise<T> {
@@ -47,7 +48,7 @@ function unpackImage<M>(bytes: Buffer): { meta: M; png: Buffer } {
 }
 
 /** Bump when a preview's pixels or SVG would change for the same bytes, so cached copies are replaced. */
-const RENDER_VERSION = 1;
+const RENDER_VERSION = 2;
 
 /**
  * What a preview is made of, without drawing it: the blobs involved plus the size. Previews are a
@@ -135,7 +136,10 @@ function range(v: Float32Array) {
   return { min, max };
 }
 
-/** Classic hillshade (azimuth 315°, altitude 45°) on the sampled grid, 0..1. */
+/**
+ * Hillshade (azimuth 315°, altitude 45°) on the grid, 0..1, from Horn's slope and aspect (the 3 × 3 weighted neighbourhood GDAL and ArcGIS use), which
+ * ignores single-pixel noise that a two-neighbour difference turns into speckle.
+ */
 function hillshade(g: Grid) {
   const { width: w, height: h, values: z } = g;
   // Degrees to metres (approximate) so geographic DEMs shade like projected ones.
@@ -143,17 +147,19 @@ function hillshade(g: Grid) {
   const cy = g.geographic ? g.cellSize[1] * 110_540 : g.cellSize[1];
   const az = (315 * Math.PI) / 180, alt = (45 * Math.PI) / 180;
   const out = new Float32Array(w * h);
-  const at = (x: number, y: number) => {
-    const v = z[Math.min(h - 1, Math.max(0, y)) * w + Math.min(w - 1, Math.max(0, x))];
-    return Number.isNaN(v) ? z[y * w + x] : v;
-  };
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    if (Number.isNaN(z[y * w + x])) {
+    const centre = z[y * w + x];
+    if (Number.isNaN(centre)) {
       out[y * w + x] = NaN;
       continue;
     }
-    const dzdx = (at(x + 1, y) - at(x - 1, y)) / (2 * cx);
-    const dzdy = (at(x, y + 1) - at(x, y - 1)) / (2 * cy);
+    // A missing neighbour takes the centre's height, so the edge of a nodata area doesn't shade as a cliff.
+    const at = (dx: number, dy: number) => {
+      const v = z[Math.min(h - 1, Math.max(0, y + dy)) * w + Math.min(w - 1, Math.max(0, x + dx))];
+      return Number.isNaN(v) ? centre : v;
+    };
+    const dzdx = (at(1, -1) + 2 * at(1, 0) + at(1, 1) - at(-1, -1) - 2 * at(-1, 0) - at(-1, 1)) / (8 * cx);
+    const dzdy = (at(-1, 1) + 2 * at(0, 1) + at(1, 1) - at(-1, -1) - 2 * at(0, -1) - at(1, -1)) / (8 * cy);
     const slope = Math.atan(Math.hypot(dzdx, dzdy) * 2);
     const aspect = Math.atan2(dzdy, -dzdx);
     const shade = Math.cos(alt) * Math.cos(slope) + Math.sin(alt) * Math.sin(slope) * Math.cos(az - aspect);
@@ -161,6 +167,9 @@ function hillshade(g: Grid) {
   }
   return out;
 }
+
+/** The sampled grid whose elevations set the colour range of every picture of a raster (a file up to this size on its longest side is read exactly). */
+const RANGE_SIDE = 1024;
 
 const mix = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
 
@@ -195,7 +204,8 @@ export async function rasterThumbnail(ctx: Ctx, repo: RepoRow, ref: string, path
     }
     const g = await gridOf(ctx, found.blob, found.id, maxSide);
     const shade = hillshade(g);
-    const { min, max } = range(g.values);
+    // The colours span the same range at every size and in every tile, so a picture does not change colour as it is zoomed.
+    const { min, max } = range((await gridOf(ctx, found.blob, found.id, RANGE_SIDE)).values);
     const out = { png: encodePng(g.width, g.height, colorize(g, shade, min, max)), width: g.width, height: g.height, min, max, sourceWidth: g.sourceWidth, sourceHeight: g.sourceHeight };
     if (shared) {
       const { png, ...meta } = out;
@@ -225,7 +235,7 @@ async function openedTiff(ctx: Ctx, blob: BlobObject, id: string) {
   return open;
 }
 
-export type RasterTileInfo = { width: number; height: number; tileSize: number; maxZoom: number; min: number; max: number; cellSize: [number, number]; geographic: boolean; epsg: number | null; overviews: number };
+export type RasterTileInfo = { width: number; height: number; tileSize: number; maxZoom: number; min: number; max: number; cellSize: [number, number]; origin: [number, number] | null; geographic: boolean; epsg: number | null; overviews: number; histogram: number[] };
 
 /** How a viewer lays the raster out, and the elevation range its colours span (the same for every tile). */
 export async function rasterTileInfo(ctx: Ctx, repo: RepoRow, ref: string, path: string): Promise<RasterTileInfo> {
@@ -234,9 +244,20 @@ export async function rasterTileInfo(ctx: Ctx, repo: RepoRow, ref: string, path:
   return cached(`tileinfo:${found.id}`, async () => {
     const open = await openedTiff(ctx, found.blob, found.id);
     const d = describeTiff(open);
-    const { min, max } = range((await gridOf(ctx, found.blob, found.id, 512)).values);
-    return { ...d, tileSize: TILE_SIZE, maxZoom: Math.max(0, Math.ceil(Math.log2(Math.max(d.width, d.height) / TILE_SIZE))), min, max };
+    const grid = await gridOf(ctx, found.blob, found.id, RANGE_SIDE);
+    const { min, max } = range(grid.values);
+    return { ...d, tileSize: TILE_SIZE, maxZoom: Math.max(0, Math.ceil(Math.log2(Math.max(d.width, d.height) / TILE_SIZE))), min, max, histogram: histogram(grid.values, min, max, 48) };
   });
+}
+
+export type RasterPixel = { column: number; row: number; value: number | null; x: number | null; y: number | null };
+
+/** What is at one pixel of the full-resolution image (counted from the top-left corner): its value, and its place on the map when the file has one. */
+export async function rasterPixel(ctx: Ctx, repo: RepoRow, ref: string, path: string, column: number, row: number): Promise<RasterPixel> {
+  const found = await blobAt(ctx, repo, ref, path);
+  if (!found) throw notFound(`File ${path}`);
+  const open = await openedTiff(ctx, found.blob, found.id);
+  return { column, row, ...(await readPixel(open, column, row)) };
 }
 
 export const tileKey = async (ctx: Ctx, repo: RepoRow, ref: string, path: string, z: number, x: number, y: number) => {
@@ -567,6 +588,79 @@ export async function vectorSvg(ctx: Ctx, repo: RepoRow, ref: string, path: stri
     return { svg, features: cur.shapes.filter((s) => s.shape).length, diff: old ? { added, removed, changed, same } : null };
   });
 }
+
+// ── Vector features for the interactive viewer ─────────────────────────────────────────────────────────────────────────────────────
+
+export type VectorFeature = { i: number; kind: "point" | "line" | "polygon"; /** Each part's coordinates flattened: x0, y0, x1, y1, … */ parts: number[][]; props: Record<string, string | number | boolean | null> };
+export type VectorFeatures = { bbox: [number, number, number, number]; fields: DbfField[]; count: number; shown: number; thinned: boolean; features: VectorFeature[] };
+
+const FEATURE_LIMIT = 5000;
+const POINT_BUDGET = 150_000;
+
+/** One value of a dBase record: text trimmed, numbers as numbers (blank is null), dates as ISO text, logicals as booleans. */
+function dbfValue(raw: Buffer, type: string): string | number | boolean | null {
+  const text = (/^[\x00-\x7f]*$/.test(raw.toString("latin1")) ? raw.toString("latin1") : raw.toString("utf8")).replace(/\0+$/, "").trim();
+  if (type === "N" || type === "F") {
+    if (!text || /^\*+$/.test(text)) return null;
+    const n = Number(text);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (type === "L") return /^[TtYy]/.test(text) ? true : /^[FfNn]/.test(text) ? false : null;
+  if (type === "D") return /^\d{8}$/.test(text) ? `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}` : text || null;
+  return text || null;
+}
+
+/**
+ * A shapefile as data a viewer can draw and tabulate: every feature's geometry (coordinates rounded to what its extent can show, and thinned
+ * when a file has more than the viewer can draw) with its attribute row from the .dbf beside it. At most 5,000 features are sent; `count` is how many there are.
+ */
+export async function vectorFeatures(ctx: Ctx, repo: RepoRow, ref: string, path: string): Promise<VectorFeatures> {
+  const head = await blobAt(ctx, repo, ref, path);
+  if (!head) throw notFound(`File ${path}`);
+  const dbf = await blobAt(ctx, repo, ref, path.replace(/\.shp$/i, ".dbf"));
+  return cached(`features:${head.id}:${dbf?.id ?? ""}`, async () => {
+    const shp = parseShp(await new BlobReader(ctx, head.blob).readAll());
+    const dbfBuf = dbf ? await new BlobReader(ctx, dbf.blob).readAll() : null;
+    const fields = dbfBuf ? readDbfFields(dbfBuf) : [];
+    const rows = dbfBuf ? dbfRecords(dbfBuf) : [];
+    const [minX, minY, maxX, maxY] = shp.bbox;
+    const span = Math.max(maxX - minX, maxY - minY) || 1;
+    const decimals = Math.max(0, Math.min(8, Math.ceil(-Math.log10(span / 100_000))));
+    const round = (v: number) => Math.round(v * 10 ** decimals) / 10 ** decimals;
+
+    const wanted = shp.shapes.map((s, i) => ({ s, i })).filter((x) => x.s.shape).slice(0, FEATURE_LIMIT);
+    let total = 0;
+    for (const { s } of wanted) for (const part of s.shape!.parts) total += part.length;
+    const stride = Math.max(1, Math.ceil(total / POINT_BUDGET));
+
+    const features: VectorFeature[] = wanted.map(({ s, i }) => {
+      const shape = s.shape!;
+      const parts = shape.parts.map((pts) => {
+        const keep = shape.kind === "point" || pts.length <= 3 || stride === 1 ? pts : pts.filter((_, k) => k % stride === 0 || k === pts.length - 1);
+        const flat: number[] = [];
+        for (const [x, y] of keep) flat.push(round(x), round(y));
+        return flat;
+      });
+      const props: VectorFeature["props"] = {};
+      const row = rows[i];
+      if (row) {
+        let at = 1; // the first byte of a record says whether it is deleted
+        for (const f of fields) {
+          props[f.name] = dbfValue(row.subarray(at, at + f.length), f.type);
+          at += f.length;
+        }
+      }
+      return { i, kind: shape.kind, parts, props };
+    });
+    return { bbox: shp.bbox, fields, count: shp.shapes.filter((s) => s.shape).length, shown: features.length, thinned: stride > 1, features };
+  });
+}
+
+export const vectorKey = async (ctx: Ctx, repo: RepoRow, ref: string, path: string) => {
+  const head = await blobAt(ctx, repo, ref, path);
+  if (!head) return null;
+  return `v${RENDER_VERSION}:features:${head.id}:${(await blobAt(ctx, repo, ref, path.replace(/\.shp$/i, ".dbf")))?.id ?? ""}`;
+};
 
 export function isUnsupported(err: unknown) {
   return err instanceof UnsupportedTiffError;

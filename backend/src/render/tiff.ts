@@ -23,6 +23,8 @@ type Ifd = {
   counts: number[];
   nodata: number | null;
   pixelScale: [number, number] | null;
+  /** Map coordinates of the top-left corner of the top-left pixel (from the tiepoint), when the file has one. */
+  origin: [number, number] | null;
   epsg: number | null;
   littleEndian: boolean;
 };
@@ -92,6 +94,7 @@ async function readIfds(read: Read, size: number): Promise<Ifd[]> {
       }
     }
     const scale = await values(33550);
+    const tie = await values(33922);
     const nodataText = await ascii(42113);
     out.push({
       width: await one(256, 0),
@@ -109,6 +112,7 @@ async function readIfds(read: Read, size: number): Promise<Ifd[]> {
       counts: (await values(tiled ? 325 : 279)) ?? [],
       nodata: nodataText && !Number.isNaN(Number(nodataText)) ? Number(nodataText) : null,
       pixelScale: scale ? [scale[0], scale[1]] : null,
+      origin: tie && tie.length >= 5 && scale ? [tie[3] - tie[0] * scale[0], tie[4] + tie[1] * scale[1]] : null,
       epsg,
       littleEndian: le,
     });
@@ -117,6 +121,7 @@ async function readIfds(read: Read, size: number): Promise<Ifd[]> {
   for (const ifd of out.slice(1)) {
     ifd.nodata ??= out[0].nodata;
     ifd.epsg ??= out[0].epsg;
+    ifd.origin ??= out[0].origin;
     if (!ifd.pixelScale && out[0].pixelScale) ifd.pixelScale = [(out[0].pixelScale[0] * out[0].width) / ifd.width, (out[0].pixelScale[1] * out[0].height) / ifd.height];
   }
   return out;
@@ -221,7 +226,7 @@ function assertReadable(ifd: Ifd) {
   if (!ifd.littleEndian && ifd.bits > 8) throw new UnsupportedTiffError("Big-endian TIFFs aren't supported for previews yet");
 }
 
-/** First-band values of one image, a pixel at a time, decoding each strip or tile once. */
+/** First-band values of one image, a pixel at a time, decoding each strip or tile once. A pixel whose block is already decoded comes back as a number, not a promise. */
 function sampler(ifd: Ifd, read: Read) {
   const get = sampleReader(ifd);
   const bps = ifd.bits / 8;
@@ -239,27 +244,53 @@ function sampler(ifd: Ifd, read: Read) {
     }
     return b;
   };
-  return async (x: number, y: number) => {
-    let v: number;
+  const finish = (v: number) => (ifd.nodata !== null && v === ifd.nodata ? NaN : Number.isFinite(v) ? v : NaN);
+  return (x: number, y: number): number | Promise<number> => {
+    let index: number, w: number, rows: number, at: number;
     if (ifd.tileWidth && ifd.tileHeight) {
       const across = Math.ceil(ifd.width / ifd.tileWidth);
-      const t = Math.floor(y / ifd.tileHeight) * across + Math.floor(x / ifd.tileWidth);
-      const b = await block(t, ifd.tileWidth, ifd.tileHeight);
-      v = get(b, ((y % ifd.tileHeight) * ifd.tileWidth + (x % ifd.tileWidth)) * spp);
+      index = Math.floor(y / ifd.tileHeight) * across + Math.floor(x / ifd.tileWidth);
+      w = ifd.tileWidth;
+      rows = ifd.tileHeight;
+      at = ((y % ifd.tileHeight) * ifd.tileWidth + (x % ifd.tileWidth)) * spp;
     } else {
       const rps = Math.min(ifd.rowsPerStrip, ifd.height);
-      const s = Math.floor(y / rps);
-      const rows = Math.min(rps, ifd.height - s * rps);
-      const b = await block(s, ifd.width, rows);
-      v = get(b, ((y - s * rps) * ifd.width + x) * spp);
+      index = Math.floor(y / rps);
+      w = ifd.width;
+      rows = Math.min(rps, ifd.height - index * rps);
+      at = ((y - index * rps) * ifd.width + x) * spp;
     }
-    return ifd.nodata !== null && v === ifd.nodata ? NaN : Number.isFinite(v) ? v : NaN;
+    const b = cache.get(index);
+    if (b) return finish(get(b, at));
+    return block(index, w, rows).then((bb) => finish(get(bb, at)));
   };
 }
 
 /**
+ * The mean of the valid pixels under the source rectangle [x0, x1) × [y0, y1), looked at on a grid of at most 3 × 3 points (so the cost is bounded
+ * however far a file is shrunk). Nodata counts as missing; a rectangle that is mostly missing is missing. Where the rectangle is no bigger than
+ * a pixel this is just the pixel under its centre, so zooming in shows the file's own values and nothing invented.
+ */
+async function meanOver(at: ReturnType<typeof sampler>, x0: number, y0: number, x1: number, y1: number, width: number, height: number): Promise<number> {
+  const nx = Math.min(3, Math.max(1, Math.round(x1 - x0))), ny = Math.min(3, Math.max(1, Math.round(y1 - y0)));
+  let sum = 0, n = 0;
+  for (let j = 0; j < ny; j++) {
+    const y = Math.floor(y0 + ((j + 0.5) * (y1 - y0)) / ny);
+    if (y < 0 || y >= height) continue;
+    for (let i = 0; i < nx; i++) {
+      const x = Math.floor(x0 + ((i + 0.5) * (x1 - x0)) / nx);
+      if (x < 0 || x >= width) continue;
+      const p = at(x, y);
+      const v = typeof p === "number" ? p : await p;
+      if (!Number.isNaN(v)) (sum += v), n++;
+    }
+  }
+  return n * 2 >= nx * ny && n > 0 ? sum / n : NaN;
+}
+
+/**
  * First band of the image as a grid of at most `maxSide` pixels on the long side (nodata → NaN).
- * Picks the smallest overview that's still at least `maxSide`, then point-samples it.
+ * Picks the smallest overview that's still at least `maxSide`, then shrinks it by averaging the pixels under each output pixel.
  */
 export async function readGrid(read: Read, size: number, maxSide = 512): Promise<Grid> {
   const { ifds, full } = await openTiff(read, size);
@@ -273,10 +304,8 @@ export async function readGrid(read: Read, size: number, maxSide = 512): Promise
   const values = new Float32Array(outW * outH).fill(NaN);
   const at = sampler(ifd, read);
   for (let oy = 0; oy < outH; oy++) {
-    const y = Math.min(ifd.height - 1, Math.floor((oy + 0.5) / scale));
     for (let ox = 0; ox < outW; ox++) {
-      const x = Math.min(ifd.width - 1, Math.floor((ox + 0.5) / scale));
-      values[oy * outW + ox] = await at(x, y);
+      values[oy * outW + ox] = await meanOver(at, ox / scale, oy / scale, (ox + 1) / scale, (oy + 1) / scale, ifd.width, ifd.height);
     }
   }
   const px = ifd.pixelScale ?? [1, 1];
@@ -291,6 +320,7 @@ export function describeTiff(open: OpenTiff) {
     width: open.full.width,
     height: open.full.height,
     cellSize: px as [number, number],
+    origin: open.full.origin,
     geographic: open.full.epsg !== null && open.full.epsg >= 4000 && open.full.epsg < 5000,
     epsg: open.full.epsg,
     overviews: open.ifds.length - 1,
@@ -302,7 +332,7 @@ export class TooManyBlocksError extends UnsupportedTiffError {}
 
 /**
  * The pixels of a rectangle of the full-resolution image (`x`, `y`, `w`, `h` in full-resolution pixels, which may run past the edges: those
- * come back as NaN), resampled to `outW` × `outH` by taking the pixel under each output pixel's centre. Uses the smallest overview
+ * come back as NaN), resampled to `outW` × `outH` by averaging the pixels under each output pixel (the pixel under its centre when zoomed in). Uses the smallest overview
  * that still has at least one pixel per output pixel, so zoomed-out windows of a COG read little. `maxBlocks` bounds the strips or
  * tiles it will decode; a file without overviews, zoomed far out, needs the viewer to ask for less.
  */
@@ -327,12 +357,23 @@ export async function readWindow(open: OpenTiff, win: { x: number; y: number; w:
   for (let oy = 0; oy < outH; oy++) {
     const fy = win.y + ((oy + 0.5) * win.h) / outH;
     if (fy < 0 || fy >= full.height) continue;
-    const y = Math.min(ifd.height - 1, Math.floor(fy * sy));
+    const top = (win.y + (oy * win.h) / outH) * sy, bottom = (win.y + ((oy + 1) * win.h) / outH) * sy;
     for (let ox = 0; ox < outW; ox++) {
       const fx = win.x + ((ox + 0.5) * win.w) / outW;
       if (fx < 0 || fx >= full.width) continue;
-      values[oy * outW + ox] = await at(Math.min(ifd.width - 1, Math.floor(fx * sx)), y);
+      values[oy * outW + ox] = await meanOver(at, (win.x + (ox * win.w) / outW) * sx, top, (win.x + ((ox + 1) * win.w) / outW) * sx, bottom, ifd.width, ifd.height);
     }
   }
   return values;
+}
+
+/** The value of one full-resolution pixel (NaN for nodata or outside the image), and where it is on the map when the file says. */
+export async function readPixel(open: OpenTiff, col: number, row: number): Promise<{ value: number | null; x: number | null; y: number | null }> {
+  const { full } = open;
+  if (!Number.isInteger(col) || !Number.isInteger(row) || col < 0 || row < 0 || col >= full.width || row >= full.height) return { value: null, x: null, y: null };
+  assertReadable(full);
+  const p = sampler(full, open.read)(col, row);
+  const v = typeof p === "number" ? p : await p;
+  const px = full.pixelScale, o = full.origin;
+  return { value: Number.isNaN(v) ? null : v, x: o && px ? o[0] + (col + 0.5) * px[0] : null, y: o && px ? o[1] - (row + 0.5) * px[1] : null };
 }

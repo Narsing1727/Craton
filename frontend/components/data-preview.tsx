@@ -23,9 +23,14 @@ type Props = {
   alt: string;
   error?: string | null;
   className?: string;
+  /** Width over height of the picture: the frame takes its shape, so there are no empty bands beside it. */
+  aspect?: number;
 };
 
-export function DataPreview({ src, alt, error, className }: Props) {
+/** The frame of a picture of known shape: as wide as the space allows without running taller than most of a screen. */
+export const frameStyle = (aspect: number) => ({ aspectRatio: String(aspect), width: `min(100%, calc(72vh * ${aspect}))` });
+
+export function DataPreview({ src, alt, error, className, aspect }: Props) {
   if (error) {
     return (
       <div className={cn("flex flex-col items-center justify-center gap-2 border border-border bg-muted/30 p-6 text-center text-xs text-muted-foreground", className)}>
@@ -36,9 +41,20 @@ export function DataPreview({ src, alt, error, className }: Props) {
     );
   }
   return (
-    <div className={cn("relative overflow-hidden border border-border bg-muted/30", className)}>
+    <div className={cn("relative overflow-hidden border border-border bg-muted/30", aspect && "mx-auto", className)} style={aspect ? frameStyle(aspect) : undefined}>
       {/* eslint-disable-next-line @next/next/no-img-element -- rendered per blob by the API, already sized */}
       <img src={src} alt={alt} loading="lazy" decoding="async" className="size-full object-contain" />
+    </div>
+  );
+}
+
+/** The colour ramp the previews are painted with, over the range of elevations they span. */
+export function ElevationLegend({ min, max, units }: { min: number; max: number; units: UnitSystem }) {
+  return (
+    <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
+      <span>{formatLength(min, units, { digits: 1 })}</span>
+      <span className="h-2.5 w-40 border border-border" style={{ background: "linear-gradient(to right, rgb(22 34 58), rgb(196 212 236))" }} aria-hidden />
+      <span>{formatLength(max, units, { digits: 1 })}</span>
     </div>
   );
 }

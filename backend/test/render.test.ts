@@ -11,7 +11,7 @@ import type { Ctx } from "../src/services/context.ts";
 import { getRepoFor } from "../src/services/repos.ts";
 import { commitFiles } from "../src/dev/push.ts";
 import { catchments, levees, shapefile } from "../src/dev/fixtures.ts";
-import { openTiff, readGrid, readWindow, TooManyBlocksError } from "../src/render/tiff.ts";
+import { openTiff, readGrid, readPixel, readWindow, TooManyBlocksError } from "../src/render/tiff.ts";
 import { encodePng } from "../src/render/png.ts";
 import { warmCommit } from "../src/render/previews.ts";
 
@@ -112,6 +112,7 @@ function writeTiff(images: Image[]) {
     const nodataAt = img.nodata !== undefined ? add(Buffer.from(`${img.nodata}\0`, "latin1")) : 0;
     // Only the full-resolution image carries georeferencing, as in a COG.
     const scaleAt = index === 0 ? add(Buffer.from(new Float64Array([2, 2, 0]).buffer)) : 0;
+    const tieAt = index === 0 ? add(Buffer.from(new Float64Array([0, 0, 0, 1000, 5000, 0]).buffer)) : 0;
     const e: [number, number, number, number][] = [
       [256, 4, 1, img.width],
       [257, 4, 1, img.height],
@@ -122,7 +123,7 @@ function writeTiff(images: Image[]) {
       [317, 3, 1, img.predictor],
       [339, 3, 1, img.kind === "f32" ? 3 : 2],
     ];
-    if (scaleAt) e.push([33550, 12, 3, scaleAt]);
+    if (scaleAt) e.push([33550, 12, 3, scaleAt], [33922, 12, 6, tieAt]);
     if (img.tile) e.push([322, 3, 1, img.tile], [323, 3, 1, img.tile], [324, 4, blocks.length, blocks.length === 1 ? blockOffsets[0] : offsetsAt], [325, 4, blocks.length, blocks.length === 1 ? blocks[0].length : countsAt]);
     else e.push([273, 4, blocks.length, blocks.length === 1 ? blockOffsets[0] : offsetsAt], [278, 4, 1, img.rowsPerStrip ?? img.height], [279, 4, blocks.length, blocks.length === 1 ? blocks[0].length : countsAt]);
     if (img.nodata !== undefined) e.push([42113, 2, String(img.nodata).length + 1, nodataAt]);
@@ -501,4 +502,60 @@ test("a raster can be zoomed: layout first, then tiles that cover the image, joi
   assert.ok(etag);
   const again = await app.request("/v1/repos/rhea/basin/tiles/main/1/0/0/terrain/basin_dem.tif", { headers: { authorization: `Bearer ${tokens.rhea}`, "if-none-match": etag! } });
   assert.equal(again.status, 304);
+});
+
+test("shrinking averages the pixels it covers, and a pixel probe reports the value and where it is on the map", async () => {
+  // A checkerboard of 0 and 100 averages to 50 at every scale it is shrunk to; point-sampling would give 0 or 100 and a moiré.
+  const width = 64, height = 64;
+  const board = Array.from({ length: width * height }, (_, i) => (((i % width) + Math.floor(i / width)) % 2 ? 100 : 0));
+  const file = writeTiff([{ width, height, values: board, kind: "i16", compression: 8, predictor: 1, rowsPerStrip: 16 }]);
+  const small = await readGrid(readerOf(file), file.length, 16);
+  assert.equal(small.width, 16);
+  assert.ok(small.values.every((v) => Math.abs(v - 50) <= 25 && v !== 0 && v !== 100), "averaged, not sampled");
+  assert.ok(Math.abs(small.values.reduce((s, v) => s + v, 0) / small.values.length - 50) < 15);
+  const open = await openTiff(readerOf(file), file.length);
+  const far = await readWindow(open, { x: 0, y: 0, w: 64, h: 64 }, 8, 8);
+  assert.ok(far.every((v) => v > 0 && v < 100));
+
+  // The tiepoint and pixel size give the map position of a pixel's centre; the row counts down from the top, so the northing falls.
+  assert.deepEqual(open.full.origin, [1000, 5000]);
+  assert.deepEqual(await readPixel(open, 0, 0), { value: 0, x: 1001, y: 4999 });
+  assert.deepEqual(await readPixel(open, 3, 2), { value: 100, x: 1007, y: 4995 });
+  assert.deepEqual(await readPixel(open, 64, 0), { value: null, x: null, y: null }, "outside the image");
+});
+
+test("the pixel endpoint answers for a column and row, and refuses nonsense and non-rasters", async () => {
+  const ok = await get("/repos/rhea/basin/pixel/main/terrain/basin_dem.tif?column=100&row=100", "rhea");
+  assert.equal(ok.status, 200);
+  const body = JSON.parse(ok.body.toString());
+  assert.deepEqual([body.column, body.row], [100, 100]);
+  assert.equal(typeof body.value, "number");
+  const outside = JSON.parse((await get("/repos/rhea/basin/pixel/main/terrain/basin_dem.tif?column=99999&row=0", "rhea")).body.toString());
+  assert.equal(outside.value, null);
+  assert.equal((await get("/repos/rhea/basin/pixel/main/terrain/basin_dem.tif?column=x&row=0", "rhea")).status, 400);
+  assert.equal((await get("/repos/rhea/basin/pixel/main/terrain/basin_dem.tif", "rhea")).status, 400);
+  assert.equal((await get("/repos/rhea/basin/pixel/main/README.md?column=0&row=0", "rhea")).status, 415);
+  assert.equal((await get("/repos/rhea/basin/pixel/main/terrain/basin_dem.tif?column=1&row=1", "sol")).status, 404, "a private repository stays private");
+});
+
+test("a shapefile's features come as data: geometry, and each row of its attribute table", async () => {
+  const r = await get("/repos/rhea/basin/features/main/vectors/catchment.shp", "rhea");
+  assert.equal(r.status, 200);
+  const data = JSON.parse(r.body.toString()) as { count: number; shown: number; thinned: boolean; bbox: number[]; fields: { name: string }[]; features: { i: number; kind: string; parts: number[][]; props: Record<string, unknown> }[] };
+  assert.equal(data.count, 6);
+  assert.equal(data.shown, 6);
+  assert.equal(data.thinned, false);
+  assert.deepEqual(data.fields.map((f) => f.name), ["NAME"]);
+  assert.deepEqual(data.features.map((f) => f.props.NAME), ["Sub-catchment 1", "Sub-catchment 2", "Sub-catchment 3", "Sub-catchment 4", "Sub-catchment 5", "Sub-catchment 6"]);
+  const first = data.features[0];
+  assert.equal(first.kind, "polygon");
+  assert.equal(first.parts.length, 1);
+  assert.equal(first.parts[0].length, 13 * 2, "13 points of an x and a y");
+  assert.ok(first.parts[0][0] >= data.bbox[0] && first.parts[0][0] <= data.bbox[2]);
+
+  const again = await app.request("/v1/repos/rhea/basin/features/main/vectors/catchment.shp", { headers: { authorization: `Bearer ${tokens.rhea}` } });
+  assert.ok(again.headers.get("etag"));
+  assert.equal((await app.request("/v1/repos/rhea/basin/features/main/vectors/catchment.shp", { headers: { authorization: `Bearer ${tokens.rhea}`, "if-none-match": again.headers.get("etag")! } })).status, 304);
+  assert.equal((await get("/repos/rhea/basin/features/main/README.md", "rhea")).status, 415);
+  assert.equal((await get("/repos/rhea/basin/features/main/vectors/catchment.shp", "sol")).status, 404, "a private repository stays private");
 });

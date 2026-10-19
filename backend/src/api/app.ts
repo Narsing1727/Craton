@@ -1746,6 +1746,29 @@ export function createApp(ctx: Ctx) {
     throw new ApiError(415, "no_preview", "Previews are drawn for GeoTIFF rasters, shapefiles and uncompressed LAS point clouds.");
   });
 
+  // A shapefile as data for the interactive viewer: geometry and attribute rows (at most 5,000 features), cached by the blobs it is read from.
+  v1.get("/repos/:owner/:repo/features/:ref/:path{.+}", async (c) => {
+    const repo = await repoFor(c);
+    const ref = c.req.param("ref"), path = c.req.param("path");
+    if (!/\.shp$/i.test(path)) throw new ApiError(415, "no_preview", "Features are listed for shapefiles.");
+    const key = await previews.vectorKey(ctx, repo, ref, path);
+    let pinned = false;
+    if (/^[0-9a-f]{64}$/.test(ref)) {
+      try {
+        pinned = (await history.resolveRef(ctx, repo, ref)) === ref;
+      } catch {}
+    }
+    const tag = key ? `"${createHash("sha256").update(key).digest("hex").slice(0, 32)}"` : null;
+    const headers: Record<string, string> = { "cache-control": pinned ? "private, max-age=31536000, immutable" : "private, max-age=300", ...(tag ? { etag: tag } : {}) };
+    if (tag && c.req.header("if-none-match")?.split(",").some((v) => v.trim().replace(/^W\//, "") === tag)) return c.body(null, 304, headers);
+    try {
+      return c.json(await previews.vectorFeatures(ctx, repo, ref, path), 200, headers);
+    } catch (err) {
+      if (err instanceof Error && /Not a shapefile/.test(err.message)) throw new ApiError(415, "no_preview", err.message);
+      throw err;
+    }
+  });
+
   // A raster you can zoom into: its layout (size, zoom levels, colour range), then 256-pixel tiles in the image's own pixel space,
   // drawn from the nearest overview the file has. Tiles are pure functions of the blob, so a pinned commit caches for a year.
   const rasterOnly = (path: string) => {
@@ -1767,6 +1790,20 @@ export function createApp(ctx: Ctx) {
     rasterOnly(path);
     try {
       return c.json(await previews.rasterTileInfo(ctx, repo, c.req.param("ref"), path));
+    } catch (err) {
+      if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
+      throw err;
+    }
+  });
+  // One pixel of the full-resolution image: its value and map position (?column=&row=, counted from the top-left corner).
+  v1.get("/repos/:owner/:repo/pixel/:ref/:path{.+}", async (c) => {
+    const repo = await repoFor(c);
+    const path = c.req.param("path");
+    rasterOnly(path);
+    const [column, row] = [c.req.query("column"), c.req.query("row")].map((v) => (v !== undefined && /^\d{1,9}$/.test(v) ? Number(v) : NaN));
+    if (Number.isNaN(column) || Number.isNaN(row)) throw badRequest("Give the pixel as ?column=<whole number>&row=<whole number>.");
+    try {
+      return c.json(await previews.rasterPixel(ctx, repo, c.req.param("ref"), path, column, row), 200, { "cache-control": "private, max-age=300" });
     } catch (err) {
       if (previews.isUnsupported(err)) throw new ApiError(415, "no_preview", (err as Error).message);
       throw err;
