@@ -214,6 +214,26 @@ export default async function DashboardPage() {
 
         {user && steps && <GettingStarted handle={user.handle} steps={steps} />}
 
+        {isNew && (
+          <section aria-labelledby="first-steps" className="flex flex-col gap-4 border-t border-border pt-8">
+            <div>
+              <h2 id="first-steps" className="text-base font-semibold">Create your first repository</h2>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground text-pretty">
+                A repository holds one project&rsquo;s terrain, vectors and model files with every version. Make one here, then push your files from your own machine. Storage, checks and activity appear on this page as soon as there is something to count.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button href="/new">
+                <Plus data-icon="inline-start" />
+                New repository
+              </Button>
+              <Button variant="outline" href="/guides#version-a-model">Version a HEC-RAS model, step by step</Button>
+              <Button variant="ghost" href="/formats">See what Craton opens</Button>
+            </div>
+          </section>
+        )}
+
+        {!isNew && (<>
         <StatGrid>
           <StatTile
             label="Stored after deduplication"
@@ -365,6 +385,7 @@ export default async function DashboardPage() {
             </div>
           </aside>
         </div>
+        </>)}
       </div>
     </AppShell>
   );

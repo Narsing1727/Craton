@@ -23,6 +23,7 @@ import { describeBBox, osmLink } from "@/lib/geo";
 import type { Branch, Repo } from "@/lib/data";
 import FileTree, { type FileTreeItem } from "@/components/file-tree";
 import { Markdown } from "@/components/markdown";
+import { CommandLine } from "@/components/craton-actions";
 
 /** `src` is the rendered preview; null in demo mode, where a schematic stands in. */
 export type CodeViewPreview = { path: string; caption: string; src: string | null; error: string | null; /** Width over height of the picture, so its frame has no empty bands. */ aspect?: number };
@@ -47,6 +48,8 @@ export type CodeViewProps = {
 export function CodeView({ owner, repo, data, branches, currentRef, head, items, initialExpanded, readme, commitCount, crs, preview, hasRelease }: CodeViewProps) {
   const nav = useSoftNav();
   const base = `/${owner}/${repo}`;
+  // The first top-level folder, so the second command can show how to take only part of a big repository.
+  const firstFolder = items.find((i) => i.type === "folder")?.name ?? null;
   const [selected, setSelected] = useState<string | undefined>(preview?.path);
   const [expanded, setExpanded] = useState<string[]>(initialExpanded);
   const isBranch = branches.some((b) => b.name === currentRef);
@@ -228,9 +231,23 @@ export function CodeView({ owner, repo, data, branches, currentRef, head, items,
             </>
           )}
           <Separator />
+          {/* What to do with the data: the commands that get it onto a machine, and where to learn the rest. */}
+          <div className="flex flex-col gap-2">
+            <h2 className="text-sm font-medium">Use this data</h2>
+            <CommandLine command={`craton clone ${owner}/${repo}`} />
+            {firstFolder && <CommandLine command={`craton clone ${owner}/${repo} --only ${firstFolder}/`} />}
+            <p className="text-xs text-muted-foreground text-pretty">
+              {firstFolder ? "The second takes only one folder. " : ""}
+              New to the command line?{" "}
+              <Link href="/guides" className="underline underline-offset-2 hover:text-foreground">Step-by-step guides</Link>
+              {" · "}
+              <Link href="/cli" className="underline underline-offset-2 hover:text-foreground">All commands</Link>
+            </p>
+          </div>
+          <Separator />
           <div className="flex items-center gap-4 text-sm">
             <span className="flex items-center gap-1.5">
-              <Badge variant="outline" className="tabular-nums">{data.stars}</Badge> stars
+              <Badge variant="outline" className="tabular-nums">{data.stars}</Badge> {data.stars === 1 ? "star" : "stars"}
             </span>
           </div>
         </aside>

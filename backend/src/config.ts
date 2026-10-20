@@ -187,7 +187,7 @@ export const config = {
     enabled: env.CRATON_RATE_LIMITS !== "off",
     api: { max: Number(env.CRATON_API_RATE ?? 1200), windowMs: 60_000 },
     login: { max: 10, windowMs: 15 * 60_000 },
-    signup: { max: 10, windowMs: 60 * 60_000 },
+    signup: { max: Math.max(1, Math.floor(Number(env.CRATON_SIGNUPS_PER_HOUR ?? 10)) || 10), windowMs: 60 * 60_000 },
     reset: { max: 5, windowMs: 60 * 60_000 },
     /** Failed sign-ins on one account before it's locked for the window. */
     lockout: { max: 10, windowMs: 15 * 60_000 },

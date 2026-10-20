@@ -186,19 +186,17 @@ export default async function HomePage() {
               Shared public terrain and rainfall layers are stored once and never count against your plan.
             </p>
           </div>
-          <div className="border border-border/30 p-4">
-            <div className="flex items-center gap-2 text-sm font-medium"><GitPullRequest className="size-4 text-accent" /> Review queue</div>
-            {review ? (
+          {review && (
+            <div className="border border-border/30 p-4">
+              <div className="flex items-center gap-2 text-sm font-medium"><GitPullRequest className="size-4 text-accent" /> Review queue</div>
               <Link href={`${base}/pull/${review.id}`} className="mt-4 block border-l-2 border-chart-2 pl-3 text-xs hover:text-foreground">
                 <span className="font-mono text-muted-foreground">
                   #{review.id} · {review.approvals ?? 0} {(review.approvals ?? 0) === 1 ? "approval" : "approvals"}
                 </span>
                 <span className="mt-1 block leading-relaxed">{review.title}</span>
               </Link>
-            ) : (
-              <p className="mt-4 text-xs text-muted-foreground">Nothing waiting for review.</p>
-            )}
-          </div>
+            </div>
+          )}
         </aside>
       </section>
 
