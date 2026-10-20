@@ -315,16 +315,11 @@ export function AuthForm({ mode, next, notice, demoHint, google, github, sso, no
               )}
             </div>
           </form>
-          {((notSetUp && notSetUp.length > 0) || (isLogin && demoHint)) && (
+          {notSetUp && notSetUp.length > 0 && (
             <div className="mt-10 flex flex-col gap-1.5 border-t border-foreground/10 pt-4 text-[11px] leading-relaxed text-foreground/35">
               {notSetUp && notSetUp.length > 0 && (
                 <p data-testid="providers-not-set-up" className="text-pretty">
                   Development note: {notSetUp.join(" and ")} {notSetUp.length === 1 ? "is" : "are"} not set up on this server yet. Add the credentials with <span className="font-mono text-foreground/55">npm run setup:oauth</span>. Visitors never see this, or an unconfigured button, in production.
-                </p>
-              )}
-              {isLogin && demoHint && (
-                <p>
-                  Local demo: <span className="font-mono text-foreground/55">priyam</span> / <span className="font-mono text-foreground/55">craton-demo-2026</span>
                 </p>
               )}
             </div>

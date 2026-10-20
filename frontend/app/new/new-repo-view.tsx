@@ -403,7 +403,7 @@ export function NewRepoView({
             </Card>
 
             <div className="flex items-center gap-2">
-              <Button href="/hydrolab/chalakudy-basin">Go to repository</Button>
+              <Button href={created ? `/${created}` : "/dashboard"}>Go to repository</Button>
               <Button variant="ghost" onClick={() => { setCreated(null); setPicked([]); setName(""); setTouched(false); }}>
                 Create another
               </Button>

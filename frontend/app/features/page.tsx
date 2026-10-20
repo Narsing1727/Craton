@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { PageHero, PageSection, WhereNext } from "@/components/marketing";
 import { Button } from "@/components/ui/button";
+import { FEATURED_REPO } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Features",
@@ -76,8 +77,8 @@ export default function FeaturesPage() {
     <AppShell>
       <PageHero title="Everything Craton does with your data" lead="Craton keeps the full history of the large files a flood study depends on, shows what changed on a map, and checks the data before anyone builds on it.">
         <Button render={<Link href="/signup" />}>Start free</Button>
-        <Button variant="outline" render={<Link href="/hydrolab/chalakudy-basin" />}>
-          Open the sample basin
+        <Button variant="outline" render={<Link href={`/${FEATURED_REPO}`} />}>
+          See a real repository
         </Button>
       </PageHero>
 

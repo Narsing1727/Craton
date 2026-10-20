@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollProgress } from "@/components/ui/scroll-progress";
 import { File, Folder, Tree } from "@/components/ui/file-tree";
+import { FEATURED_REPO } from "@/lib/site";
 
 export const metadata: Metadata = {
   alternates: { types: { "text/markdown": "/docs.md" } },
@@ -91,7 +92,7 @@ export default function DocsPage() {
           <DocSection title="Your first repository">
             <P>Create the repository on Craton, then run these from your project folder. Checks run on every push.</P>
             <div className="flex flex-col gap-2">
-              <CommandLine command="craton init . --remote http://localhost:4000/you/chalakudy-basin" />
+              <CommandLine command="craton init . --remote http://localhost:4000/you/river-model" />
               <CommandLine command="craton add terrain/ vectors/ model/" />
               <CommandLine command={'craton commit -m "Initial import"'} />
               <CommandLine command="craton push" />
@@ -107,7 +108,7 @@ export default function DocsPage() {
                   <File value="vectors-dbf">catchment.dbf</File>
                 </Folder>
                 <Folder value="model" element="model/">
-                  <File value="model-prj">chalakudy.prj</File>
+                  <File value="model-prj">river.prj</File>
                 </Folder>
                 <File value="gauges">gauges.csv</File>
                 <File value="readme">README.md</File>
@@ -166,7 +167,7 @@ export default function DocsPage() {
           <DocSection title="Review a change as a team">
             <P>
               Put a <code className="font-mono text-sm text-foreground">CODEOWNERS</code> file at the root (or write it in Settings → Code owners), for example{" "}
-              <code className="font-mono text-sm text-foreground">terrain/** @priyam</code>. A pull request that changes those files asks the owners to review, and with
+              <code className="font-mono text-sm text-foreground">terrain/** @your-handle</code>. A pull request that changes those files asks the owners to review, and with
               Settings → Protection → <i>Require approval from code owners</i> it cannot merge until each has approved the latest version.
             </P>
           </DocSection>
@@ -174,7 +175,7 @@ export default function DocsPage() {
           <DocSection title="Work with part of a big repository">
             <P>A DEM of a whole country is not something every analyst needs on their laptop. Clone only the folders you work in; the rest stays in history and in every commit.</P>
             <div className="flex flex-col gap-2">
-              <CommandLine command="craton clone hydrolab/national-terrain --only tiles/kerala/,README.md" />
+              <CommandLine command="craton clone your-org/national-terrain --only tiles/kerala/,README.md" />
               <CommandLine command="craton sparse add tiles/tamil-nadu/" />
             </div>
             <P>An interrupted download resumes where it stopped: run the same clone command again.</P>
@@ -206,7 +207,7 @@ export default function DocsPage() {
 
           <DocSection title="Large file workflow">
             <P>Clone once, then pull and push only what changed: chunks you already have never move again. Dropped connections are retried.</P>
-            <CommandLine command="craton clone hydrolab/chalakudy-basin" />
+            <CommandLine command={`craton clone ${FEATURED_REPO}`} />
             <CommandLine command="craton pull" />
             <P>Craton never reads a file another program is still writing: close HEC-RAS or wait for its snapshot before committing.</P>
           </DocSection>
@@ -214,12 +215,11 @@ export default function DocsPage() {
           <DocSection title="Map diffs">
             <P>Every commit, comparison and pull request shows what changed in each file, down to which chunks are new. Locally, status shows the same before you commit.</P>
             <CommandLine command="craton status" />
-            <Link href="/hydrolab/chalakudy-basin/compare?base=main&head=levee-scenario" className="text-sm text-accent hover:underline">Compare two branches →</Link>
           </DocSection>
 
           <DocSection title="Python and notebooks">
             <P>
-              Install the client with <code className="font-mono text-sm text-foreground">pip install &quot;./sdk/python[fsspec]&quot;</code> and any tool that takes an fsspec address can read a file at an exact version, fetching only the bytes it needs: <code className="font-mono text-sm text-foreground">pd.read_csv(&quot;craton://hydrolab/chalakudy-basin@v1.2.0/gauges.csv&quot;, storage_options=&#123;&quot;server&quot;: …, &quot;token&quot;: …&#125;)</code>. Paths are <code className="font-mono text-sm text-foreground">owner/repo@version/path</code>, where the version is a branch, tag or commit. Opening a 30 GB raster and reading one window moves only that window, because the server answers HTTP byte ranges; <code className="font-mono text-sm text-foreground">@v1.0.0</code> pins exactly what a result was computed from. It is read-only: push changes with the CLI.
+              Install the client with <code className="font-mono text-sm text-foreground">pip install &quot;./sdk/python[fsspec]&quot;</code> and any tool that takes an fsspec address can read a file at an exact version, fetching only the bytes it needs: <code className="font-mono text-sm text-foreground">pd.read_csv(&quot;craton://owner/repo@v1.2.0/gauges.csv&quot;, storage_options=&#123;&quot;server&quot;: …, &quot;token&quot;: …&#125;)</code>. Paths are <code className="font-mono text-sm text-foreground">owner/repo@version/path</code>, where the version is a branch, tag or commit. Opening a 30 GB raster and reading one window moves only that window, because the server answers HTTP byte ranges; <code className="font-mono text-sm text-foreground">@v1.0.0</code> pins exactly what a result was computed from. It is read-only: push changes with the CLI.
             </P>
           </DocSection>
 
@@ -267,7 +267,7 @@ export default function DocsPage() {
 
           <DocSection title="Branches">
             <P>A branch is free until you change a file: it points at existing chunks. Use one per scenario, such as a levee raise or a new survey.</P>
-            <CommandLine command="craton branch levee-scenario && craton switch levee-scenario" />
+            <CommandLine command="craton branch raise-levee && craton switch raise-levee" />
           </DocSection>
 
           <DocSection title="Pull requests">
@@ -289,7 +289,7 @@ export default function DocsPage() {
 
           <DocSection title="Organization domains">
             <P>
-              In an organization&rsquo;s settings, owners can claim the domain their team&rsquo;s email addresses use (for example <code className="font-mono text-sm text-foreground">hydrolab.org</code>) and prove it with a DNS TXT record Craton shows. A verified domain is marked on the organization&rsquo;s page. Switch on <em>Let people with a hydrolab.org address join</em> and anyone whose confirmed address ends there becomes a Member without an invitation; an address nobody has confirmed never counts, and removing the domain never removes anyone.
+              In an organization&rsquo;s settings, owners can claim the domain their team&rsquo;s email addresses use (for example <code className="font-mono text-sm text-foreground">your-domain.org</code>) and prove it with a DNS TXT record Craton shows. A verified domain is marked on the organization&rsquo;s page. Switch on <em>Let people with a your-domain.org address join</em> and anyone whose confirmed address ends there becomes a Member without an invitation; an address nobody has confirmed never counts, and removing the domain never removes anyone.
             </P>
           </DocSection>
 

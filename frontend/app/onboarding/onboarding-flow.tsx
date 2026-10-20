@@ -242,7 +242,7 @@ export function OnboardingFlow({ user, server }: Props) {
                   <FieldLabel htmlFor="ob-invite">
                     Invite teammates <span className="font-normal text-muted-foreground">(optional)</span>
                   </FieldLabel>
-                  <Input id="ob-invite" value={invites} onChange={(e) => setInvites(e.target.value)} placeholder="arunn, sarat" autoCapitalize="none" spellCheck={false} />
+                  <Input id="ob-invite" value={invites} onChange={(e) => setInvites(e.target.value)} placeholder="alice, bob" autoCapitalize="none" spellCheck={false} />
                   <FieldDescription>Craton usernames, separated by commas. They join as Members.</FieldDescription>
                 </Field>
               </FieldGroup>
@@ -313,7 +313,7 @@ export function OnboardingFlow({ user, server }: Props) {
             </div>
             <div className="flex flex-col gap-2 border border-border p-4">
               <p className="text-sm font-medium">{repo ? "3. Get your repository" : "3. Clone any repository"}</p>
-              <CommandLine command={`craton clone ${repo ?? "hydrolab/chalakudy-basin"}`} />
+              <CommandLine command={`craton clone ${repo ?? "owner/repo"}`} />
               <p className="text-xs text-muted-foreground">Then edit files in QGIS or HEC-RAS as usual, and <span className="font-mono text-foreground">craton add . &amp;&amp; craton commit -m &quot;…&quot; &amp;&amp; craton push</span>.</p>
             </div>
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { PageHero, PageSection, WhereNext } from "@/components/marketing";
 import { Button } from "@/components/ui/button";
+import { FEATURED_REPO } from "@/lib/site";
 import { FORMATS } from "@/lib/formats";
 
 export const metadata: Metadata = {
@@ -14,7 +15,7 @@ export default function FormatsPage() {
   return (
     <AppShell>
       <PageHero title="Supported formats" lead="Any file can be stored: it is kept byte for byte, split into chunks, and checked against its hash. For the formats below Craton also opens the file, reads its header and compares versions in a way that suits it.">
-        <Button render={<Link href="/hydrolab/chalakudy-basin" />}>See them in the sample basin</Button>
+        <Button render={<Link href={`/${FEATURED_REPO}`} />}>See a real repository</Button>
       </PageHero>
 
       <PageSection title="What happens to each kind of file">

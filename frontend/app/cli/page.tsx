@@ -75,7 +75,7 @@ export default function CliPage() {
 
         <Section title="3. Push a project" description="Create the repository on Craton first, then point the folder at it.">
           <div className="flex flex-col gap-2">
-            <CommandLine command={`craton init chalakudy-basin --remote ${PUBLIC_API_URL}/you/chalakudy-basin`} />
+            <CommandLine command={`craton init river-model --remote ${PUBLIC_API_URL}/you/river-model`} />
             <CommandLine command="craton add terrain/ vectors/ model/" />
             <CommandLine command={'craton commit -m "Initial import"'} />
             <CommandLine command="craton push" />

@@ -26,5 +26,5 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const notSetUp = dev && providers ? [...(providers.google ? [] : ["Google"]), ...(providers.github ? [] : ["GitHub"])] : [];
   // Google said who it is and the account has two-step verification: the code is the only step left.
   const initialMfaTicket = params.mfa ? jar.get(MFA_COOKIE)?.value : undefined;
-  return <AuthForm mode="login" next={params.next} notice={notice} demoHint={process.env.NODE_ENV !== "production"} google={Boolean(providers?.google) || dev} github={Boolean(providers?.github) || dev} notSetUp={notSetUp} sso={Boolean(providers?.sso)} passkeys={Boolean(providers?.passkeys)} initialMfaTicket={initialMfaTicket} />;
+  return <AuthForm mode="login" next={params.next} notice={notice} google={Boolean(providers?.google) || dev} github={Boolean(providers?.github) || dev} notSetUp={notSetUp} sso={Boolean(providers?.sso)} passkeys={Boolean(providers?.passkeys)} initialMfaTicket={initialMfaTicket} />;
 }

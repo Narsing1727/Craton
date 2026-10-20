@@ -1,4 +1,4 @@
-// Visit every important route as the demo user and report anything wrong: a console error, a failed
+// Visit every important route, signed in, and report anything wrong: a console error, a failed
 // request, an HTTP error, a page that crashed or fell through to "not found". Cheap to run and it
 // has found real bugs (a crashing API reference, a first-run 404, dead links) that type checks and
 // unit tests cannot see.
@@ -8,28 +8,41 @@
 //   CRATON_WIDTH=390 npm run sweep     (the same routes in a phone-sized window; also reports pages wider than it)
 //
 // Uses a Chromium-based browser already on the machine (Edge or Chrome); set CRATON_BROWSER to its
-// path if it isn't found. Signs in as the seeded demo account (`npm run seed` in ../backend).
+// path if it isn't found. Signs in as a throwaway account it makes for the run (and deletes after), so it never uses a real person's
+// account; it reads the public repository CRATON_SWEEP_REPO (default narsing/the-first-repo) and a private one of its own for the owner pages.
 
 import fs from "node:fs";
 import { chromium } from "playwright-core";
 
 const WEB = process.env.CRATON_WEB ?? "http://localhost:3100", API = process.env.CRATON_API ?? "http://localhost:4000/v1";
-const R = "/hydrolab/chalakudy-basin";
-// A real commit and pull request to visit.
-const login = await (await fetch(`${API}/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ login: "priyam", password: "craton-demo-2026" }) })).json();
-const H = { authorization: `Bearer ${login.token}` };
-const commits = await (await fetch(`${API}/repos/hydrolab/chalakudy-basin/commits?limit=2`, { headers: H })).json();
-const pulls = await (await fetch(`${API}/repos/hydrolab/chalakudy-basin/pulls`, { headers: H })).json();
-const issues = await (await fetch(`${API}/repos/hydrolab/chalakudy-basin/issues`, { headers: H })).json();
+const R = `/${process.env.CRATON_SWEEP_REPO ?? "narsing/the-first-repo"}`;
+
+// A throwaway account for the run: signed up, its address confirmed through the development outbox, and deleted at the end.
+const handle = `sweep-${Date.now().toString(36).slice(-6)}`;
+const password = "a-long-throwaway-password-for-the-sweep";
+const json = async (res) => (res.ok ? res.json() : Promise.reject(new Error(`${res.status} ${await res.text()}`)));
+const signup = await json(await fetch(`${API}/auth/signup`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: handle, email: `${handle}@example.org`, password }) }));
+const H = { authorization: `Bearer ${signup.token}` };
+const mail = (await json(await fetch(`${API}/dev/outbox`))).find((m) => m.to === `${handle}@example.org`);
+await json(await fetch(`${API}/auth/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: /token=([A-Za-z0-9_-]+)/.exec(JSON.stringify(mail))[1] }) }));
+// Its own repository, for the pages only an owner sees (settings, webhooks, sharing). Private, so it never shows on Explore.
+const OWN = `/${handle}/sweep`;
+await json(await fetch(`${API}/repos`, { method: "POST", headers: { ...H, "content-type": "application/json" }, body: JSON.stringify({ name: "sweep", visibility: "private" }) }));
+const commits = await json(await fetch(`${API}/repos${R}/commits?limit=2`, { headers: H }));
+const pulls = await json(await fetch(`${API}/repos${R}/pulls`, { headers: H }));
+const issues = await json(await fetch(`${API}/repos${R}/issues`, { headers: H }));
 
 const routes = [
   "/", "/explore", "/trending", "/dashboard", "/pulls", "/issues", "/stars", "/search?q=dem",
   "/settings", "/settings/security", "/settings/notifications", "/settings/preferences", "/settings/billing", "/settings/tokens", "/settings/developer", "/new", "/orgs/new",
-  "/hydrolab", "/orgs/hydrolab/settings", R, `${R}/issues`, `${R}/pulls`, `${R}/checks`, `${R}/branches`, `${R}/commits`, `${R}/releases`, `${R}/storage`, `${R}/insights`,
-  `${R}/settings`, `${R}/settings/webhooks`, `${R}/settings/sharing`, `${R}/settings/collaborators`, `${R}/milestones`, `${R}/reviews`, `${R}/compare`, `${R}/releases/new`, `${R}/issues/new`, `${R}/pulls/new`, `${R}/tags`,
-  `${R}/blob/terrain/basin_dem.tif`, `${R}/blob/gauges.csv`, `${R}/blob/README.md`, `${R}/blob/vectors/catchment.shp`, `${R}/tree/main/terrain`,
-  `${R}/commit/${commits[0].sha}`, `${R}/pull/${pulls[0].number}`, `${R}/issues/${issues[0].number}`,
+  `/${R.split("/")[1]}`, `/${handle}`, R, `${R}/issues`, `${R}/pulls`, `${R}/checks`, `${R}/branches`, `${R}/commits`, `${R}/releases`, `${R}/storage`, `${R}/insights`,
+  `${OWN}/settings`, `${OWN}/settings/webhooks`, `${OWN}/settings/sharing`, `${OWN}/settings/collaborators`, `${R}/milestones`, `${R}/reviews`, `${R}/compare`, `${OWN}/releases/new`, `${R}/issues/new`, `${R}/pulls/new`, `${R}/tags`,
+  `${R}/blob/terrain/chalakudy_dem_30m.tif`, `${R}/blob/vectors/waterways.geojson`, `${R}/blob/README.md`, `${R}/tree/main/terrain`,
+  ...(commits[0] ? [`${R}/commit/${commits[0].sha}`] : []),
+  ...(pulls[0] ? [`${R}/pull/${pulls[0].number}`] : []),
+  ...(issues[0] ? [`${R}/issues/${issues[0].number}`] : []),
   "/docs", "/api-reference", "/cli", "/pricing", "/about", "/help", "/security", "/changelog", "/contact", "/terms", "/privacy",
+  "/features", "/formats", "/compare", "/guides", "/glossary",
 ];
 
 const browser = await chromium.launch({ executablePath: browserPath(), headless: true });
@@ -48,10 +61,10 @@ page.on("response", (r) => {
 });
 
 await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
-await page.fill('input[name="login"]', "priyam");
-await page.fill('input[name="password"]', "craton-demo-2026");
+await page.fill('input[name="login"]', handle);
+await page.fill('input[name="password"]', password);
 await page.click('button[type="submit"]');
-await page.waitForURL(/dashboard/, { timeout: 20000 });
+await page.waitForURL(/dashboard|onboarding/, { timeout: 20000 });
 
 for (const route of routes) {
   current = route;
@@ -146,5 +159,8 @@ function browserPath() {
   if (!found) throw new Error("No Chrome or Edge found. Set CRATON_BROWSER to the path of one.");
   return found;
 }
+
+// The throwaway account goes, and its repository with it.
+await fetch(`${API}/user`, { method: "DELETE", headers: { ...H, "content-type": "application/json" }, body: JSON.stringify({ handle, password }) }).catch(() => {});
 
 if (process.exitCode === undefined && typeof problems === "number" && problems > 0) process.exitCode = 1;

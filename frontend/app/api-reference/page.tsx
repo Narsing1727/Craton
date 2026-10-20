@@ -449,7 +449,7 @@ export default async function ApiReferencePage() {
             </p>
             <div className="mt-3 flex flex-col gap-2">
               <CommandLine command='curl -H "Authorization: Bearer crt_pat_…" http://localhost:4000/v1/user' />
-              <CommandLine command="curl http://localhost:4000/v1/repos/hydrolab/chalakudy-basin/compare/main...levee-scenario" />
+              <CommandLine command="curl http://localhost:4000/v1/repos/owner/repo/compare/main...feature-branch" />
             </div>
           </section>
 

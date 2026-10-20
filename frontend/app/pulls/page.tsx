@@ -39,7 +39,7 @@ export default async function MyPullsPage({
     : demoPulls;
   const filters = scopeFilter(me);
   const list = myPulls.filter(filters[scope]);
-  const newHref = live?.[0] ? `/${live[0].repo}/pulls/new` : "/hydrolab/chalakudy-basin/pulls/new";
+  const newHref = live?.[0] ? `/${live[0].repo}/pulls/new` : "/new";
 
   return (
     <AppShell>

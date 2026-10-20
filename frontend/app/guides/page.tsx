@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
-import { PageHero, PageSection, WhereNext } from "@/components/marketing";
+import { PageHero, PageSection } from "@/components/marketing";
+import { FEATURED_REPO } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Guides",
@@ -40,7 +41,7 @@ const guides: { id: string; title: string; lead: string; steps: Step[] }[] = [
     steps: [
       { text: "For a person outside the team, open the repository's Settings, then Sharing, and make a link to one version. It expires, and its address is the only password, so send it only to them." },
       { text: "For everyone, make the repository public. Anyone can browse its files on the website and clone it." },
-      { text: "To take only part of a large repository, name the folders you need.", command: "craton clone hydrolab/chalakudy-basin --only terrain/" },
+      { text: "To take only part of a large repository, name the folders you need.", command: `craton clone ${FEATURED_REPO} --only terrain/` },
     ],
   },
   {

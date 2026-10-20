@@ -32,14 +32,14 @@ const entryPoints = [
     icon: GitCompare,
     title: "Review a spatial change",
     body: "Compare tiles, vector features, grids, and configuration files before a model change reaches main.",
-    href: "/hydrolab/chalakudy-basin/compare",
+    href: "REPO/compare",
     action: "Open map diff",
   },
   {
     icon: ShieldCheck,
     title: "Verify a submission",
     body: "Keep the commit, source data, and Merkle proof together for an audit-ready project history.",
-    href: "/hydrolab/chalakudy-basin/storage",
+    href: "REPO/storage",
     action: "View provenance",
   },
 ];
@@ -208,7 +208,7 @@ export default async function HomePage() {
         <div className="grid grid-cols-1 w-full gap-px px-4 py-6 sm:px-6 lg:px-8 xl:px-10 md:grid-cols-3">
           {entryPoints.map((item, i) => (
             <InView key={item.title} once transition={{ duration: 0.3, delay: i * 0.05 }}>
-              <Link href={item.href} className="group block border border-border/30 p-5 transition-colors hover:bg-muted/30">
+              <Link href={item.href.replace(/^REPO/, base)} className="group block border border-border/30 p-5 transition-colors hover:bg-muted/30">
                 <item.icon className="size-4 text-accent" />
                 <h2 className="mt-5 text-sm font-semibold">{item.title}</h2>
                 <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{item.body}</p>

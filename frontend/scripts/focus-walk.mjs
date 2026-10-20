@@ -3,14 +3,14 @@
 // without alt text, duplicate ids and pages without exactly one h1. Same setup as route-sweep.mjs (demo account, Edge or Chrome).
 //
 //   npm run focus
-//   CRATON_ROUTES=/hydrolab/chalakudy-basin,/settings npm run focus
+//   CRATON_ROUTES=/narsing/the-first-repo,/settings npm run focus
 
 import fs from "node:fs";
 import { chromium } from "playwright-core";
 
 const WEB = process.env.CRATON_WEB ?? "http://localhost:3100";
-const R = "/hydrolab/chalakudy-basin";
-const routes = (process.env.CRATON_ROUTES ?? `${R},${R}/blob/gauges.csv,${R}/blob/terrain/basin_dem.tif,${R}/pulls,${R}/pull/142,${R}/issues,${R}/commits,${R}/releases,${R}/settings,${R}/settings/collaborators,/dashboard,/settings,/settings/tokens,/settings/security,/new,/explore,/docs,/cli,/api-reference,/pricing,/help,/changelog,/about,/security`).split(",");
+const R = `/${process.env.CRATON_SWEEP_REPO ?? "narsing/the-first-repo"}`;
+const routes = (process.env.CRATON_ROUTES ?? `${R},${R}/blob/vectors/waterways.geojson,${R}/blob/terrain/chalakudy_dem_30m.tif,${R}/pulls,${R}/issues,${R}/commits,${R}/releases,/dashboard,/settings,/settings/tokens,/settings/security,/new,/explore,/docs,/cli,/api-reference,/pricing,/help,/changelog,/about,/security`).split(",");
 const STEPS = Number(process.env.CRATON_STEPS ?? 70);
 
 const candidates = [process.env.CRATON_BROWSER, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"];
@@ -24,11 +24,7 @@ if (process.env.CRATON_SESSION_TOKEN) {
   // A throwaway account's session (see scripts/ui-audit.mjs): signing in as the demo user writes to its security log.
   await ctx.addCookies([{ name: "craton_session", value: process.env.CRATON_SESSION_TOKEN, url: WEB }]);
 } else {
-  await page.goto(`${WEB}/login`, { waitUntil: "networkidle" });
-  await page.fill('input[name="login"]', "priyam");
-  await page.fill('input[name="password"]', "craton-demo-2026");
-  await page.click('button[type="submit"]');
-  await page.waitForURL(/dashboard/, { timeout: 20000 });
+  throw new Error("Set CRATON_SESSION_TOKEN to a throwaway account's session (npm run audit makes one); this script never signs in as a real person.");
 }
 
 let problems = 0;

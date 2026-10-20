@@ -169,7 +169,7 @@ export function TokensView({ initial, live }: { initial: TokenRow[]; live: boole
                   <label htmlFor="token-repos" className="block text-xs font-medium text-muted-foreground mb-1">
                     Only these repositories <span className="font-normal">(optional)</span>
                   </label>
-                  <Input id="token-repos" placeholder="hydrolab/chalakudy-basin, hydrolab/rainfall" value={repoText} onChange={(e) => setRepoText(e.target.value)} className="font-mono text-xs" spellCheck={false} autoComplete="off" />
+                  <Input id="token-repos" placeholder="owner/repo, owner/another-repo" value={repoText} onChange={(e) => setRepoText(e.target.value)} className="font-mono text-xs" spellCheck={false} autoComplete="off" />
                   <p className="mt-1 text-xs text-muted-foreground">Leave empty for every repository you can reach. A limited token sees nothing else of yours, only public data.</p>
                 </div>
                 <div className="flex flex-col gap-1.5">

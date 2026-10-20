@@ -129,7 +129,7 @@ export function OrgDomains({ org, initial }: { org: string; initial: ApiOrgDomai
         ))}
       </ul>
       <form onSubmit={add} className="flex flex-wrap items-center gap-2">
-        <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="hydrolab.org" aria-label="Domain to add" className="max-w-xs font-mono" autoComplete="off" spellCheck={false} />
+        <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="your-domain.org" aria-label="Domain to add" className="max-w-xs font-mono" autoComplete="off" spellCheck={false} />
         <Button type="submit" size="sm" variant="outline" loading={busy} disabled={busy || !draft.trim()}>
           Add domain
         </Button>

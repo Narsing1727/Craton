@@ -5,7 +5,7 @@
 import { chromium } from "playwright-core";
 
 const WEB = process.env.CRATON_WEB_URL ?? "http://localhost:3100";
-const [repo = "hydrolab/chalakudy-basin", file = "terrain/basin_dem.tif", shots] = process.argv.slice(2);
+const [repo = "narsing/the-first-repo", file = "terrain/chalakudy_dem_30m.tif", shots] = process.argv.slice(2);
 const must = (ok, what) => {
   if (!ok) throw new Error(`FAILED: ${what}`);
   console.log(`ok  ${what}`);

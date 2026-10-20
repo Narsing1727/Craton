@@ -39,7 +39,7 @@ export default async function MyIssuesPage({
     : demoIssues;
   const filters = scopeFilter(me);
   const list = myIssues.filter(filters[scope]);
-  const newHref = live?.[0] ? `/${live[0].repo}/issues/new` : "/hydrolab/chalakudy-basin/issues/new";
+  const newHref = live?.[0] ? `/${live[0].repo}/issues/new` : "/new";
 
   return (
     <AppShell>

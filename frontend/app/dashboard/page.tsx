@@ -26,7 +26,7 @@ import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Progress } from "@/components/ui/progress";
-import { activityFeed, repos as demoRepos, type Activity } from "@/lib/data";
+import type { Activity } from "@/lib/data";
 import { formatBytes, timeAgo } from "@/lib/format";
 import { OpenInboxLink } from "@/components/inbox-bell";
 import { loadActivity, loadAllIssues, loadAllPulls, loadChecks, loadRepos, loadUsage } from "@/lib/source";
@@ -50,44 +50,7 @@ const activityIcons: Record<Activity["type"], typeof GitCommit> = {
   review: Eye,
 };
 
-const R = "/hydrolab/chalakudy-basin";
-
 type Attention = { href: string; status: "open" | "failed" | "changes-requested" | "approved"; title: string; ref: string; reason: string; time: string };
-
-const demoAttention: Attention[] = [
-  {
-    href: `${R}/pull/142`,
-    status: "open",
-    title: "Levee scenario: raise embankment crest by 0.5 m",
-    ref: "#142",
-    reason: "Review requested by arunn",
-    time: "2 hours ago",
-  },
-  {
-    href: `${R}/checks`,
-    status: "failed",
-    title: "Vertical datum check failed on lidar-2024-update",
-    ref: "e4f5g6h",
-    reason: "2024 DEM is 0.31 m above the 2023 datum",
-    time: "5 hours ago",
-  },
-  {
-    href: `${R}/pull/139`,
-    status: "changes-requested",
-    title: "Ingest 2024 LiDAR and rebuild 2 m DEM",
-    ref: "#139",
-    reason: "Your pull request needs changes",
-    time: "1 day ago",
-  },
-  {
-    href: `${R}/issues/88`,
-    status: "open",
-    title: "Datum mismatch between 2023 and 2024 DEM",
-    ref: "#88",
-    reason: "Assigned to you · data-quality",
-    time: "5 hours ago",
-  },
-];
 
 const shortcuts = [
   { keys: ["Ctrl", "K"], label: "Search or run a command" },
@@ -109,15 +72,16 @@ export default async function DashboardPage() {
   ]);
   let steps: ChecklistStep[] | null = null;
 
-  let myRepos = demoRepos.filter((r) => r.owner === "hydrolab");
-  let attention = demoAttention;
-  let eyebrow = "hydrolab · Free plan";
-  let stored = { value: "3.1 / 5.0 GB", progress: 62, hint: "62% of your plan", used: "3.1 GB stored", limit: "5.0 GB limit" };
-  let shared = { value: "812 GB", note: "812 GB of shared public elevation data is deduplicated and doesn’t count against your quota." };
-  let repoHint = "1 private · 2 public";
-  let checks = { text: "46 of 48 checks passed in the last 7 days.", link: `${R}/checks`, cta: "Review the 2 failures →", pct: Math.round((46 / 48) * 100) };
-  let pushes = { value: "1,248", n: 1248, hint: "vs. last month", delta: "+18%" as string | undefined };
-  let feed: Activity[] = live ? activity : activityFeed;
+  // Until the numbers arrive from the API there is nothing to show, and nothing is invented in its place.
+  let myRepos: typeof repos = [];
+  let attention: Attention[] = [];
+  let eyebrow = user?.handle ?? "";
+  let stored = { value: "—", progress: 0, hint: "", used: "", limit: "" };
+  let shared = { value: "—", note: "" };
+  let repoHint = "";
+  let checks = { text: "No checks yet.", link: "/dashboard", cta: "", pct: 100 };
+  let pushes = { value: "0", n: 0, hint: "", delta: undefined as string | undefined };
+  let feed: Activity[] = live ? activity : [];
 
   if (live && user && usage) {
     const me = user.handle;

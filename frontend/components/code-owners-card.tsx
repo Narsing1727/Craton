@@ -77,7 +77,7 @@ export function CodeOwnersCard({ owner, repo, initial, branch, head, canWrite }:
           spellCheck={false}
           disabled={!canWrite}
           aria-label="CODEOWNERS"
-          placeholder={"terrain/**   @priyam @arjun\n*.shp         @lakshmi\ngauges.csv    @arjun"}
+          placeholder={"terrain/**   @alice @bob\n*.shp         @carol\ngauges.csv    @bob"}
           className="font-mono text-xs"
         />
         {problem && <p className="text-xs text-destructive">{problem}</p>}
