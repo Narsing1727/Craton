@@ -91,7 +91,7 @@ export type ApiSharedView = {
   files: { path: string; size: number }[];
 };
 export type ApiCitation = { source: "generated" | "CITATION.cff"; cff: string; bibtex: string; apa: string; hints: string[] };
-export type ApiCommit = { sha: string; shortSha: string; tree: string; parents: string[]; author: string; message: string; timestamp: string; merkleRoot: string };
+export type ApiCommit = { sha: string; shortSha: string; tree: string; parents: string[]; author: string; /** The author's display name, sent with the commit (older servers do not). */ authorName?: string; message: string; timestamp: string; merkleRoot: string };
 export type ApiChange = {
   path: string;
   change: "added" | "removed" | "modified";
@@ -293,7 +293,7 @@ export type ApiCompare = {
   changes: ApiChange[];
   conflicts: string[];
 };
-export type ApiRepoDetail = ApiRepo & { access: "none" | "read" | "write" | "admin"; starred: boolean; branchCount: number; commitCount: number; head: ApiCommit | null; readme: string | null; openIssues: number; openPulls: number };
+export type ApiRepoDetail = ApiRepo & { access: "none" | "read" | "write" | "admin"; starred: boolean; branchCount: number; commitCount: number; head: ApiCommit | null; readme: string | null; previewPath?: string | null; openIssues: number; openPulls: number };
 /** One of an organization's domains, as its owners see it: the DNS record to publish until it is verified. */
 export type ApiOrgDomain = { domain: string; verified: boolean; verifiedAt: string | null; autoJoin: boolean; createdAt: string; record?: { type: string; name: string; value: string } };
 
@@ -525,11 +525,11 @@ export async function fetchTile(owner: string, repo: string, ref: string, path: 
 }
 
 /** The rendered preview itself (PNG or SVG), for the render route to stream to the browser. */
-export async function fetchRender(owner: string, repo: string, ref: string, path: string, opts: { base?: string; size?: number; ifNoneMatch?: string } = {}): Promise<Response | null> {
+export async function fetchRender(owner: string, repo: string, ref: string, path: string, opts: { base?: string; size?: number; ifNoneMatch?: string; headOnly?: boolean } = {}): Promise<Response | null> {
   try {
     const headers = await authHeaders();
     // Pass the browser's validator on, so an unchanged preview costs a 304 and no drawing.
-    return await fetch(renderUrl(owner, repo, ref, path, opts), { headers: opts.ifNoneMatch ? { ...headers, "if-none-match": opts.ifNoneMatch } : headers, cache: "no-store" });
+    return await fetch(renderUrl(owner, repo, ref, path, opts), { method: opts.headOnly ? "HEAD" : "GET", headers: opts.ifNoneMatch ? { ...headers, "if-none-match": opts.ifNoneMatch } : headers, cache: "no-store" });
   } catch (err) {
     unstable_rethrow(err);
     return null;
@@ -542,13 +542,15 @@ export async function fetchRender(owner: string, repo: string, ref: string, path
  * `error` is the reason there's no preview, e.g. an unsupported compression.
  */
 export async function renderMeta(owner: string, repo: string, ref: string, path: string, opts: { base?: string; size?: number } = {}): Promise<{ meta: RenderMeta | null; error: string | null }> {
-  const res = await fetchRender(owner, repo, ref, path, opts);
+  // Only the numbers are wanted, and they ride in a header: a HEAD request, so the picture itself (a megabyte of PNG) is not carried here.
+  const res = await fetchRender(owner, repo, ref, path, { ...opts, headOnly: true });
   if (!res) return { meta: null, error: "The Craton API isn't reachable." };
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+    // A HEAD answer has no body, so the reason is asked for again, once, on the rare path where there is no preview.
+    const again = await fetchRender(owner, repo, ref, path, opts);
+    const body = (await again?.json().catch(() => null)) as { error?: { message?: string } } | null;
     return { meta: null, error: body?.error?.message ?? `Preview failed (${res.status})` };
   }
-  await res.arrayBuffer();
   try {
     return { meta: JSON.parse(res.headers.get("x-craton-render") ?? "{}") as RenderMeta, error: null };
   } catch (err) {
@@ -627,6 +629,8 @@ export const api = {
   allPulls: () => get<(ApiPull & { repo: string })[]>("/pulls"),
   repo: (owner: string, repo: string) => get<ApiRepoDetail>(repoPath(owner, repo)),
   file: (owner: string, repo: string, ref: string, path: string) => get<ApiFile>(`${repoPath(owner, repo)}/file/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`),
+  /** Every folder's listing at once, `{ folders: { "": [...], "terrain": [...] }, truncated }`: the whole tree in one call. */
+  treeAll: (owner: string, repo: string, ref: string) => get<{ folders: Record<string, ApiTreeEntry[]>; truncated: boolean }>(`${repoPath(owner, repo)}/tree/${encodeURIComponent(ref)}?all=1`),
   tree: (owner: string, repo: string, ref: string, dir = "") => get<ApiTreeEntry[]>(`${repoPath(owner, repo)}/tree/${encodeURIComponent(ref)}?path=${encodeURIComponent(dir)}`),
   raw: (owner: string, repo: string, ref: string, path: string) => get<string>(`${repoPath(owner, repo)}/raw/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`),
   commits: (owner: string, repo: string, ref?: string, limit = 50) => get<(ApiCommit & { changes: ApiChange[] })[]>(`${repoPath(owner, repo)}/commits?changes=1&limit=${limit}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),

@@ -4,6 +4,7 @@
 // at zero when it does, as Prometheus expects.
 
 import { timingSafeEqual } from "node:crypto";
+import { memoSize, memoStats } from "../services/memo.ts";
 
 export const counters = {
   rateLimited: 0,
@@ -75,6 +76,12 @@ export function render(extra: Extra): string {
   line("# TYPE craton_page_cache_total counter");
   line(`craton_page_cache_total{result="hit"} ${counters.pageCache.hit}`);
   line(`craton_page_cache_total{result="miss"} ${counters.pageCache.miss}`);
+  line("# HELP craton_memo_total Answers that depend only on a commit: served from this server's memory (hit), shared by concurrent requests (shared), or worked out (miss).");
+  line("# TYPE craton_memo_total counter");
+  for (const k of ["hit", "shared", "miss", "evicted"] as const) line(`craton_memo_total{result="${k}"} ${memoStats[k]}`);
+  line("# HELP craton_memo_bytes Size of the remembered answers.");
+  line("# TYPE craton_memo_bytes gauge");
+  line(`craton_memo_bytes ${memoSize().bytes}`);
   line("# HELP craton_cache_up 1 when the shared cache is answering, 0 when this server is using local fallbacks.");
   line("# TYPE craton_cache_up gauge");
   line(`craton_cache_up ${extra.cache.status === "ok" ? 1 : 0}`);

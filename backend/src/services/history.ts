@@ -418,6 +418,68 @@ export async function listTree(ctx: Ctx, repo: RepoRow, ref: string, dir = ""): 
 }
 
 /**
+ * Every folder's listing at a commit in one go, as `{ "": [root entries], "terrain": [...], ... }` (breadth first, at most `maxFolders` folders), each
+ * entry with the last commit that touched it. One walk through history gives all of them: for each commit's changed paths, the path itself and
+ * every folder above it are marked, so the cost does not grow with the number of folders (listing them one at a time walked history once per folder).
+ */
+export async function listTreeAll(ctx: Ctx, repo: RepoRow, ref: string, maxFolders = 200): Promise<{ folders: Record<string, ListingEntry[]>; truncated: boolean }> {
+  const tip = await resolveRef(ctx, repo, ref);
+  const tree = await getObject<TreeObject>(ctx, repo, (await getObject<CommitObject>(ctx, repo, tip, "commit")).tree, "tree");
+  const nodes = new Map<string, ListingEntry>();
+  const kids = new Map<string, string[]>(); // folder path -> the paths directly inside it
+  const link = (parent: string, path: string) => {
+    const list = kids.get(parent);
+    if (list) list.push(path);
+    else kids.set(parent, [path]);
+  };
+  for (const e of tree.entries) {
+    const parts = e.path.split("/");
+    for (let i = 0; i < parts.length; i++) {
+      const path = parts.slice(0, i + 1).join("/");
+      const parent = parts.slice(0, i).join("/");
+      const isFile = i === parts.length - 1;
+      const have = nodes.get(path);
+      if (have) {
+        if (!isFile) have.size += e.size;
+        continue;
+      }
+      nodes.set(path, isFile ? { name: parts[i], path, type: "file", size: e.size, blob: e.blob } : { name: parts[i], path, type: "dir", size: e.size });
+      link(parent, path);
+    }
+  }
+  // One walk through history: the first (newest) commit to change a path, or anything under it, is its last commit.
+  let pending = nodes.size;
+  for await (const { row, changed } of walkChanges(ctx, repo, await listCommits(ctx, repo, tip, 500))) {
+    if (!pending) break;
+    for (const c of changed) {
+      const parts = c.path.split("/");
+      for (let i = 0; i < parts.length; i++) {
+        const node = nodes.get(parts.slice(0, i + 1).join("/"));
+        if (node && !node.lastCommit) {
+          node.lastCommit = { sha: row.id, message: row.message, timestamp: row.timestamp, author: row.author };
+          pending--;
+        }
+      }
+    }
+  }
+  const order = (a: ListingEntry, b: ListingEntry) => (a.type !== b.type ? (a.type === "dir" ? -1 : 1) : a.name.localeCompare(b.name));
+  const folders: Record<string, ListingEntry[]> = {};
+  const queue = [""];
+  let truncated = false;
+  while (queue.length) {
+    const dir = queue.shift()!;
+    if (Object.keys(folders).length >= maxFolders) {
+      truncated = true;
+      break;
+    }
+    const entries = (kids.get(dir) ?? []).map((p) => nodes.get(p)!).sort(order);
+    folders[dir] = entries;
+    for (const e of entries) if (e.type === "dir") queue.push(e.path);
+  }
+  return { folders, truncated };
+}
+
+/**
  * File-level three-way merge. A path conflicts when both sides changed it differently;
  * binary GIS files can't be merged line by line, so the fix is choosing a version.
  */

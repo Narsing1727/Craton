@@ -8,6 +8,7 @@ import { startRetryLoop } from "./services/webhooks.ts";
 import { startDigestLoop } from "./services/digest.ts";
 import { backfillFootprints } from "./services/extent.ts";
 import { backfillPaths } from "./services/history.ts";
+import { warmUp } from "./services/warmup.ts";
 
 const ctx = await createContext();
 const app = await createApp(ctx);
@@ -22,6 +23,9 @@ void backfillFootprints(ctx).then((n) => n && console.log(`Located ${n} reposito
 
 // Index the file names of repositories that predate the file index, once, in the background.
 void backfillPaths(ctx).then((n) => n && console.log(`Indexed the files of ${n} repositories.`)).catch((err) => console.error("file index backfill failed:", err));
+
+// Get the busiest repositories' pages and previews ready, so the first visitor does not pay for cold reads.
+if (config.warmup > 0) setTimeout(() => void warmUp(app, ctx, { limit: config.warmup, log: (line) => console.log(line) }), 1500);
 
 // Retry webhook deliveries that failed and are due again.
 startRetryLoop(ctx);

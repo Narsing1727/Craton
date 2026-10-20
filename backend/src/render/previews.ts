@@ -97,10 +97,12 @@ export async function warmCommit(ctx: Ctx, repo: RepoRow, commitId: string) {
           await vectorSvg(ctx, repo, commitId, e.path);
           if (hadBefore) await vectorSvg(ctx, repo, commitId, e.path, parent);
         } else {
-          for (const size of [384, 512]) {
+          // The size every page asks for (see the web app's previewSrc), and the layout the map viewer starts from.
+          for (const size of [1024]) {
             await rasterThumbnail(ctx, repo, commitId, e.path, size);
             if (hadBefore) await rasterDiff(ctx, repo, parent, commitId, e.path, size).catch(() => {}); // differing sizes: a normal 400 when viewed
           }
+          await rasterTileInfo(ctx, repo, commitId, e.path).catch(() => {});
         }
       } catch {
         // Not previewable: it will say so when someone opens it.

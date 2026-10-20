@@ -127,7 +127,7 @@ function toCommit(c: ApiCommit & { changes?: ApiChange[] }, names: Record<string
   return {
     sha: c.sha,
     message: c.message,
-    author: names[c.author] ?? c.author,
+    author: c.authorName ?? names[c.author] ?? c.author,
     authorHandle: c.author,
     timestamp: timeAgo(c.timestamp),
     isoTime: c.timestamp,
@@ -243,6 +243,7 @@ export const loadRepo = cache(async (owner: string, name: string) => {
       live: false,
       repo: demo.getRepo(owner, name),
       readme: demo.readmeContent,
+      previewPath: null as string | null,
       head: null as Commit | null,
       commitCount: 128,
       branchCount: demo.branches.length,
@@ -263,7 +264,8 @@ export const loadRepo = cache(async (owner: string, name: string) => {
     live: true,
     repo: toRepo(r),
     readme: r.readme,
-    head: r.head ? toCommit(r.head, await namesFor([r.head.author])) : null,
+    head: r.head ? toCommit(r.head, r.head.authorName ? {} : await namesFor([r.head.author])) : null,
+    previewPath: r.previewPath ?? null,
     commitCount: r.commitCount,
     branchCount: r.branchCount,
     openIssues: r.openIssues,
@@ -300,38 +302,36 @@ export const loadFolder = cache(async (owner: string, name: string, ref: string,
   return { live: true, entries: live.map((e) => toFileNode(e, live)), latest };
 });
 
-/** Every folder under the root, for the expandable tree on the code page (bounded). */
+/** Every folder under the root, for the expandable tree on the code page: one call to the API, not one per folder. */
 export const loadTree = cache(async (owner: string, name: string, ref: string) => {
-  const root = await api.tree(owner, name, ref, "");
-  if (!root) return null;
+  const all = await api.treeAll(owner, name, ref);
+  if (!all) return null;
   type Node = FileNode & { children?: Node[] };
-  let budget = 40; // folder requests per page render
-  async function expand(entries: ApiTreeEntry[]): Promise<Node[]> {
-    return Promise.all(
-      entries.map(async (e) => {
-        const node: Node = toFileNode(e, entries);
-        if (e.type === "dir" && budget-- > 0) {
-          const children = await api.tree(owner, name, ref, e.path);
-          if (children) node.children = await expand(children);
-        }
-        return node;
-      }),
-    );
-  }
-  return expand(root);
+  const build = (dir: string): Node[] => {
+    const entries = all.folders[dir];
+    if (!entries) return [];
+    return entries.map((e) => {
+      const node: Node = toFileNode(e, entries);
+      // A folder the answer left out (it was cut at the limit) is shown closed; opening its page lists it.
+      if (e.type === "dir" && all.folders[e.path]) node.children = build(e.path);
+      return node;
+    });
+  };
+  return build("");
 });
 
 export const loadCommits = cache(async (owner: string, name: string, ref?: string) => {
   const live = await api.commits(owner, name, ref, 100);
   if (!live) return offline({ live: false, commits: demo.commits }, () => ({ live: true, commits: [] as Commit[] }));
-  const names = await namesFor(live.map((c) => c.author));
+  // The API sends each author's name with the commit; only an older server makes this a second round of calls.
+  const names = live.every((c) => c.authorName) ? {} : await namesFor(live.map((c) => c.author));
   return { live: true, commits: live.map((c) => toCommit(c, names)) };
 });
 
 export const loadCommit = cache(async (owner: string, name: string, sha: string) => {
   const c = await api.commit(owner, name, sha);
   if (!c) return null;
-  const names = await namesFor([c.author]);
+  const names = c.authorName ? {} : await namesFor([c.author]);
   return { commit: toCommit(c, names), checks: c.checks };
 });
 

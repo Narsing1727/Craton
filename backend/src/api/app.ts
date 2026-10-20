@@ -72,6 +72,7 @@ import { LICENSES } from "../services/licenses.ts";
 import * as idempotency from "./idempotency.ts";
 import * as previews from "../render/previews.ts";
 import * as maptiles from "../render/maptiles.ts";
+import { memoJson } from "../services/memo.ts";
 import { latestCheckStatus, listCheckRuns, runChecks } from "../checks/runner.ts";
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { config } from "../config.ts";
@@ -161,6 +162,8 @@ export function createApp(ctx: Ctx) {
   app.use("*", async (c, next) => {
     const started = performance.now();
     await next();
+    // How long this server spent on the request (Server-Timing: the browser's network panel and a monitor can read it).
+    c.res.headers.set("Server-Timing", `app;dur=${(performance.now() - started).toFixed(1)}`);
     const route = (c as unknown as { req: { routePath?: string } }).req.routePath;
     metrics.observe(c.req.method, route && route !== "/*" ? route.replace(/^\/v1/, "") : "unmatched", c.res.status, (performance.now() - started) / 1000);
     // The audit log and each token's recent requests: from the request's shape and outcome, never its body.
@@ -1147,6 +1150,11 @@ export function createApp(ctx: Ctx) {
     if (!allowed) throw new ApiError(404, "not_found", `${o.handle} not found`);
     return c.json(await stats.ownerUsage(ctx, u.id, o.handle, o.kind === "org" ? "team" : (u.plan as keyof typeof config.plans)));
   });
+  /** Commits with their author's display name beside the handle (`authorName`), so a page need not ask who each author is. */
+  const named = async <T extends { author: string }>(items: T[]) => {
+    const names = await accounts.displayNames(ctx, items.map((i) => i.author));
+    return items.map((i) => ({ ...i, authorName: names[i.author] ?? i.author }));
+  };
   v1.get("/owners/:handle", async (c) => {
     const o = await accounts.getOwner(ctx, c.req.param("handle"));
     return c.json({
@@ -1223,17 +1231,27 @@ export function createApp(ctx: Ctx) {
   v1.get("/repos/:owner/:repo", async (c) => {
     const repo = await repoFor(c);
     const branches = await history.listRefs(ctx, repo, "branch");
-    let head: ReturnType<typeof history.commitJson> | null = null;
+    let head: (ReturnType<typeof history.commitJson> & { authorName: string }) | null = null;
     let commitCount = 0;
     let readme: string | null = null;
+    let previewPath: string | null = null;
     const tip = branches.find((b) => b.name === repo.default_branch)?.commit_id;
     if (tip) {
-      const [newest] = await history.listCommits(ctx, repo, tip, 1);
-      commitCount = await history.countCommits(ctx, repo, tip);
-      head = history.commitJson(newest);
-      readme = await files.readmeAt(ctx, repo, tip);
+      // Only the head commit decides these, so they are remembered under it (and a new push has a new head, so a new key).
+      const fixed = JSON.parse(await memoJson(`summary:${repo.id}:${tip}`, async () => {
+        const [newest] = await history.listCommits(ctx, repo, tip, 1);
+        // The raster the page draws as its preview (the shallowest GeoTIFF), named here so the page can ask for its picture at the same time as everything else.
+        const tree = await history.getObject<TreeObject>(ctx, repo, newest.tree, "tree");
+        const depth = (p: string) => p.split("/").length;
+        const previewPath = tree.entries.map((e) => e.path).filter((p) => /\.tiff?$/i.test(p)).sort((a, b) => depth(a) - depth(b) || a.localeCompare(b))[0] ?? null;
+        return { commitCount: await history.countCommits(ctx, repo, tip), head: (await named([history.commitJson(newest)]))[0], readme: await files.readmeAt(ctx, repo, tip), previewPath };
+      }));
+      previewPath = fixed.previewPath;
+      commitCount = fixed.commitCount;
+      head = fixed.head;
+      readme = fixed.readme;
     }
-    return c.json({ ...repos.repoJson(repo), access: await accounts.repoAccess(ctx, repo, c.get("user")?.id ?? null), starred: await social.hasStarred(ctx, repo, c.get("user")?.id ?? null), branchCount: branches.length, commitCount, head, readme, ...(await collab.openCounts(ctx, repo)) });
+    return c.json({ ...repos.repoJson(repo), access: await accounts.repoAccess(ctx, repo, c.get("user")?.id ?? null), starred: await social.hasStarred(ctx, repo, c.get("user")?.id ?? null), branchCount: branches.length, commitCount, head, readme, previewPath, ...(await collab.openCounts(ctx, repo)) });
   });
   v1.patch("/repos/:owner/:repo", async (c) => {
     const repo = await repoFor(c, "admin");
@@ -1603,7 +1621,17 @@ export function createApp(ctx: Ctx) {
   });
 
   // ── Browsing ─────────────────────────────────────────────────────────────
-  v1.get("/repos/:owner/:repo/tree/:ref{[^/]+}", async (c) => c.json(await history.listTree(ctx, await repoFor(c), c.req.param("ref"), c.req.query("path") ?? "")));
+  // Answers that depend only on a commit (its tree, its changes, a file's facts at it) are remembered under the commit's id: see services/memo.ts. The
+  // access check above each one still runs on every request; only the work of reading the objects is saved.
+  const json = (c: { body: (text: string, status: 200, headers: Record<string, string>) => Response }, text: string) => c.body(text, 200, { "content-type": "application/json; charset=UTF-8" });
+  v1.get("/repos/:owner/:repo/tree/:ref{[^/]+}", async (c) => {
+    const repo = await repoFor(c);
+    const path = c.req.query("path") ?? "";
+    const tip = await history.resolveRef(ctx, repo, c.req.param("ref"));
+    // ?all=1: every folder's listing at once, for a page that draws the whole tree (one call instead of one per folder).
+    if (c.req.query("all") === "1") return json(c, await memoJson(`tree-all:${repo.id}:${tip}`, () => history.listTreeAll(ctx, repo, tip)));
+    return json(c, await memoJson(`tree:${repo.id}:${tip}:${path}`, () => history.listTree(ctx, repo, tip, path)));
+  });
   v1.get("/repos/:owner/:repo/commits", async (c) => {
     const repo = await repoFor(c);
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 50) || 50, 1), 500);
@@ -1613,13 +1641,24 @@ export function createApp(ctx: Ctx) {
     for (const [name, v] of [["since", since], ["until", until]] as const) {
       if (v && Number.isNaN(Date.parse(v))) throw badRequest(`${name} must be a date like 2026-10-01 or 2026-10-01T12:00:00Z.`);
     }
+    if (!since && !until && !author && !offset) {
+      const tip = await history.resolveRef(ctx, repo, c.req.query("ref") ?? repo.default_branch);
+      const withChanges = c.req.query("changes") === "1";
+      return json(c, await memoJson(`commits:${repo.id}:${tip}:${limit}:${withChanges ? 1 : 0}`, async () => {
+        const rows = await history.listCommits(ctx, repo, tip, limit);
+        const listed = await named(rows.map(history.commitJson));
+        if (!withChanges) return listed;
+        return Promise.all(rows.map(async (r, i) => ({ ...listed[i], changes: await history.commitChanges(ctx, repo, await history.getObject<CommitObject>(ctx, repo, r.id, "commit")) })));
+      }));
+    }
     const all = await history.listCommits(ctx, repo, c.req.query("ref") ?? repo.default_branch, since || until || author || offset ? 10_000 : limit);
     const rows = all
       .filter((r) => (!since || Date.parse(r.timestamp) >= Date.parse(since)) && (!until || Date.parse(r.timestamp) <= Date.parse(until)) && (!author || r.author === author))
       .slice(offset, offset + limit);
     // ?changes=1 adds each commit's changed files with chunk counts (the commit list shows them).
-    if (c.req.query("changes") !== "1") return c.json(rows.map(history.commitJson));
-    return c.json((await Promise.all(rows.map(async (r) => ({ ...history.commitJson(r), changes: await history.commitChanges(ctx, repo, await history.getObject<CommitObject>(ctx, repo, r.id, "commit")) })))));
+    const listed = await named(rows.map(history.commitJson));
+    if (c.req.query("changes") !== "1") return c.json(listed);
+    return c.json((await Promise.all(rows.map(async (r, i) => ({ ...listed[i], changes: await history.commitChanges(ctx, repo, await history.getObject<CommitObject>(ctx, repo, r.id, "commit")) })))));
   });
   // Full commit objects reachable from a ref (for `craton clone` / `pull`).
   v1.get("/repos/:owner/:repo/commit-objects", async (c) => {
@@ -1631,9 +1670,12 @@ export function createApp(ctx: Ctx) {
   v1.get("/repos/:owner/:repo/commits/:sha", async (c) => {
     const repo = await repoFor(c);
     const id = await history.resolveRef(ctx, repo, c.req.param("sha"));
-    const row = (await history.listCommits(ctx, repo, id, 1))[0];
-    const commit = await history.getObject<CommitObject>(ctx, repo, id, "commit");
-    return c.json({ ...history.commitJson(row), changes: await history.commitChanges(ctx, repo, commit), checks: (await listCheckRuns(ctx, repo, { commit: id, limit: 1 }))[0] ?? null });
+    const fixed = JSON.parse(await memoJson(`commit:${repo.id}:${id}`, async () => {
+      const row = (await history.listCommits(ctx, repo, id, 1))[0];
+      const commit = await history.getObject<CommitObject>(ctx, repo, id, "commit");
+      return { ...(await named([history.commitJson(row)]))[0], changes: await history.commitChanges(ctx, repo, commit) };
+    }));
+    return c.json({ ...fixed, checks: (await listCheckRuns(ctx, repo, { commit: id, limit: 1 }))[0] ?? null });
   });
   // A file's bytes. Supports `Range: bytes=…` (one range), so a client can read the middle of a large raster without
   // downloading it (the Python filesystem and anything that speaks HTTP ranges rely on this). Without a Range the whole
@@ -1699,7 +1741,12 @@ export function createApp(ctx: Ctx) {
   v1.get("/repos/:owner/:repo/blame/:ref/:path{.+}", async (c) => c.json(await blame.blameFile(ctx, await repoFor(c), c.req.param("ref"), c.req.param("path"))));
 
   // What a file is and how it's stored: GeoTIFF tags, shapefile header, table shape, chunks, history.
-  v1.get("/repos/:owner/:repo/file/:ref/:path{.+}", async (c) => c.json(await files.fileInfo(ctx, await repoFor(c), c.req.param("ref"), c.req.param("path"))));
+  v1.get("/repos/:owner/:repo/file/:ref/:path{.+}", async (c) => {
+    const repo = await repoFor(c);
+    const ref = c.req.param("ref"), path = c.req.param("path");
+    const tip = await history.resolveRef(ctx, repo, ref);
+    return json(c, await memoJson(`file:${repo.id}:${tip}:${ref}:${path}`, () => files.fileInfo(ctx, repo, ref, path)));
+  });
 
   // Previews drawn from the stored bytes: GeoTIFFs as hillshade PNGs, shapefiles as SVG. With
   // ?base=<ref>, the difference from that version (elevation change, or changed features).

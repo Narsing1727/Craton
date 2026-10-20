@@ -77,6 +77,11 @@ export default async function RepoPage({
   const base = `/${owner}/${repo}`;
   const query = ref === summary.repo.defaultBranch ? "" : `?ref=${encodeURIComponent(ref)}`;
 
+  // The summary names the raster the sidebar previews, so its facts and picture are asked for together with everything else, not after the tree is known.
+  const hinted = summary.live && summary.previewPath && ref === summary.repo.defaultBranch ? summary.previewPath : null;
+  const early = hinted ? Promise.all([loadFile(owner, repo, ref, hinted), renderMeta(owner, repo, ref, hinted)]) : null;
+  // Dataset Search: the landing page of a public repository describes itself with schema.org markup.
+  const jsonLdAsked = summary.live && summary.repo.visibility === "public" ? api.datasetJsonLd(owner, repo) : Promise.resolve(null);
   const [{ branches }, tree, locks, releases] = await Promise.all([loadBranches(owner, repo), loadTree(owner, repo, ref), loadLocks(owner, repo), summary.live ? api.releases(owner, repo) : Promise.resolve(null)]);
   // No branches at all means a repository nobody has added to yet: show how to start, not a 404.
   if (summary.live && !tree && branches.length === 0) return <EmptyRepo owner={owner} repo={repo} defaultBranch={summary.repo.defaultBranch} apiUrl={PUBLIC_API_URL} />;
@@ -98,7 +103,7 @@ export default async function RepoPage({
   if (raster) {
     const path = raster.path ?? raster.name;
     if (summary.live) {
-      const [info, rendered] = await Promise.all([loadFile(owner, repo, ref, path), renderMeta(owner, repo, ref, path)]);
+      const [info, rendered] = hinted === path && early ? await early : await Promise.all([loadFile(owner, repo, ref, path), renderMeta(owner, repo, ref, path)]);
       const scale = info?.raster?.pixelScale;
       const caption = [scale ? `${scale[0]} m cells` : null, previewCaption(rendered.meta, units)?.split(" · ")[0]].filter(Boolean).join(" · ");
       preview = { path, caption, src: previewSrc(owner, repo, ref, path), error: rendered.error, aspect: rendered.meta?.sourceWidth && rendered.meta.sourceHeight ? rendered.meta.sourceWidth / rendered.meta.sourceHeight : undefined };
@@ -108,8 +113,7 @@ export default async function RepoPage({
   // Open the folder that holds the preview so the tree starts on real data.
   const firstDir = preview?.path.includes("/") ? [preview.path.split("/")[0]] : [];
 
-  // Dataset Search: the landing page of a public repository describes itself with schema.org markup.
-  const jsonLd = summary.live && summary.repo.visibility === "public" ? await api.datasetJsonLd(owner, repo) : null;
+  const jsonLd = await jsonLdAsked;
 
   return (
     <>

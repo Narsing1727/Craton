@@ -4,6 +4,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import type { Ctx } from "./context.ts";
 import { ApiError, badRequest, conflict, forbidden, notFound } from "./context.ts";
 import { makeToken } from "../core/tokens.ts";
+import { inGroups } from "../db/db.ts";
 import { mergeNotify } from "./notify.ts";
 
 export type Owner = { id: number; handle: string; kind: "user" | "org"; name: string; bio: string; website: string; location: string; company: string; pronouns: string; created_at: string };
@@ -50,6 +51,38 @@ export async function getOwner(ctx: Ctx, handle: string): Promise<Owner> {
   if (!row) throw notFound(`@${handle}`);
   return row;
 }
+
+const nameCache = new Map<string, { name: string; at: number }>();
+const NAME_TTL_MS = 30_000;
+
+/**
+ * Display names for handles, in one query for those not remembered in the last half minute. Commits carry their author's handle; a page wants the
+ * name beside it, and asking for each one separately (as a web page did) costs a round trip per author per page.
+ */
+export async function displayNames(ctx: Ctx, handles: string[]): Promise<Record<string, string>> {
+  const now = Date.now();
+  const out: Record<string, string> = {};
+  const missing: string[] = [];
+  for (const h of new Set(handles)) {
+    const hit = nameCache.get(h);
+    if (hit && now - hit.at < NAME_TTL_MS) out[h] = hit.name;
+    else missing.push(h);
+  }
+  if (missing.length) {
+    const rows = await inGroups(missing, 200, (group) => ctx.db.all(`SELECT handle, name FROM owners WHERE handle IN (${group.map(() => "?").join(", ")})`, ...group) as Promise<{ handle: string; name: string | null }[]>);
+    for (const r of rows) {
+      const name = r.name || r.handle;
+      nameCache.set(r.handle, { name, at: now });
+      out[r.handle] = name;
+    }
+    for (const h of missing) out[h] ??= h;
+    if (nameCache.size > 5000) nameCache.clear();
+  }
+  return out;
+}
+
+/** Forget the remembered names (someone just changed theirs). */
+const forgetNames = () => nameCache.clear();
 
 export async function createUser(ctx: Ctx, input: { handle: string; email: string; password: string; name?: string; bio?: string }): Promise<User> {
   const handle = input.handle.trim().toLowerCase();
@@ -278,6 +311,7 @@ export async function updateOrg(ctx: Ctx, orgHandle: string, actorId: number, pa
     const name = patch.name.trim();
     if (!name || name.length > 80) throw badRequest("The name needs 1 to 80 characters.");
     await ctx.db.run("UPDATE owners SET name = ? WHERE id = ?", name, org.id);
+    forgetNames();
   }
   if (patch.bio !== undefined) {
     if (patch.bio.length > 280) throw badRequest("The description is at most 280 characters.");
@@ -329,6 +363,7 @@ export async function updateProfile(ctx: Ctx, userId: number, patch: { name?: st
     const name = patch.name.trim();
     if (!name || name.length > 80) throw badRequest("Enter a name up to 80 characters.");
     await ctx.db.run("UPDATE owners SET name = ? WHERE id = ?", name, userId);
+    forgetNames();
   }
   if (patch.bio !== undefined) {
     if (patch.bio.length > 280) throw badRequest("Keep the bio under 280 characters.");

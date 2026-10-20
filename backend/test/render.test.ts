@@ -408,7 +408,7 @@ test("warming a pushed commit draws its previews ahead of the first viewer", asy
   // After the warm-up, the sizes it covers are already drawn: asking for one draws nothing.
   await warmCommit(ctx, repo, tip);
   before = drawn.count;
-  await timed(384);
+  await timed(1024);
   assert.equal(drawn.count, before, "served from what the warm-up drew");
 });
 

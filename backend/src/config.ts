@@ -66,6 +66,8 @@ export const config = {
    * balancer or a client's retry find a server with room. Health, readiness and metrics are never refused.
    */
   maxInFlight: Math.max(0, Math.floor(Number(env.CRATON_MAX_IN_FLIGHT ?? 400)) || 0),
+  /** How many of the most starred repositories the server gets ready for at start-up (0 turns it off): see services/warmup.ts. */
+  warmup: Math.max(0, Math.floor(Number(env.CRATON_WARMUP_REPOS ?? 12)) || 0),
   /** Serving /metrics (Prometheus text format) needs this token as a Bearer token; empty leaves the endpoint off. */
   metrics: { token: env.CRATON_METRICS_TOKEN ?? "" },
   /** How many seconds an anonymous visitor's copy of the explore list and trending may be reused (0 turns it off). */
