@@ -98,7 +98,7 @@ export default function DocsPage() {
               <CommandLine command="craton push" />
             </div>
             <div className="max-w-sm border border-border bg-card p-3">
-              <p className="mb-1.5 text-xs text-muted-foreground">What <code className="font-mono">craton add</code> stages — the sample basin created for you on sign-up:</p>
+              <p className="mb-1.5 text-xs text-muted-foreground">What <code className="font-mono">craton add</code> stages in a typical hydraulic-model folder:</p>
               <Tree className="w-full" initialExpandedItems={["terrain", "vectors", "model"]} indicator={false}>
                 <Folder value="terrain" element="terrain/">
                   <File value="terrain-dem">basin_dem.tif</File>

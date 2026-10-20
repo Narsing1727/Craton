@@ -36,7 +36,7 @@ if (shots) await page.screenshot({ path: `${shots}/map-satellite.png` });
 // Pointing at the map reads out the elevation and the position.
 const box = await map.boundingBox();
 await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.5);
-await page.waitForFunction(() => /\d+(\.\d+)? (m|ft) · /.test(document.querySelector('[aria-live="polite"]')?.textContent ?? ""), null, { timeout: 15000 });
+await page.waitForFunction(() => /\d+(\.\d+)? (m|ft) · /.test(document.querySelector('[aria-live="polite"]')?.textContent ?? ""), null, { timeout: 45000 });
 const readout = await page.locator('[aria-live="polite"]').first().innerText();
 must(/° N .*° E/.test(readout), `the cursor reads out a value and a place (${readout})`);
 

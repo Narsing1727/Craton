@@ -97,7 +97,7 @@ export function CommitsView({
           </InputGroup>
           {commits.length > 0 && (
             <span className="ml-auto text-xs text-muted-foreground tabular-nums" aria-live="polite">
-              {shown.length} of {commits.length} commits on <span className="font-mono text-foreground">{branch}</span>
+              {shown.length} of {commits.length} {commits.length === 1 ? "commit" : "commits"} on <span className="font-mono text-foreground">{branch}</span>
             </span>
           )}
         </div>

@@ -4,7 +4,7 @@
 // later from the dashboard checklist. Each step does its real work as you continue.
 
 import { useState, useTransition } from "react";
-import { Building2, Check, FolderGit2, FolderPlus, Sparkles, Terminal, User } from "lucide-react";
+import { Building2, Check, FolderGit2, Terminal, User } from "lucide-react";
 import { notify } from "@/components/button-status";
 import { CratonLogo } from "@/components/craton-logo";
 import { CommandLine, CopyButton } from "@/components/craton-actions";
@@ -84,7 +84,6 @@ export function OnboardingFlow({ user, server }: Props) {
   const [orgName, setOrgName] = useState("");
   const [invites, setInvites] = useState("");
   // Step 3
-  const [repoMode, setRepoMode] = useState<"sample" | "empty">("sample");
   const [repoName, setRepoName] = useState("");
   const [visibility, setVisibility] = useState<"private" | "public">("private");
   const [crs, setCrs] = useState("EPSG:32643");
@@ -133,18 +132,11 @@ export function OnboardingFlow({ user, server }: Props) {
   }
 
   function createRepository() {
-    const nameToUse = repoMode === "sample" ? "sample-basin" : repoName.trim().toLowerCase();
-    if (repoMode === "empty" && !NAME.test(nameToUse)) return setError("Use lowercase letters, numbers, dots, dashes or underscores.");
-    if (repoMode === "empty" && !/^EPSG:\d{4,6}$/.test(crs.trim())) return setError("Use an EPSG code, e.g. EPSG:32643.");
+    const nameToUse = repoName.trim().toLowerCase();
+    if (!NAME.test(nameToUse)) return setError("Use lowercase letters, numbers, dots, dashes or underscores.");
+    if (!/^EPSG:\d{4,6}$/.test(crs.trim())) return setError("Use an EPSG code, e.g. EPSG:32643.");
     start(async () => {
-      const result = await createRepoAction({
-        owner: workspace,
-        name: nameToUse,
-        visibility,
-        crs: repoMode === "sample" ? "EPSG:32643" : crs.trim(),
-        description: repoMode === "sample" ? "Sample flood model: terrain, catchments, a HEC-RAS plan and gauges." : undefined,
-        sample: repoMode === "sample",
-      });
+      const result = await createRepoAction({ owner: workspace, name: nameToUse, visibility, crs: crs.trim() });
       if (!result.ok) return setError(result.error);
       setRepo(`${result.data.owner}/${result.data.name}`);
       next();
@@ -206,7 +198,7 @@ export function OnboardingFlow({ user, server }: Props) {
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="ob-name">Your name</FieldLabel>
-              <Input id="ob-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder="Priya Menon" autoFocus />
+              <Input id="ob-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder="Your name" autoFocus />
               <FieldDescription>Shown on your commits, reviews and profile.</FieldDescription>
             </Field>
             <Field>
@@ -252,19 +244,7 @@ export function OnboardingFlow({ user, server }: Props) {
 
         {current.id === "repository" && (
           <div className="flex flex-col gap-3">
-            <div role="radiogroup" aria-label="How to start" className="flex flex-col gap-2">
-              <Choice
-                selected={repoMode === "sample"}
-                onSelect={() => setRepoMode("sample")}
-                icon={Sparkles}
-                badge="Recommended"
-                title="Explore a sample project"
-                note="A small but complete flood model: a 2 m DEM, catchment shapefiles, a HEC-RAS plan and gauge readings, with a pull request waiting for your review."
-              />
-              <Choice selected={repoMode === "empty"} onSelect={() => setRepoMode("empty")} icon={FolderPlus} title="Start empty" note="Name it now and push your own files from the command line." />
-            </div>
-            {repoMode === "empty" && (
-              <FieldGroup className="border border-border p-4">
+            <FieldGroup className="border border-border p-4">
                 <Field>
                   <FieldLabel htmlFor="ob-repo">Repository name</FieldLabel>
                   <div className="flex items-center gap-2">
@@ -277,8 +257,7 @@ export function OnboardingFlow({ user, server }: Props) {
                   <Input id="ob-crs" value={crs} onChange={(e) => setCrs(e.target.value)} className="font-mono" spellCheck={false} />
                   <FieldDescription>Every push is checked against it, so layers never drift into another CRS.</FieldDescription>
                 </Field>
-              </FieldGroup>
-            )}
+            </FieldGroup>
             <div role="radiogroup" aria-label="Visibility" className="grid grid-cols-2 gap-2">
               <Choice selected={visibility === "private"} onSelect={() => setVisibility("private")} title="Private" note="Only you and people you add." />
               <Choice selected={visibility === "public"} onSelect={() => setVisibility("public")} title="Public" note="Anyone can view and clone." />
@@ -355,7 +334,7 @@ export function OnboardingFlow({ user, server }: Props) {
             )}
             {current.id === "repository" && (
               <Button onClick={createRepository} disabled={pending}>
-                {pending ? (repoMode === "sample" ? "Setting up the sample…" : "Creating…") : repoMode === "sample" ? "Create sample project" : "Create repository"}
+                {pending ? "Creating…" : "Create repository"}
               </Button>
             )}
             {current.id === "cli" && (

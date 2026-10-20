@@ -394,7 +394,7 @@ export function NewRepoView({
                       ))}
                     </ul>
                     <p className="text-xs text-muted-foreground tabular-nums">
-                      {picked.length} files · {formatBytes(picked.reduce((n, f) => n + f.size, 0))}
+                      {picked.length} {picked.length === 1 ? "file" : "files"} · {formatBytes(picked.reduce((n, f) => n + f.size, 0))}
                       {flagged > 0 ? ` · ${flagged} need attention before they can be versioned` : " · all ready to push"}
                     </p>
                   </>

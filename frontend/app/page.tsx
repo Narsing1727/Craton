@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { DataTypeBadge } from "@/components/data-type-badge";
-import { MapPreview, MapDiffLegend } from "@/components/map-preview";
 import { InView } from "@/components/ui/in-view";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -63,6 +62,9 @@ export default async function HomePage() {
   const mapFile = mapCommit ? mapPath(mapCommit.files.find((f) => f.change === "modified" && previewable(mapPath(f.name)))!.name) : null;
   const mapBase = mapCommit?.parents?.[0];
   const mapDiff = mapCommit && mapFile && mapBase ? await renderMeta(project.owner, project.name, mapCommit.sha, mapFile, { base: mapBase }) : null;
+  // A commit that only adds data has no "before": it shows the first map file it added, drawn from the real bytes.
+  const addedFile = !mapCommit && live && head ? head.files.find((f) => f.change === "added" && previewable(mapPath(f.name))) : undefined;
+  const addedPath = addedFile ? mapPath(addedFile.name) : null;
   const base = `/${project.owner}/${project.name}`;
   // Live values when the API is up; the original demo copy otherwise.
   const change = head
@@ -91,7 +93,7 @@ export default async function HomePage() {
             <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
               A working repository for terrain, surveys, model inputs, and results. Craton keeps the exact data history your team needs to review, reproduce, and certify.
             </p>
-            <p className="mt-3 text-xs text-muted-foreground">Free to start. No credit card. Try it on a sample flood model in under a minute.</p>
+            <p className="mt-3 text-xs text-muted-foreground">Free to start. No credit card.</p>
           </div>
           <div className="flex flex-wrap gap-2 shrink-0">
             <Button href="/signup">
@@ -138,18 +140,14 @@ export default async function HomePage() {
                     <figcaption className="font-mono text-xs text-muted-foreground">what changed</figcaption>
                   </figure>
                 </div>
-              ) : (
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <MapPreview seed={12} className="aspect-video" />
-                  <MapPreview
-                    seed={12}
-                    className="aspect-video"
-                    diff={{ "2-4": "changed", "2-5": "changed", "3-4": "changed", "3-5": "added", "5-9": "added", "6-9": "changed" }}
-                  />
-                </div>
-              )}
+              ) : addedPath ? (
+                <figure className="mt-4 flex flex-col gap-1.5">
+                  <DataPreview src={previewSrc(project.owner, project.name, head!.sha, addedPath)} alt={`${addedPath}, added in this commit`} className="aspect-video" />
+                  <figcaption className="font-mono text-xs text-muted-foreground">{addedPath} · added in this commit</figcaption>
+                </figure>
+              ) : null}
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                {mapDiff ? <PreviewDiffLegend meta={mapDiff.meta} /> : <MapDiffLegend />}
+                {mapDiff ? <PreviewDiffLegend meta={mapDiff.meta} /> : <span />}
                 <Button size="sm" variant="outline" render={<Link href={change.href} />}>
                   Inspect change <ArrowRight data-icon="inline-end" />
                 </Button>
@@ -222,9 +220,9 @@ export default async function HomePage() {
       <section className="w-full border-t border-border/30">
         <div className="flex w-full flex-col gap-4 px-4 py-10 sm:px-6 lg:px-8 xl:px-10 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Start with a real model, not a blank page</h2>
+            <h2 className="text-lg font-semibold">Your data, with its whole history</h2>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground text-pretty">
-              Sign up and Craton sets up a sample basin with a DEM, catchments, a HEC-RAS plan and a pull request to review, so you can see chunk-level diffs and checks before you push your own data.
+              Create a repository, push a DEM, a shapefile or a HEC-RAS project from the command line, and see its history, map previews and checks on the website.
             </p>
           </div>
           <div className="flex shrink-0 gap-2">

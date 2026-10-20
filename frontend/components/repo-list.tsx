@@ -150,7 +150,7 @@ export function RepoList({
         </ul>
       )}
       <p className="text-xs text-muted-foreground tabular-nums" aria-live="polite">
-        Showing {shown.length} of {repos.length} repositories
+        Showing {shown.length} of {repos.length} {repos.length === 1 ? "repository" : "repositories"}
       </p>
     </div>
   );

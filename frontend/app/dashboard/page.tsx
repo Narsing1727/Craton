@@ -149,7 +149,7 @@ export default async function DashboardPage() {
     const openPull = (allPulls ?? []).find((p) => p.status !== "merged" && p.status !== "closed" && myRepos.some((r) => `${r.owner}/${r.name}` === p.repo));
     steps = [
       { id: "account", title: "Create your account", body: "", href: "/settings", cta: "Settings", done: true },
-      { id: "repository", title: "Create a repository", body: "Start from the sample flood model, or name one for your own project.", href: "/new", cta: "New repository", done: Boolean(done.get("repository")) },
+      { id: "repository", title: "Create a repository", body: "Name one for your project, then push your files from the command line.", href: "/new", cta: "New repository", done: Boolean(done.get("repository")) },
       {
         id: "merge",
         title: "Review and merge a pull request",

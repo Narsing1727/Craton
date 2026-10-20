@@ -75,19 +75,19 @@ export function ExploreView({ repos, topic }: { repos: Repo[]; topic?: string })
         <Section title="All public repositories">
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              <InputGroup className="h-8 w-full sm:w-72 sm:flex-none">
+              <InputGroup className="h-8 w-full sm:w-80 sm:flex-none">
                 <InputGroupAddon>
                   <Search aria-hidden />
                 </InputGroupAddon>
                 <InputGroupInput
                   type="search"
                   aria-label="Search public repositories"
-                  placeholder="Search by name, data type or region…"
+                  placeholder="Name, data type or region"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </InputGroup>
-              <InputGroup className="h-8 w-56" data-invalid={placeProblem ? true : undefined}>
+              <InputGroup className="h-8 w-full sm:w-64 sm:flex-none" data-invalid={placeProblem ? true : undefined}>
                 <InputGroupAddon>
                   <MapPin aria-hidden />
                 </InputGroupAddon>
@@ -97,7 +97,7 @@ export function ExploreView({ repos, topic }: { repos: Repo[]; topic?: string })
                   aria-label="Only data covering a place (latitude, longitude)"
                   aria-invalid={Boolean(placeProblem)}
                   aria-describedby={placeProblem ? "place-problem" : undefined}
-                  placeholder="Covers a place: 10.3, 76.3"
+                  placeholder="Covers a place (lat, lon)"
                   value={place}
                   onChange={(e) => setPlace(e.target.value)}
                   autoComplete="off"
@@ -145,7 +145,7 @@ export function ExploreView({ repos, topic }: { repos: Repo[]; topic?: string })
                     <X className="size-3" aria-hidden />
                   </Link>
                 )}
-                {results.length} repositories
+                {results.length} {results.length === 1 ? "repository" : "repositories"}
               </span>
             </div>
           </div>

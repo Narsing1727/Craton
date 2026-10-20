@@ -84,11 +84,11 @@ export function CodeView({ owner, repo, data, branches, currentRef, head, items,
             </Select>
             <Button variant="outline" size="sm" render={<Link href={`${base}/branches`} />}>
               <GitBranch data-icon="inline-start" />
-              <span className="tabular-nums">{branches.length}</span> branches
+              <span className="tabular-nums">{branches.length}</span> {branches.length === 1 ? "branch" : "branches"}
             </Button>
             <Button variant="outline" size="sm" render={<Link href={isBranch && currentRef !== data.defaultBranch ? `${base}/commits?ref=${encodeURIComponent(currentRef)}` : `${base}/commits`} />}>
               <History data-icon="inline-start" />
-              <span className="tabular-nums">{commitCount.toLocaleString("en-US")}</span> commits
+              <span className="tabular-nums">{commitCount.toLocaleString("en-US")}</span> {commitCount === 1 ? "commit" : "commits"}
             </Button>
             <div className="ml-auto flex flex-wrap items-center gap-2">
               <UploadDialog
