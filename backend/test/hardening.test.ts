@@ -108,12 +108,13 @@ test("the access log is one JSON line per request, with route patterns and no se
     await app.request("/v1/health");
     assert.equal(lines.length, 2);
     const first = JSON.parse(lines[0]);
-    assert.deepEqual(Object.keys(first).sort(), ["method", "ms", "path", "requestId", "status", "time", "user"]);
+    assert.deepEqual(Object.keys(first).sort(), ["method", "ms", "path", "requestId", "status", "time", "traceId", "user"]);
     assert.equal(first.method, "GET");
     assert.equal(first.path, "/v1/repos/:owner/:repo", "the route pattern, not the repository's name");
     assert.equal(first.status, 200);
     assert.equal(first.user, "rhea");
     assert.match(first.requestId, /^[0-9a-f-]{36}$/);
+    assert.match(first.traceId, /^[0-9a-f]{32}$/);
     assert.ok(!lines.join("").includes("not-in-the-log"), "no query string");
     assert.ok(!lines.join("").includes(token), "no token");
     assert.equal(JSON.parse(lines[1]).user, null);

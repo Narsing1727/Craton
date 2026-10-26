@@ -9,6 +9,9 @@ import { startDigestLoop } from "./services/digest.ts";
 import { backfillFootprints } from "./services/extent.ts";
 import { backfillPaths } from "./services/history.ts";
 import { warmUp } from "./services/warmup.ts";
+import { beginDrain } from "./api/lifecycle.ts";
+import { startBackupLoop } from "./services/backup.ts";
+import { flushTokenRequests } from "./services/audit.ts";
 
 const ctx = await createContext();
 const app = await createApp(ctx);
@@ -31,6 +34,10 @@ if (config.warmup > 0) setTimeout(() => void warmUp(app, ctx, { limit: config.wa
 startRetryLoop(ctx);
 startDigestLoop(ctx);
 
+// Copies of the database on a schedule (on by default when the data folder is the only copy there is).
+const backups = startBackupLoop(ctx);
+if (backups) console.log(`Backing up the database every ${config.backup.everyHours} h to ${config.backup.dir} (newest ${config.backup.keep} kept).`);
+
 // Keep idle connections open longer than clients keep them pooled. With Node's 5 s default, a
 // client that was busy (or blocked) can reuse a socket the server just closed and get ECONNRESET.
 // headersTimeout must stay above keepAliveTimeout.
@@ -45,10 +52,15 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     if (stopping) return;
     stopping = true;
-    console.log(`${signal}: shutting down`);
-    const force = setTimeout(() => process.exit(1), 15_000);
+    console.log(`${signal}: shutting down${config.drainSeconds ? ` (draining for ${config.drainSeconds} s first)` : ""}`);
+    // Readiness turns to 503 at once; the load balancer needs a few seconds to notice and send new requests elsewhere.
+    beginDrain();
+    backups?.stop();
+    const force = setTimeout(() => process.exit(1), config.drainSeconds * 1000 + 15_000);
     force.unref();
-    server.close(() => void ctx.db.close().finally(() => process.exit(0)));
-    if ("closeIdleConnections" in server) server.closeIdleConnections();
+    setTimeout(() => {
+      server.close(() => void flushTokenRequests(ctx).finally(() => ctx.db.close()).finally(() => process.exit(0)));
+      if ("closeIdleConnections" in server) server.closeIdleConnections();
+    }, config.drainSeconds * 1000);
   });
 }

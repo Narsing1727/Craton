@@ -5,6 +5,7 @@ import type { Ctx } from "./context.ts";
 import { ApiError, badRequest, conflict, forbidden, notFound } from "./context.ts";
 import { makeToken } from "../core/tokens.ts";
 import { inGroups } from "../db/db.ts";
+import { config } from "../config.ts";
 import { mergeNotify } from "./notify.ts";
 
 export type Owner = { id: number; handle: string; kind: "user" | "org"; name: string; bio: string; website: string; location: string; company: string; pronouns: string; created_at: string };
@@ -176,15 +177,51 @@ export async function issueToken(
 
 /** Resolve a bearer token to its user, or null. Updates last-used time. */
 export type AuthedUser = User & { scopes: string[]; tokenKind: "session" | "pat"; tokenId: number; /** "owner/name" this token is limited to, or null for every repository the person can reach. */ repos: string[] | null };
+type TokenRow = { id: number; user_id: number; scopes: string; expires_at: string | null; kind: "session" | "pat"; repos: string | null };
+
+// Which token a request carries (not who the person is: that is read fresh every time, so a changed plan, a verified address or a new role is
+// seen at once) is kept for a couple of seconds. A page makes a dozen calls in a burst; each used to look the same token up again and then try to
+// stamp "last used" again. Revoking, signing out, changing a password and deleting an account clear it here at once; on a second server a
+// revoked token can still work for the few seconds this lives (CRATON_AUTH_CACHE_MS, 0 turns it off).
+const tokenRows = new Map<string, { at: number; row: TokenRow }>();
+const stamped = new Map<number, number>();
+const AUTH_CACHE_MAX = 2000;
+export const authCacheStats = { hit: 0, miss: 0 };
+/** Forget every remembered token: called wherever a credential can stop working. */
+export function dropTokenCache() {
+  tokenRows.clear();
+  stamped.clear();
+}
+
 export async function authenticate(ctx: Ctx, token: string | undefined | null): Promise<AuthedUser | null> {
   if (!token) return null;
-  const row = await ctx.db.get("SELECT id, user_id, scopes, expires_at, kind, repos FROM tokens WHERE token_hash = ?", tokenHash(token)) as
-    | { id: number; user_id: number; scopes: string; expires_at: string | null; kind: "session" | "pat"; repos: string | null }
-    | undefined;
-  if (!row) return null;
+  const hash = tokenHash(token);
+  const ttl = config.authCacheMs;
+  let row: TokenRow | undefined;
+  const hit = ttl > 0 ? tokenRows.get(hash) : undefined;
+  if (hit && Date.now() - hit.at < ttl) {
+    row = hit.row;
+    authCacheStats.hit++;
+  } else {
+    row = (await ctx.db.get("SELECT id, user_id, scopes, expires_at, kind, repos FROM tokens WHERE token_hash = ?", hash)) as TokenRow | undefined;
+    if (!row) {
+      tokenRows.delete(hash);
+      return null;
+    }
+    authCacheStats.miss++;
+    if (ttl > 0) {
+      if (tokenRows.size >= AUTH_CACHE_MAX) tokenRows.delete(tokenRows.keys().next().value!);
+      tokenRows.set(hash, { at: Date.now(), row });
+    }
+  }
   if (row.expires_at && row.expires_at < new Date().toISOString()) return null;
   // The "last used" stamp is for people to read, so a minute's accuracy is plenty; writing it on every request is a write per request.
-  await ctx.db.run("UPDATE tokens SET last_used_at = now_iso() WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)", row.id, new Date(Date.now() - 60_000).toISOString());
+  const now = Date.now();
+  if (now - (stamped.get(row.id) ?? 0) >= 60_000) {
+    if (stamped.size >= AUTH_CACHE_MAX) stamped.delete(stamped.keys().next().value!);
+    stamped.set(row.id, now);
+    await ctx.db.run("UPDATE tokens SET last_used_at = now_iso() WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)", row.id, new Date(now - 60_000).toISOString());
+  }
   return { ...await getUserById(ctx, row.user_id), scopes: row.scopes.split(","), tokenKind: row.kind, tokenId: row.id, repos: row.repos ? (JSON.parse(row.repos) as string[]) : null };
 }
 
@@ -197,7 +234,10 @@ export async function liveToken(ctx: Ctx, token: string): Promise<{ id: number; 
 
 /** Remove one credential by id, whoever it belongs to (for a token found exposed in a public repository). */
 export async function revokeExposedToken(ctx: Ctx, id: number): Promise<number> {
-  return Number((await ctx.db.run("DELETE FROM tokens WHERE id = ?", id)).changes);
+  dropTokenCache();
+  const changes = Number((await ctx.db.run("DELETE FROM tokens WHERE id = ?", id)).changes);
+  dropTokenCache(); // again: a request that was already reading may have put the token back
+  return changes;
 }
 
 /** A user's personal access tokens; `current` marks the one making this request. */
@@ -208,7 +248,9 @@ export async function listTokens(ctx: Ctx, userId: number, requestToken?: string
 }
 
 export async function revokeToken(ctx: Ctx, userId: number, id: number) {
+  dropTokenCache();
   const res = await ctx.db.run("DELETE FROM tokens WHERE id = ? AND user_id = ?", id, userId);
+  dropTokenCache();
   if (res.changes === 0) throw notFound("Token");
 }
 
@@ -424,7 +466,9 @@ export const hasAvatar = async (ctx: Ctx, ownerId: number) => Boolean(await ctx.
 
 /** Sign out: the session token stops working immediately. */
 export async function revokeSession(ctx: Ctx, token: string) {
+  dropTokenCache();
   await ctx.db.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'session'", tokenHash(token));
+  dropTokenCache();
 }
 
 /**
@@ -450,7 +494,9 @@ export async function resetPassword(ctx: Ctx, token: string, password: string) {
   if (!row || row.used_at || row.expires_at < new Date().toISOString()) throw badRequest("This reset link has expired or was already used. Request a new one.");
   await ctx.db.run("UPDATE users SET password_hash = ? WHERE owner_id = ?", hashPassword(password), row.user_id);
   await ctx.db.run("UPDATE password_resets SET used_at = now_iso() WHERE id = ?", row.id);
+  dropTokenCache();
   await ctx.db.run("DELETE FROM tokens WHERE user_id = ? AND kind = 'session'", row.user_id);
+  dropTokenCache();
   return getUserById(ctx, row.user_id);
 }
 
@@ -489,7 +535,9 @@ export async function listSessions(ctx: Ctx, userId: number, currentTokenId: num
 }
 
 export async function revokeSessionById(ctx: Ctx, userId: number, id: number) {
+  dropTokenCache();
   const r = await ctx.db.run("DELETE FROM tokens WHERE id = ? AND user_id = ? AND kind = 'session'", id, userId);
+  dropTokenCache();
   if (!r.changes) throw notFound("Session");
 }
 
@@ -502,7 +550,9 @@ export async function changePassword(ctx: Ctx, userId: number, currentTokenId: n
   if (!verifyPassword(current ?? "", row.password_hash)) throw new ApiError(403, "wrong_password", "Your current password isn’t right.");
   if ((next ?? "").length < 12) throw badRequest("Passwords need at least 12 characters.");
   await ctx.db.run("UPDATE users SET password_hash = ? WHERE owner_id = ?", hashPassword(next), userId);
+  dropTokenCache();
   await ctx.db.run("DELETE FROM tokens WHERE user_id = ? AND kind = 'session' AND id <> ?", userId, currentTokenId);
+  dropTokenCache();
 }
 
 // ── Export and deletion (GDPR Art. 20 and 17) ──────────────────────────────
@@ -542,6 +592,7 @@ export async function deleteAccount(ctx: Ctx, userId: number, confirm: { handle:
     throw conflict("sole_owner", `You’re the only owner of ${soleOwner.map((o) => o.handle).join(", ")}. Make someone else an owner, or delete the organization, first.`, { orgs: soleOwner.map((o) => o.handle) });
   }
 
+  dropTokenCache();
   let ghost = await ctx.db.get("SELECT id FROM owners WHERE handle = 'ghost'") as { id: number } | undefined;
   if (!ghost) {
     const lastInsertRowid = await ctx.db.insert("INSERT INTO owners (handle, kind, name, bio) VALUES ('ghost', 'user', 'Deleted user', 'This account was deleted.')");

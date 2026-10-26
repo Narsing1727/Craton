@@ -7,6 +7,7 @@
 // administrator reads this log for. Reading is for the owners of what happened, not for the people it happened to.
 
 import type { Ctx } from "./context.ts";
+import { insertMany } from "../db/db.ts";
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** Entries older than this are dropped as new ones arrive. */
@@ -81,7 +82,7 @@ export type RequestFacts = {
 export async function recordRequest(ctx: Ctx, r: RequestFacts) {
   if (!r.actor) return;
   try {
-    if (r.actor.tokenKind === "pat") await recordTokenRequest(ctx, r);
+    if (r.actor.tokenKind === "pat") recordTokenRequest(ctx, r);
     if (r.unmatched || !MUTATING.has(r.method)) return;
     // Only what happens to repositories and organizations; account changes have their own personal security log.
     if (!(r.route.startsWith("/repos/") || r.route.startsWith("/orgs/"))) return;
@@ -115,11 +116,57 @@ export async function recordNote(ctx: Ctx, n: { repo: { id: number; owner: strin
   }
 }
 
-async function recordTokenRequest(ctx: Ctx, r: RequestFacts) {
-  const id = r.actor!.tokenId;
-  const info = await ctx.db.insert("INSERT INTO token_requests (token_id, method, route, status, ms, ip) VALUES (?, ?, ?, ?, ?, ?)", id, r.method, r.route, r.status, Math.round(r.ms * 10) / 10, r.ip?.slice(0, 64) ?? null);
-  if (info % 20 === 0) {
-    await ctx.db.run("DELETE FROM token_requests WHERE token_id = ? AND id NOT IN (SELECT id FROM token_requests WHERE token_id = ? ORDER BY id DESC LIMIT ?)", id, id, TOKEN_KEEP);
+// What each token asked for recently ("Settings, Tokens, recent requests") is written in groups, not one INSERT per request: a request that
+// is answered should not wait for a log row to be committed, and a busy token (a CLI pushing thousands of chunks) would otherwise double the
+// database's write load. Rows wait at most a second (or until 200 have gathered), keep the time the request was made, and are written with
+// one statement; reading them, and shutting down, write what is waiting first. Only this log is batched: the audit trail of changes to
+// repositories (recordRequest below, recordNote) is written before the request finishes.
+type TokenRow = [string, number, string, string, number, number, string | null];
+const waiting = new WeakMap<object, { rows: TokenRow[]; timer: NodeJS.Timeout | null; writing: Promise<void> }>();
+const FLUSH_MS = 1000;
+const FLUSH_AT = 200;
+export const tokenLogStats = { written: 0, dropped: 0 };
+
+function queueFor(ctx: Ctx) {
+  let q = waiting.get(ctx.db);
+  if (!q) waiting.set(ctx.db, (q = { rows: [], timer: null, writing: Promise.resolve() }));
+  return q;
+}
+
+/** Write what is waiting in the token request log (one statement), and keep each token's newest TOKEN_KEEP rows. Never throws. */
+export async function flushTokenRequests(ctx: Ctx) {
+  const q = queueFor(ctx);
+  if (q.timer) {
+    clearTimeout(q.timer);
+    q.timer = null;
+  }
+  const rows = q.rows.splice(0);
+  q.writing = q.writing.then(async () => {
+    if (!rows.length) return;
+    try {
+      await insertMany(ctx.db, "token_requests", ["at", "token_id", "method", "route", "status", "ms", "ip"], rows, "");
+      tokenLogStats.written += rows.length;
+      const ids = [...new Set(rows.map((r) => r[1]))];
+      await ctx.db.run(
+        `DELETE FROM token_requests WHERE token_id IN (${ids.map(() => "?").join(", ")}) AND id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY token_id ORDER BY id DESC) AS n FROM token_requests WHERE token_id IN (${ids.map(() => "?").join(", ")})) ranked WHERE n <= ?)`,
+        ...ids,
+        ...ids,
+        TOKEN_KEEP,
+      );
+    } catch {
+      tokenLogStats.dropped += rows.length; // a log that cannot be written must never break anything
+    }
+  });
+  await q.writing;
+}
+
+function recordTokenRequest(ctx: Ctx, r: RequestFacts) {
+  const q = queueFor(ctx);
+  q.rows.push([new Date().toISOString(), r.actor!.tokenId, r.method, r.route, Math.round(r.status), Math.round(r.ms * 10) / 10, r.ip?.slice(0, 64) ?? null]);
+  if (q.rows.length >= FLUSH_AT) void flushTokenRequests(ctx);
+  else if (!q.timer) {
+    q.timer = setTimeout(() => void flushTokenRequests(ctx), FLUSH_MS);
+    q.timer.unref();
   }
 }
 
@@ -208,6 +255,7 @@ export function eventsCsv(events: AuditEvent[]): string {
 }
 
 export async function tokenRequests(ctx: Ctx, tokenId: number, limit = 100) {
+  await flushTokenRequests(ctx); // a token's own latest requests are in what it reads
   const rows = await ctx.db.all("SELECT at, method, route, status, ms, ip FROM token_requests WHERE token_id = ? ORDER BY id DESC LIMIT ?", tokenId, Math.min(limit, TOKEN_KEEP)) as {
     at: string;
     method: string;

@@ -15,9 +15,9 @@ export async function createContext(opts?: { database?: string; store?: ChunkSto
   const store =
     opts?.store ??
     (r2Enabled()
-      ? new R2Store({ ...config.r2 })
+      ? new R2Store({ ...config.r2, retry: config.objectStore })
       : s3Enabled()
-        ? new S3Store({ ...config.s3, endpoint: config.s3.endpoint || undefined, sessionToken: config.s3.sessionToken || undefined })
+        ? new S3Store({ ...config.s3, endpoint: config.s3.endpoint || undefined, sessionToken: config.s3.sessionToken || undefined, retry: config.objectStore })
         : new FsStore(path.join(config.dataDir, "chunks")));
   return { db, store };
 }

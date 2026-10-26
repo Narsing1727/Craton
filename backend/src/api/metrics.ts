@@ -5,6 +5,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { memoSize, memoStats } from "../services/memo.ts";
+import { storeStats } from "../storage/resilient.ts";
 
 export const counters = {
   rateLimited: 0,
@@ -82,6 +83,9 @@ export function render(extra: Extra): string {
   line("# HELP craton_memo_bytes Size of the remembered answers.");
   line("# TYPE craton_memo_bytes gauge");
   line(`craton_memo_bytes ${memoSize().bytes}`);
+  line("# HELP craton_object_store_total Calls to the object store (S3, R2): all, tried again, given up on, refused because it was down, and tries that timed out.");
+  line("# TYPE craton_object_store_total counter");
+  for (const [k, v] of [["requests", storeStats.requests], ["retries", storeStats.retries], ["failures", storeStats.failures], ["breaker_rejected", storeStats.breakerRejected], ["timeouts", storeStats.timeouts], ["breaker_opened", storeStats.breakerOpened]] as const) line(`craton_object_store_total{kind="${k}"} ${v}`);
   line("# HELP craton_cache_up 1 when the shared cache is answering, 0 when this server is using local fallbacks.");
   line("# TYPE craton_cache_up gauge");
   line(`craton_cache_up ${extra.cache.status === "ok" ? 1 : 0}`);

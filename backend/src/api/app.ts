@@ -7,6 +7,9 @@ import { buildOpenApi } from "./openapi.ts";
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
+import { StorageUnavailableError } from "../storage/resilient.ts";
+import { lifecycle } from "./lifecycle.ts";
+import { startTrace } from "./trace.ts";
 import { compress } from "hono/compress";
 import { createHash } from "node:crypto";
 import { secureHeaders } from "hono/secure-headers";
@@ -77,7 +80,7 @@ import { latestCheckStatus, listCheckRuns, runChecks } from "../checks/runner.ts
 import type { BlobObject, CommitObject, TreeObject } from "../core/objects.ts";
 import { config } from "../config.ts";
 
-type Env = { Variables: { user: accounts.AuthedUser | null } };
+type Env = { Variables: { user: accounts.AuthedUser | null; traceId: string } };
 
 /** What a personal access token may do. Web sessions can do everything their user can. */
 const SCOPES = { repo: "Read and write repositories", "read:repo": "Read repositories", "read:org": "Read organization membership", "admin:org": "Manage organization members" };
@@ -110,7 +113,7 @@ export function createApp(ctx: Ctx) {
       metrics.counters.inFlight--;
     }
   });
-  app.use("*", cors({ origin: [...config.corsOrigins], allowHeaders: ["Authorization", "Content-Type", "Idempotency-Key"], allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], exposeHeaders: ["RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "Retry-After", "X-Request-Id", "X-Craton-Render", "Idempotency-Replayed"] }));
+  app.use("*", cors({ origin: [...config.corsOrigins], allowHeaders: ["Authorization", "Content-Type", "Idempotency-Key"], allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], exposeHeaders: ["RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "Retry-After", "X-Request-Id", "traceparent", "X-Craton-Render", "Idempotency-Replayed"] }));
   // An API never renders pages: no framing, no sniffing, no referrer leaks.
   app.use("*", secureHeaders({ xFrameOptions: "DENY", contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] }, referrerPolicy: "no-referrer" }));
   // JSON and SVG shrink a lot on the wire; images and chunk bytes are already dense, and
@@ -192,12 +195,17 @@ export function createApp(ctx: Ctx) {
         status: c.res.status,
         ms: Math.round((performance.now() - started) * 10) / 10,
         requestId: c.res.headers.get("X-Request-Id"),
+        traceId: c.get("traceId") ?? null,
         user: c.get("user")?.handle ?? null,
       }),
     );
   });
   app.use("*", async (c, next) => {
     c.header("X-Request-Id", crypto.randomUUID());
+    const trace = startTrace(c.req.header("traceparent"));
+    c.header("traceparent", trace.header);
+    c.set("traceId", trace.traceId);
+    if (lifecycle.draining) c.header("Connection", "close"); // this server is being stopped: clients should reconnect to another one
     const header = c.req.header("authorization");
     const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
     const user = await accounts.authenticate(ctx, token);
@@ -231,7 +239,12 @@ export function createApp(ctx: Ctx) {
       c.header("Retry-After", "5");
       return c.json({ error: { code: "database_unavailable", message: "Craton can’t reach its database right now. Try again in a few seconds." } }, 503);
     }
-    console.error(err);
+    if (err instanceof StorageUnavailableError) {
+      console.error(`object store unavailable: ${err.message}`);
+      c.header("Retry-After", String(err.retryAfterSeconds));
+      return c.json({ error: { code: "storage_unavailable", message: "Craton can’t reach its file storage right now. Nothing was lost; try again in a few seconds." } }, 503);
+    }
+    console.error(`[${c.res.headers.get("X-Request-Id") ?? "-"}]`, err);
     return c.json({ error: { code: "internal", message: "Something went wrong on our side." } }, 500);
   });
   app.notFound((c) => c.json({ error: { code: "not_found", message: `No route for ${c.req.method} ${c.req.path}` } }, 404));
@@ -388,6 +401,8 @@ export function createApp(ctx: Ctx) {
   // removes one tiny probe chunk; the answer is kept for five seconds so a busy balancer does not hammer an object store.
   let lastReady: { at: number; body: { ready: boolean; checks: Record<string, string>; ms: number } } | null = null;
   v1.get("/ready", async (c) => {
+    // Being stopped: say so at once (not from the copy below), so the balancer sends the next requests elsewhere.
+    if (lifecycle.draining) return c.json({ ready: false, checks: { server: "draining" }, ms: 0 }, 503);
     if (lastReady && Date.now() - lastReady.at < 5000) return c.json(lastReady.body, lastReady.body.ready ? 200 : 503);
     const started = performance.now();
     const checks: Record<string, string> = {};

@@ -4,6 +4,7 @@
 
 import type { ChunkStore } from "./chunk-store.ts";
 import { amzDateNow, payloadSha256, signRequest } from "./sigv4.ts";
+import { DEFAULT_POLICY, ObjectRequester, type RetryPolicy } from "./resilient.ts";
 
 export class R2Store implements ChunkStore {
   readonly kind = "cloudflare-r2";
@@ -11,35 +12,44 @@ export class R2Store implements ChunkStore {
   private readonly bucket: string;
   private readonly accessKeyId: string;
   private readonly secretAccessKey: string;
+  private readonly requester: ObjectRequester;
 
-  constructor(opts: { accountId: string; bucket: string; accessKeyId: string; secretAccessKey: string }) {
+  constructor(opts: { accountId: string; bucket: string; accessKeyId: string; secretAccessKey: string; retry?: Partial<RetryPolicy> }) {
+    this.requester = new ObjectRequester("Cloudflare R2", { ...DEFAULT_POLICY, ...opts.retry });
     this.host = `${opts.accountId}.r2.cloudflarestorage.com`;
     this.bucket = opts.bucket;
     this.accessKeyId = opts.accessKeyId;
     this.secretAccessKey = opts.secretAccessKey;
   }
 
-  private async request(method: "GET" | "PUT" | "HEAD" | "DELETE", hash: string, body?: Buffer) {
+  /** One signed request, tried again when the store says so (see resilient.ts); each attempt is signed afresh. */
+  private request(method: "GET" | "PUT" | "HEAD" | "DELETE", hash: string, body?: Buffer) {
     const path = `/${this.bucket}/chunks/${hash.slice(0, 2)}/${hash}`;
-    const payloadHash = body ? payloadSha256(body) : payloadSha256("");
-    const { headers } = signRequest({
-      method,
-      host: this.host,
-      path,
-      payloadHash,
-      amzDate: amzDateNow(),
-      region: "auto",
-      service: "s3",
-      accessKeyId: this.accessKeyId,
-      secretAccessKey: this.secretAccessKey,
-    });
-    const { host: _host, ...sendHeaders } = headers;
-    return fetch(`https://${this.host}${path}`, { method, headers: sendHeaders, body: body ? new Uint8Array(body) : undefined });
+    const payloadHash = payloadSha256(body ?? "");
+    return this.requester.call(
+      `${method} ${hash.slice(0, 12)}`,
+      async (signal) => {
+        const { headers } = signRequest({
+          method,
+          host: this.host,
+          path,
+          payloadHash,
+          amzDate: amzDateNow(),
+          region: "auto",
+          service: "s3",
+          accessKeyId: this.accessKeyId,
+          secretAccessKey: this.secretAccessKey,
+        });
+        const { host: _host, ...sendHeaders } = headers;
+        return fetch(`https://${this.host}${path}`, { method, headers: sendHeaders, body: body ? new Uint8Array(body) : undefined, signal });
+      },
+      body?.length ?? 0,
+    );
   }
 
   async put(hash: string, stored: Buffer) {
     const res = await this.request("PUT", hash, stored);
-    if (!res.ok) throw new Error(`R2 PUT ${hash} failed: ${res.status} ${await res.text()}`);
+    if (res.status < 200 || res.status >= 300) throw new Error(`R2 PUT ${hash} failed: ${res.status} ${res.body.toString("utf8", 0, 300)}`);
   }
 
   async replace(hash: string, stored: Buffer) {
@@ -49,17 +59,19 @@ export class R2Store implements ChunkStore {
   async get(hash: string) {
     const res = await this.request("GET", hash);
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`R2 GET ${hash} failed: ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
+    if (res.status < 200 || res.status >= 300) throw new Error(`R2 GET ${hash} failed: ${res.status}`);
+    return res.body;
   }
 
   async has(hash: string) {
     const res = await this.request("HEAD", hash);
-    return res.ok;
+    if (res.status === 404) return false;
+    if (res.status < 200 || res.status >= 300) throw new Error(`R2 HEAD ${hash} failed: ${res.status}`);
+    return true;
   }
 
   async delete(hash: string) {
     const res = await this.request("DELETE", hash);
-    if (!res.ok && res.status !== 404) throw new Error(`R2 DELETE ${hash} failed: ${res.status}`);
+    if ((res.status < 200 || res.status >= 300) && res.status !== 404) throw new Error(`R2 DELETE ${hash} failed: ${res.status}`);
   }
 }

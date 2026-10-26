@@ -207,6 +207,28 @@ export const config = {
    * Amazon S3 (or an S3-compatible service with its own endpoint). When the bucket and region are set, chunks are stored there instead
    * of on disk. Without access keys the process uses the role of the ECS task or EC2 instance it runs on.
    */
+  /**
+   * Copies of the database the server makes by itself (see services/backup.ts). On by default, every 24 hours, when there is no database server
+   * address (the data folder is then the only copy of everything); off when a database server is used, which has its own snapshots.
+   */
+  backup: {
+    everyHours: Math.max(0, Number(env.CRATON_BACKUP_EVERY_HOURS ?? (env.CRATON_DATABASE_URL || env.DATABASE_URL ? 0 : 24)) || 0),
+    dir: env.CRATON_BACKUP_DIR ? path.resolve(env.CRATON_BACKUP_DIR) : path.join(path.resolve(env.CRATON_DATA_DIR ?? path.join(root, "data")), "backups"),
+    keep: Math.min(365, Math.max(1, Math.floor(Number(env.CRATON_BACKUP_KEEP ?? 14)) || 14)),
+  },
+
+  /** How long (ms) a server remembers which token a request carries, instead of looking it up again (0 turns it off); see services/accounts.ts. */
+  authCacheMs: Math.min(60_000, Math.max(0, Math.floor(Number(env.CRATON_AUTH_CACHE_MS ?? 2000)) || 0)),
+
+  /** Seconds a stopping server keeps answering (readiness 503, Connection: close) before it stops taking connections; see api/lifecycle.ts. */
+  drainSeconds: Math.min(120, Math.max(0, Number(env.CRATON_DRAIN_SECONDS ?? (env.NODE_ENV === "production" ? 10 : 0)) || 0)),
+
+  /** How an object store (S3, R2) is called: tries per request and the time one try may take, see storage/resilient.ts. */
+  objectStore: {
+    attempts: Math.min(10, Math.max(1, Math.floor(Number(env.CRATON_STORE_ATTEMPTS ?? 5)) || 5)),
+    timeoutMs: Math.min(300, Math.max(2, Math.floor(Number(env.CRATON_STORE_TIMEOUT_SECONDS ?? 30)) || 30)) * 1000,
+  },
+
   s3: {
     bucket: env.CRATON_S3_BUCKET ?? "",
     region: env.CRATON_S3_REGION ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "",

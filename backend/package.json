@@ -25,7 +25,8 @@
     "gc": "node --disable-warning=ExperimentalWarning scripts/gc.ts",
     "repack": "node --disable-warning=ExperimentalWarning scripts/repack.ts",
     "recode": "node --disable-warning=ExperimentalWarning scripts/recode.ts",
-    "fsck": "node --disable-warning=ExperimentalWarning scripts/fsck.ts"
+    "fsck": "node --disable-warning=ExperimentalWarning scripts/fsck.ts",
+    "load": "node scripts/load.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.2.17",
