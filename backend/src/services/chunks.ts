@@ -4,7 +4,7 @@
 // the requester may see (public, plus the repository owner's scope). Answering against every chunk
 // would let anyone test whether some other customer stored a given file.
 
-import { inGroups, statement } from "../db/db.ts";
+import { inGroups } from "../db/db.ts";
 import type { Ctx } from "./context.ts";
 import { badRequest, notFound } from "./context.ts";
 import type { RepoRow } from "./repos.ts";
@@ -24,11 +24,15 @@ export function visibleScopes(repo: Pick<RepoRow, "visibility" | "owner_id">): s
   return ["public", `owner:${repo.owner_id}`, repoScope(repo)].filter((v, i, a) => a.indexOf(v) === i);
 }
 
+/** Which of `hashes` are in one of `scopes`. A few hundred hashes per statement: one query per hash was a round trip each (100,000 of them for a big push). */
 async function inScopes(ctx: Ctx, hashes: string[], scopes: string[]): Promise<Set<string>> {
   const found = new Set<string>();
   const marks = scopes.map(() => "?").join(",");
-  const stmt = statement(ctx.db, `SELECT DISTINCT hash FROM chunk_scopes WHERE hash = ? AND scope IN (${marks})`);
-  for (const h of hashes) if (await stmt.get(h, ...scopes)) found.add(h);
+  const groups = await inGroups(hashes, 500, async (group) => {
+    const rows = (await ctx.db.all(`SELECT DISTINCT hash FROM chunk_scopes WHERE hash IN (${group.map(() => "?").join(",")}) AND scope IN (${marks})`, ...group, ...scopes)) as { hash: string }[];
+    return rows.map((r) => r.hash);
+  });
+  for (const h of groups) found.add(h);
   return found;
 }
 

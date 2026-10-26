@@ -49,6 +49,17 @@ for (const [name, make] of kinds) {
     await c.close();
   });
 
+  test(`${name}: a lock goes to one caller at a time and is free again when its time is up`, async () => {
+    const c = make();
+    const got = await Promise.all(Array.from({ length: 12 }, () => c.lock("job", 800)));
+    assert.equal(got.filter(Boolean).length, 1, "exactly one winner among simultaneous callers");
+    assert.equal(await c.lock("job", 800), false);
+    assert.equal(await c.lock("other-job", 800), true, "locks are per name");
+    await sleep(1000);
+    assert.equal(await c.lock("job", 800), true, "free after its time");
+    await c.close();
+  });
+
   test(`${name}: simultaneous hits never let more than max through`, async () => {
     const c = make();
     const out = await Promise.all(Array.from({ length: 40 }, () => c.hit("race", { max: 10, windowMs: 5000 })));

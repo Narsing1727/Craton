@@ -61,6 +61,8 @@ test("the schedule: off when asked, waiting out the interval since the last copy
   assert.equal(fs.readdirSync(path.join(dir, "db")).length, 1, "a copy made by the loop");
   const again = startBackupLoop(ctx, { everyHours: 24, dir, keep: 3 })!;
   again.stop();
+  await again.runNow(); // a second server of the same installation, on the same shared cache: the interval's copy is already taken
+  assert.equal(fs.readdirSync(path.join(dir, "db")).length, 1, "the lock lets one server make each interval's copy");
   assert.ok(lastBackupAt(dir) > Date.now() - 60_000, "a fresh copy on disk is what a restart sees, so it does not make another at once");
   await ctx.db.close();
   fs.rmSync(dir, { recursive: true, force: true });

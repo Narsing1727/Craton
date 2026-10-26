@@ -13,6 +13,7 @@ import readline from "node:readline";
 import { config, objectStoreEnabled } from "../config.ts";
 import { dumpDatabase, type DumpSummary } from "../db/dump.ts";
 import type { Ctx } from "./context.ts";
+import { getCache } from "../cache/cache.ts";
 
 export type BackupResult = { file: string; summary: DumpSummary; copiedChunks: number; ms: number };
 
@@ -100,6 +101,8 @@ export function startBackupLoop(ctx: Ctx, opts = config.backup) {
     if (running) return;
     running = true;
     try {
+      // Servers that share a cache take turns: whoever gets the lock makes this interval's copy (it holds for just under the interval).
+      if (!(await getCache().lock("backup", Math.max(60_000, every - 60_000)))) return;
       const r = await runBackup(ctx, { target: opts.dir, keep: opts.keep });
       console.log(`Backed up to ${r.file} (${r.summary.rows} rows in ${r.summary.tables} tables, ${r.copiedChunks} new chunk files, ${r.ms} ms)`);
     } catch (err) {

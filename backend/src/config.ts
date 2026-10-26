@@ -54,7 +54,7 @@ export const config = {
   database: {
     url: env.CRATON_DATABASE_URL ?? env.DATABASE_URL ?? "",
     caFile: env.CRATON_DB_CA ?? "",
-    poolMax: Math.max(1, Math.min(200, Math.floor(Number(env.CRATON_DB_POOL_MAX ?? 10)) || 10)),
+    poolMax: Math.max(1, Math.min(200, Math.floor(Number(env.CRATON_DB_POOL_MAX ?? 20)) || 20)),
     /** A statement that runs longer than this is cancelled by the server (0 turns it off). Stops one runaway query holding a connection. */
     statementTimeoutMs: Math.max(0, Math.floor(Number(env.CRATON_DB_STATEMENT_TIMEOUT_MS ?? 120_000)) || 0),
   },

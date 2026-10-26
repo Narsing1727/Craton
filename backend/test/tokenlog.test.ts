@@ -41,7 +41,17 @@ test("requests made with a token are logged in a batch, in order, newest 100 kep
 });
 
 test("a log that cannot be written is dropped and counted, never an error for anyone", async () => {
-  const ctx = { db: await openDb(":memory:"), store: new MemoryStore() } as Ctx;
+  const real = await openDb(":memory:");
+  let broken = false;
+  // The same database, with a switch that makes the write of the log fail (no table is dropped: another schema of a shared server could answer for it).
+  const flaky = new Proxy(real, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (prop !== "run" || typeof value !== "function") return typeof value === "function" ? value.bind(target) : value;
+      return (...args: unknown[]) => (broken && /INSERT INTO token_requests/.test(String(args[0])) ? Promise.reject(new Error("disk full")) : (value as (...a: unknown[]) => unknown).apply(target, args));
+    },
+  }) as typeof real;
+  const ctx = { db: flaky, store: new MemoryStore() } as Ctx;
   const app = createApp(ctx);
   const j = { "content-type": "application/json" };
   const su = await app.request("/v1/auth/signup", { method: "POST", headers: j, body: JSON.stringify({ username: "uma", email: "uma@example.org", password: "a-very-long-password" }) });
@@ -50,9 +60,10 @@ test("a log that cannot be written is dropped and counted, never an error for an
   const pat = ((await made.json()) as { token: string }).token;
   await app.request("/v1/user", { headers: { authorization: `Bearer ${pat}` } });
   const dropped = tokenLogStats.dropped;
-  await ctx.db.run("DROP TABLE token_requests");
+  broken = true;
   await flushTokenRequests(ctx);
   assert.equal(tokenLogStats.dropped - dropped, 1);
-  assert.equal((await app.request("/v1/user", { headers: { authorization: `Bearer ${pat}` } })).status, 200);
-  await ctx.db.close();
+  assert.equal((await app.request("/v1/user", { headers: { authorization: `Bearer ${pat}` } })).status, 200, "the request that follows is answered as usual");
+  broken = false;
+  await real.close();
 });

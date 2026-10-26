@@ -25,6 +25,8 @@ export interface Cache {
   /** How many hits are in the window, without recording one. */
   count(key: string, windowMs: number): Promise<number>;
   clear(key: string): Promise<void>;
+  /** Take a lock for `ttlMs`: true for the one caller that gets it, false for everyone else until it runs out. Servers sharing Redis share the lock. */
+  lock(key: string, ttlMs: number): Promise<boolean>;
   /** "ok", or why the shared store is not being used right now. */
   status(): Promise<string>;
   close(): Promise<void>;
@@ -87,6 +89,15 @@ export class MemoryCache implements Cache {
 
   async clear(key: string) {
     this.hits.delete(key);
+  }
+
+  private readonly locks = new Map<string, number>();
+
+  async lock(key: string, ttlMs: number) {
+    const now = Date.now();
+    if ((this.locks.get(key) ?? 0) > now) return false;
+    this.locks.set(key, now + ttlMs);
+    return true;
   }
 
   async status() {
@@ -206,6 +217,14 @@ export class RedisCache implements Cache {
   async clear(key: string) {
     await this.local.clear(key);
     await this.guarded(async () => void (await this.redis.del(this.prefix + key)), () => undefined);
+  }
+
+  async lock(key: string, ttlMs: number) {
+    return this.guarded(
+      async () => (await this.redis.set(`${this.prefix}lock:${key}`, String(process.pid), "PX", Math.max(1, Math.floor(ttlMs)), "NX")) === "OK",
+      // Redis is away: this server cannot know about the others, so it behaves as a single one (a duplicate run is better than none).
+      () => this.local.lock(key, ttlMs),
+    );
   }
 
   async status() {
