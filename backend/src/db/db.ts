@@ -367,6 +367,9 @@ export async function openDb(target: string, opts: OpenOptions = {}): Promise<DB
 export function isDatabaseUnavailable(err: unknown): boolean {
   const e = err as { code?: string; message?: string; errors?: { code?: string }[] } | null;
   if (!e) return false;
+  // A client that hangs up in the middle of sending a request makes Node's request stream fail with ECONNRESET and the message "aborted":
+  // that is somebody leaving, not the database.
+  if (e.message === "aborted") return false;
   const codes = [e.code, ...(e.errors ?? []).map((x) => x.code)].filter((c): c is string => typeof c === "string");
   if (codes.some((c) => /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|08\w{3}|53300|57P0[123]|57014)$/.test(c))) return true;
   return /Connection terminated|timeout exceeded when trying to connect|Client has encountered a connection error|the database system is (starting up|shutting down)/i.test(e.message ?? "");

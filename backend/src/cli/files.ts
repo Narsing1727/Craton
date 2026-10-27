@@ -16,6 +16,30 @@ const ALWAYS_IGNORED = new Set([".craton", ".git", "node_modules", ".DS_Store", 
 // Files another program is still writing, or owns: never read them.
 const LOCKISH = [/\.lock$/i, /^~\$/, /\.tmp$/i, /^\.~lock\./, /\.swp$/i, /\.part$/i];
 
+/**
+ * One line of .cratonignore as a regular expression over a path relative to the repository root, with git's rules for the common cases:
+ * a name with no slash (`*.bak`, `scratch`) matches at any depth; a line with a slash inside it, or starting with one, is relative to the root;
+ * a trailing slash (`build/`) means folders only, so a file called build is kept; `*` stays inside a folder name, `**` crosses folders, `?` is one letter.
+ */
+export function ignoreRegExp(line: string): RegExp {
+  let glob = line.trim();
+  const folderOnly = glob.endsWith("/");
+  if (folderOnly) glob = glob.slice(0, -1);
+  const anchored = glob.startsWith("/") || glob.includes("/");
+  glob = glob.replace(/^\/+/, "");
+  const body = glob
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, "\u0001") // "**/": any number of leading folders, including none
+    .replace(/\/\*\*/g, "\u0002") // "/**": everything below
+    .replace(/\*\*/g, "\u0003")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\u0001/g, "(?:.*/)?")
+    .replace(/\u0002/g, "/.*")
+    .replace(/\u0003/g, ".*");
+  return new RegExp((anchored ? "^" : "(?:^|/)") + body + (folderOnly ? "/.*$" : "(?:/.*)?$"));
+}
+
 export function ignoreRules(root: string): RegExp[] {
   const file = path.join(root, ".cratonignore");
   if (!fs.existsSync(file)) return [];
@@ -24,7 +48,7 @@ export function ignoreRules(root: string): RegExp[] {
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"))
-    .map((glob) => new RegExp("^" + glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*") + "(/.*)?$"));
+    .map(ignoreRegExp);
 }
 
 /** All files under `start` (relative to root), honouring .cratonignore. */

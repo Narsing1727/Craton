@@ -19,6 +19,7 @@
     "mcp": "node --disable-warning=ExperimentalWarning src/mcp/server.ts",
     "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
+    "test:matrix": "node --disable-warning=ExperimentalWarning --test test/filematrix.matrix.ts",
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup.ts",
     "restore": "node --disable-warning=ExperimentalWarning scripts/restore.ts",
     "migrate-sqlite": "node --disable-warning=ExperimentalWarning scripts/migrate-sqlite.ts",

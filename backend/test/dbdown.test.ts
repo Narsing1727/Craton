@@ -22,7 +22,7 @@ test("which errors mean the database is unreachable or too busy", () => {
     e({}, "timeout exceeded when trying to connect"),
     e({ errors: [{ code: "ECONNREFUSED" }] }, "AggregateError"),
   ]) assert.equal(isDatabaseUnavailable(err), true, `${err.code ?? err.message}`);
-  for (const err of [e({ code: "23505" }), e({ code: "42601" }), e({ code: "22P02" }), e({}, "Cannot read properties of undefined"), null, undefined]) assert.equal(isDatabaseUnavailable(err), false);
+  for (const err of [e({ code: "ECONNRESET" }, "aborted"), e({ code: "23505" }), e({ code: "42601" }), e({ code: "22P02" }), e({}, "Cannot read properties of undefined"), null, undefined]) assert.equal(isDatabaseUnavailable(err), false);
 });
 
 test("an unreachable database is a 503 with Retry-After; the readiness check says so too; a bug is still a 500", async () => {
